@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: system-ui, sans-serif; min-width: 280px; padding: 12px; }
+      label { display: block; margin: 8px 0 4px; font-weight: 600; }
+      input { width: 100%; box-sizing: border-box; }
+      textarea { width: 100%; min-height: 72px; box-sizing: border-box; }
+      button { margin-top: 12px; width: 100%; }
+      .secondary { margin-top: 6px; }
+      #status { font-family: monospace; }
+      #setupSnippet { min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <h1>Chrome Browser Control</h1>
+    <p>Status: <span id="status">unknown</span></p>
+    <label for="bridgeUrl">Bridge URL</label>
+    <input id="bridgeUrl" value="ws://127.0.0.1:8765" />
+    <label for="token">Pairing token</label>
+    <input id="token" type="password" autocomplete="off" placeholder="32+ random URL-safe characters" />
+    <label for="allowedOrigins">Allowed origins</label>
+    <textarea id="allowedOrigins" placeholder="https://example.com&#10;http://localhost:3000&#10;*"></textarea>
+    <button id="save">Save and reconnect</button>
+    <label for="setupSnippet">MCP config helper</label>
+    <textarea id="setupSnippet" readonly placeholder="Save settings, then copy a config snippet."></textarea>
+    <button id="copyJson" class="secondary">Copy JSON config template</button>
+    <button id="copyHermes" class="secondary">Copy Hermes YAML template</button>
+    <script src="security.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

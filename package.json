@@ -1,0 +1,33 @@
+{
+  "name": "chrome-browser-control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local MCP server and Chrome MV3 extension for controlling the current Chrome profile from any stdio MCP host.",
+  "scripts": {
+    "broker": "tsx server/broker-main.ts",
+    "mcp": "tsx server/index.ts",
+    "start": "tsx server/index.ts",
+    "build": "tsc --noEmit && node --check extension/security.js && node --check extension/background.js && node --check extension/content-core.js && node --check extension/content.js && node --check extension/offscreen.js && node --check extension/popup.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "mcp-config": "node scripts/mcp-config.mjs",
+    "benchmark:snapshots": "node benchmarks/compact-snapshot.mjs",
+    "benchmark:compact-snapshots": "node benchmarks/compact-snapshot.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.3",
+    "ws": "^8.18.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "happy-dom": "^20.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.8"
+  }
+}

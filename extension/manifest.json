@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Chrome Browser Control",
+  "version": "0.1.0",
+  "description": "Local bridge that exposes the current Chrome profile to a stdio MCP host through a loopback broker.",
+  "permissions": ["tabs", "scripting", "storage", "activeTab", "offscreen"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Chrome Browser Control",
+    "default_popup": "popup.html"
+  }
+}
