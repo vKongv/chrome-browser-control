@@ -41,7 +41,7 @@ describe('extension content core', () => {
       { role: 'textbox', label: 'Email address' }
     ]);
     expect(snapshot.elements[1].ref).toMatch(/^h[0-9a-z]+$/);
-    expect(document.querySelector(`[data-hermes-ref="${snapshot.elements[1].ref}"]`)?.textContent).toBe('Save');
+    expect(document.querySelector(`[data-cbc-ref="${snapshot.elements[1].ref}"]`)?.textContent).toBe('Save');
   });
 
   it('supports full mode with the legacy verbose fields', () => {
@@ -53,6 +53,42 @@ describe('extension content core', () => {
     expect(snapshot.elements[0]).toMatchObject({ role: 'button', label: 'Save', tag: 'button', passwordLike: false });
     expect(snapshot.elements[0]).toHaveProperty('bounds');
     expect(snapshot.text).toContain('Body text');
+  });
+
+  it('honors a custom textLimit in compact and full modes', () => {
+    const body = 'abcdefghij'.repeat(500);
+    const document = makeDocument(`<main><p>${body}</p></main>`);
+
+    const compact = buildSnapshotFromDocument(document as unknown as Document, { textLimit: 1200 });
+    expect(compact.textPreview).toHaveLength(1200);
+    expect(compact.textBytesOmitted).toBeGreaterThan(0);
+
+    const full = buildSnapshotFromDocument(document as unknown as Document, { mode: 'full', textLimit: 2500 });
+    expect(full.text).toHaveLength(2500);
+    expect(full.textLimitApplied).toBe(2500);
+    expect(full.textBytesOmitted).toBeGreaterThan(0);
+  });
+
+  it('keeps default text limits when textLimit is omitted', () => {
+    const body = 'x'.repeat(10_000);
+    const document = makeDocument(`<main><p>${body}</p></main>`);
+
+    const compact = buildSnapshotFromDocument(document as unknown as Document);
+    expect(compact.textPreview).toHaveLength(500);
+    expect(compact.textBytesOmitted).toBe(9500);
+
+    const full = buildSnapshotFromDocument(document as unknown as Document, { mode: 'full' });
+    expect(full.text).toHaveLength(4000);
+    expect(full.textBytesOmitted).toBe(6000);
+  });
+
+  it('clamps textLimit to the maximum allowed value', () => {
+    const body = 'y'.repeat(150_000);
+    const document = makeDocument(`<main><p>${body}</p></main>`);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document, { textLimit: 200_000 });
+    expect(snapshot.textPreview).toHaveLength(100_000);
+    expect(snapshot.textBytesOmitted).toBe(50_000);
   });
 
   it('detects password and one-time-code fields', () => {
@@ -125,8 +161,8 @@ describe('extension content core', () => {
 
     cleanupRefStore(document as unknown as Document, 106);
 
-    expect(document.querySelector(`[data-hermes-ref="${buttonRef}"]`)).toBeNull();
-    expect(document.querySelector(`[data-hermes-ref="${inputRef}"]`)).toBeNull();
+    expect(document.querySelector(`[data-cbc-ref="${buttonRef}"]`)).toBeNull();
+    expect(document.querySelector(`[data-cbc-ref="${inputRef}"]`)).toBeNull();
     expect(findByRef(buttonRef, document as unknown as Document)).toBeNull();
     expect(() => performClick({ ref: buttonRef }, document as unknown as Document)).toThrow('Refresh snapshot');
     expect(() => performType({ ref: inputRef, text: 'Ada' }, document as unknown as Document)).toThrow('Refresh snapshot');
@@ -151,9 +187,9 @@ describe('extension content core', () => {
     document.querySelector('#first')?.addEventListener('click', () => clicks++);
 
     expect(__testing.refStoreSize()).toBe(1);
-    expect(document.querySelector(`[data-hermes-ref="${firstRef}"]`)).toBeNull();
-    expect(document.querySelector(`[data-hermes-ref="${secondRef}"]`)).toBeNull();
-    expect(document.querySelector(`[data-hermes-ref="${thirdRef}"]`)).not.toBeNull();
+    expect(document.querySelector(`[data-cbc-ref="${firstRef}"]`)).toBeNull();
+    expect(document.querySelector(`[data-cbc-ref="${secondRef}"]`)).toBeNull();
+    expect(document.querySelector(`[data-cbc-ref="${thirdRef}"]`)).not.toBeNull();
     expect(() => performClick({ ref: firstRef }, document as unknown as Document)).toThrow('Refresh snapshot');
     expect(() => performType({ ref: secondRef, text: 'Ada' }, document as unknown as Document)).toThrow('Refresh snapshot');
     expect(clicks).toBe(0);

@@ -148,7 +148,7 @@
     return allowed.some((pattern) => patternOrigin(pattern) === url.origin);
   }
 
-  global.HermesSecurity = {
+  global.BrowserControlSecurity = {
     DEFAULT_BRIDGE_URL,
     DEFAULT_ALLOWED_ORIGINS,
     WILDCARD_ORIGIN_INPUT,

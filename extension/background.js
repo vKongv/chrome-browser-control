@@ -8,7 +8,7 @@ const {
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
   validatePairingToken
-} = globalThis.HermesSecurity;
+} = globalThis.BrowserControlSecurity;
 
 const DEFAULTS = {
   bridgeUrl: DEFAULT_BRIDGE_URL,
@@ -17,8 +17,8 @@ const DEFAULTS = {
 };
 
 const EXTENSION_PROTOCOL_MARKER = {
-  protocolVersion: 1,
-  features: ['navigate-pending-warning']
+  protocolVersion: 2,
+  features: ['navigate-pending-warning', 'snapshot-text-limit']
 };
 
 let status = 'disconnected';
@@ -59,7 +59,7 @@ async function connectBridge({ force = false } = {}) {
   await ensureOffscreenDocument();
   const settings = await getSettings();
   const response = await chrome.runtime.sendMessage({
-    target: 'hermes-offscreen',
+    target: 'cbc-offscreen',
     action: 'connect',
     force,
     settings
@@ -69,7 +69,7 @@ async function connectBridge({ force = false } = {}) {
 
 async function getBridgeStatus() {
   await ensureOffscreenDocument();
-  const response = await chrome.runtime.sendMessage({ target: 'hermes-offscreen', action: 'status' });
+  const response = await chrome.runtime.sendMessage({ target: 'cbc-offscreen', action: 'status' });
   if (response?.ok) setStatus(response.status);
   return response;
 }
@@ -172,7 +172,7 @@ async function ensureContentScripts(tabId, allowedOrigins) {
 
   try {
     const existing = await chrome.tabs.sendMessage(tabId, {
-      target: 'hermes-content',
+      target: 'cbc-content',
       action: 'ping',
       params: {}
     });
@@ -185,7 +185,7 @@ async function ensureContentScripts(tabId, allowedOrigins) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
 
   const injected = await chrome.tabs.sendMessage(tabId, {
-    target: 'hermes-content',
+    target: 'cbc-content',
     action: 'ping',
     params: {}
   });
@@ -196,7 +196,7 @@ async function sendToContent(tabId, action, params = {}, allowedOrigins = []) {
   await waitForTabComplete(tabId);
   await ensureContentScripts(tabId, allowedOrigins);
   const response = await chrome.tabs.sendMessage(tabId, {
-    target: 'hermes-content',
+    target: 'cbc-content',
     action,
     params
   });
@@ -273,13 +273,13 @@ async function handleBridgeRequest(action, params = {}) {
 chrome.runtime.onInstalled.addListener(() => connectBridge().catch(() => undefined));
 chrome.runtime.onStartup.addListener(() => connectBridge().catch(() => undefined));
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.target === 'hermes-background' && message?.kind === 'status-update') {
+  if (message?.target === 'cbc-background' && message?.kind === 'status-update') {
     setStatus(message.status || 'unknown');
     sendResponse({ ok: true });
     return true;
   }
 
-  if (message?.target === 'hermes-background' && message?.kind === 'bridge-request') {
+  if (message?.target === 'cbc-background' && message?.kind === 'bridge-request') {
     handleBridgeRequest(message.action, message.params || {})
       .then((result) => sendResponse({ ok: true, result }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
@@ -301,8 +301,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-if (globalThis.HERMES_TEST_HARNESS) {
-  globalThis.HermesBackground = {
+if (globalThis.CBC_TEST_HARNESS) {
+  globalThis.BrowserControlBackground = {
     handleBridgeRequest
   };
 }

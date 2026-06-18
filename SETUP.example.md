@@ -1,6 +1,8 @@
 # Local Setup Example
 
-Use this as a template for local configuration. Keep real tokens and personal paths in your private shell history or ignored local notes.
+Use this as a template for local configuration. For the full onboarding flow (clone → setup → load extension → MCP config → verify), see [Install and Setup](README.md#install-and-setup) in the README.
+
+Keep real tokens and personal paths in your private shell history or ignored local notes.
 
 ## Paths
 
@@ -10,7 +12,7 @@ npm install
 npm run setup
 ```
 
-`npm run setup` generates `.env.local`, prints the extension path, and prints copy-paste MCP configs for Hermes plus Claude/Codex/Cursor-style JSON hosts.
+`npm run setup` generates `.env.local`, prints the extension path, and prints copy-paste MCP configs for YAML plus Claude/Codex/Cursor-style JSON hosts.
 
 Load the unpacked Chrome extension from:
 
@@ -46,14 +48,14 @@ Wildcard mode is convenient for local development, but any MCP client with the p
 ## Broker
 
 ```bash
-HERMES_CHROME_TOKEN='<generated-token>' npm run broker
+CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run broker
 ```
 
 Optional extension ID pinning:
 
 ```bash
-HERMES_CHROME_TOKEN='<generated-token>' \
-HERMES_CHROME_EXTENSION_ID='<chrome-extension-id>' \
+CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' \
+CHROME_BROWSER_CONTROL_EXTENSION_ID='<chrome-extension-id>' \
 npm run broker
 ```
 
@@ -62,13 +64,13 @@ npm run broker
 Configure your MCP host to run:
 
 ```bash
-HERMES_CHROME_TOKEN='<generated-token>' npm run mcp
+CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run mcp
 ```
 
 Print host-specific config snippets with absolute paths:
 
 ```bash
-npm run --silent mcp-config -- --host hermes
+npm run --silent mcp-config -- --host yaml
 npm run --silent mcp-config -- --host claude
 npm run --silent mcp-config -- --host codex
 npm run --silent mcp-config -- --host cursor

@@ -3,6 +3,7 @@ export type SnapshotMode = 'compact' | 'full';
 export interface SnapshotOptions {
   mode?: SnapshotMode;
   now?: number;
+  textLimit?: number;
 }
 export function cleanupRefStore(documentRef?: Document, now?: number): { retained: number; ttlMs: number; maxRefs: number };
 export function buildSnapshotFromDocument(documentRef?: Document, options?: SnapshotOptions): {
@@ -20,6 +21,7 @@ export function buildSnapshotFromDocument(documentRef?: Document, options?: Snap
   omittedElements?: number;
   text?: string;
   textPreview?: string;
+  textLimitApplied?: number;
   textBytesOmitted?: number;
   regions?: Array<Record<string, unknown>>;
 };

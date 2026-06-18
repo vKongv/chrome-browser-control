@@ -20,9 +20,10 @@ Use this file to resume work without relying on chat history.
 ## Current state
 
 - Project/package name: `chrome-browser-control`.
-- GitHub repo: `pebble-tech/chrome-browser-control`.
-- Default snapshot mode is compact.
-- Full legacy snapshot mode remains available with `snapshot({ mode: "full" })`.
+- GitHub repo: `vkongv/chrome-browser-control`.
+- Default snapshot mode is compact (500-char `textPreview`).
+- Full legacy snapshot mode remains available with `snapshot({ mode: "full" })` (4000-char `text` by default).
+- Raise `textLimit` on `snapshot` (up to 100000) to pull more page body text without broker or CDP workarounds.
 - Snapshot refs are per-document in-memory handles and are stable across DOM reorder in the same document.
 - Stale/disconnected/expired refs are pruned and should fail cleanly.
 - First-time setup UX is implemented with `npm run setup`, `npm run doctor`, and `npm run mcp-config`.
@@ -41,7 +42,7 @@ Load the unpacked extension from:
 extension/
 ```
 
-After editing extension files, reload the unpacked extension in `chrome://extensions` before live browser checks.
+After editing extension files, reload the unpacked extension in `chrome://extensions` before live browser checks. After editing MCP server files (`server/`, `tools.ts`), restart the MCP server in your host (Cursor: MCP settings → restart `chrome_browser_control`).
 
 ## Verification commands
 
@@ -61,7 +62,7 @@ Expected benchmark target: compact snapshots should remain at least 50% smaller 
 Use silent npm output when copying snippets:
 
 ```bash
-npm run --silent mcp-config -- --host hermes
+npm run --silent mcp-config -- --host yaml
 npm run --silent mcp-config -- --host claude
 npm run --silent mcp-config -- --host cursor
 npm run --silent mcp-config -- --host codex
@@ -69,9 +70,9 @@ npm run --silent mcp-config -- --host codex
 
 Host formats:
 
-- Hermes: YAML-style `mcp_servers`.
+- YAML: `mcp_servers` with key `chrome_browser_control`.
 - Claude/Cursor: JSON `mcpServers`.
-- Codex: TOML `[mcp_servers.chrome_browser]`.
+- Codex: TOML `[mcp_servers.chrome_browser_control]`.
 
 ## Security rules
 
@@ -86,7 +87,7 @@ Host formats:
 
 - Commit messages use Conventional Commits.
 - Do not add AI/tool attribution in commits.
-- Remote: `https://github.com/pebble-tech/chrome-browser-control.git`.
+- Remote: `https://github.com/vkongv/chrome-browser-control.git`.
 - Main branch: `main`.
 
 ## Known caveat

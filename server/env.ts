@@ -9,7 +9,7 @@ let localEnvLoaded = false;
 function loadLocalEnvIfPresent(): void {
   if (localEnvLoaded) return;
   localEnvLoaded = true;
-  if (/^(1|true|yes|on)$/i.test(process.env.HERMES_CHROME_DISABLE_LOCAL_ENV || '')) return;
+  if (/^(1|true|yes|on)$/i.test(process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV || '')) return;
   const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const localEnvPath = join(repoRoot, '.env.local');
   if (!existsSync(localEnvPath)) return;
@@ -50,30 +50,30 @@ function isTriviallyWeakToken(token: string): boolean {
 
 export function getToken(): string {
   loadLocalEnvIfPresent();
-  const token = process.env.HERMES_CHROME_TOKEN?.trim();
+  const token = process.env.CHROME_BROWSER_CONTROL_TOKEN?.trim();
   if (!token) {
-    throw new Error('HERMES_CHROME_TOKEN is required. Generate a high-entropy token and set it for both broker and MCP adapter.');
+    throw new Error('CHROME_BROWSER_CONTROL_TOKEN is required. Generate a high-entropy token and set it for both broker and MCP adapter.');
   }
   const insecureDefaultToken = ['dev', 'token', 'change', 'me'].join('-');
   if (token === insecureDefaultToken) {
-    throw new Error('Refusing insecure default HERMES_CHROME_TOKEN. Generate a unique high-entropy token.');
+    throw new Error('Refusing insecure default CHROME_BROWSER_CONTROL_TOKEN. Generate a unique high-entropy token.');
   }
   if (!TOKEN_PATTERN.test(token)) {
-    throw new Error('HERMES_CHROME_TOKEN must be at least 32 URL-safe random characters.');
+    throw new Error('CHROME_BROWSER_CONTROL_TOKEN must be at least 32 URL-safe random characters.');
   }
   if (isTriviallyWeakToken(token)) {
-    throw new Error('HERMES_CHROME_TOKEN must contain enough character variety.');
+    throw new Error('CHROME_BROWSER_CONTROL_TOKEN must contain enough character variety.');
   }
   return token;
 }
 
 export function getBrokerHost(): string {
   loadLocalEnvIfPresent();
-  return process.env.HERMES_CHROME_HOST ?? '127.0.0.1';
+  return process.env.CHROME_BROWSER_CONTROL_HOST ?? '127.0.0.1';
 }
 
 export function getBrokerPort(): number {
-  return envNumber('HERMES_CHROME_PORT', 8765);
+  return envNumber('CHROME_BROWSER_CONTROL_PORT', 8765);
 }
 
 export function getBrokerUrl(): string {

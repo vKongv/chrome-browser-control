@@ -7,7 +7,7 @@ function loadSecurity() {
   const context = vm.createContext({ URL });
   const code = readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8');
   vm.runInContext(code, context);
-  return (context as any).HermesSecurity;
+  return (context as any).BrowserControlSecurity;
 }
 
 function loadBackgroundHarness({
@@ -42,7 +42,7 @@ function loadBackgroundHarness({
       onStartup: { addListener: () => undefined },
       onMessage: { addListener: () => undefined },
       sendMessage: async (message: Record<string, unknown>) => {
-        if (message?.target === 'hermes-offscreen' && message?.action === 'status') {
+        if (message?.target === 'cbc-offscreen' && message?.action === 'status') {
           return { ok: true, status: bridgeStatus };
         }
         return { ok: true };
@@ -110,7 +110,7 @@ function loadBackgroundHarness({
     chrome,
     Date: FakeDate,
     globalThis: undefined,
-    HERMES_TEST_HARNESS: true,
+    CBC_TEST_HARNESS: true,
     importScripts: () => undefined,
     setTimeout: (callback: () => void, delay = 0) => {
       now += Number(delay);
@@ -122,7 +122,7 @@ function loadBackgroundHarness({
   (context as any).globalThis = context;
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8'), context);
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/background.js'), 'utf8'), context);
-  return (context as any).HermesBackground;
+  return (context as any).BrowserControlBackground;
 }
 
 describe('extension security helpers', () => {
@@ -265,8 +265,8 @@ describe('extension background origin enforcement', () => {
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      protocolVersion: 1,
-      features: ['navigate-pending-warning']
+      protocolVersion: 2,
+      features: ['navigate-pending-warning', 'snapshot-text-limit']
     });
   });
 

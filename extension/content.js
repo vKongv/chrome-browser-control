@@ -1,12 +1,12 @@
 (() => {
-  if (globalThis.HermesChromeContentLoaded) return;
-  globalThis.HermesChromeContentLoaded = true;
+  if (globalThis.BrowserControlContentLoaded) return;
+  globalThis.BrowserControlContentLoaded = true;
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || message.target !== 'hermes-content') return false;
+    if (!message || message.target !== 'cbc-content') return false;
 
     try {
-      const core = globalThis.HermesChromeContentCore;
+      const core = globalThis.BrowserControlContentCore;
       if (!core) {
         throw new Error('Browser content core is not loaded in this tab');
       }

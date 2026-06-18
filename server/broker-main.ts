@@ -6,7 +6,7 @@ export async function main(): Promise<void> {
   const host = getBrokerHost();
   const port = getBrokerPort();
   assertSafeHost(host);
-  const extensionId = process.env.HERMES_CHROME_EXTENSION_ID?.trim() || undefined;
+  const extensionId = process.env.CHROME_BROWSER_CONTROL_EXTENSION_ID?.trim() || undefined;
 
   const broker = new ChromeBroker({ host, port, token, extensionId });
   await broker.start();
@@ -14,7 +14,7 @@ export async function main(): Promise<void> {
   console.error(`[chrome-browser-broker] WebSocket broker listening on ws://${host}:${port}`);
   console.error('[chrome-browser-broker] Load the Chrome extension and set the same token in its popup.');
   if (extensionId) {
-    console.error('[chrome-browser-broker] Extension ID pinning is enabled with HERMES_CHROME_EXTENSION_ID.');
+    console.error('[chrome-browser-broker] Extension ID pinning is enabled with CHROME_BROWSER_CONTROL_EXTENSION_ID.');
   }
   console.error('[chrome-browser-broker] Start MCP stdio adapters with: npm run mcp');
   console.error(

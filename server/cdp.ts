@@ -294,7 +294,7 @@ const SNAPSHOT_SCRIPT = String.raw`function() {
     source: 'cdp',
     elements: elements.map((element, index) => {
       const ref = 'e' + (index + 1);
-      element.setAttribute('data-hermes-ref', ref);
+      element.setAttribute('data-cbc-ref', ref);
       const rect = element.getBoundingClientRect();
       return { ref, role: roleFor(element), label: labelFor(element), tag: element.tagName.toLowerCase(), passwordLike: isPasswordLike(element), bounds: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) } };
     }),
@@ -303,7 +303,7 @@ const SNAPSHOT_SCRIPT = String.raw`function() {
 }`;
 
 const CLICK_SCRIPT = String.raw`function(args) {
-  const element = document.querySelector('[data-hermes-ref="' + String(args.ref).replace(/["\\]/g, '\\$&') + '"]');
+  const element = document.querySelector('[data-cbc-ref="' + String(args.ref).replace(/["\\]/g, '\\$&') + '"]');
   if (!element) throw new Error('No element found for ref ' + args.ref + '. Refresh snapshot and try again.');
   element.scrollIntoView({ block: 'center', inline: 'center' });
   element.click();
@@ -311,7 +311,7 @@ const CLICK_SCRIPT = String.raw`function(args) {
 }`;
 
 const TYPE_SCRIPT = String.raw`function(args) {
-  const element = document.querySelector('[data-hermes-ref="' + String(args.ref).replace(/["\\]/g, '\\$&') + '"]');
+  const element = document.querySelector('[data-cbc-ref="' + String(args.ref).replace(/["\\]/g, '\\$&') + '"]');
   if (!element) throw new Error('No element found for ref ' + args.ref + '. Refresh snapshot and try again.');
   const haystack = [element.getAttribute('type'), element.getAttribute('autocomplete'), element.getAttribute('name'), element.getAttribute('id'), element.getAttribute('aria-label'), element.getAttribute('placeholder')].join(' ').toLowerCase();
   if (!args.force && /password|passwd|passcode|one-time-code|otp|2fa|mfa/.test(haystack)) throw new Error('Ref ' + args.ref + ' appears to be a password/2FA field.');

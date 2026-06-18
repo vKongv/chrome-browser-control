@@ -9,7 +9,7 @@ This document tracks the pre-public-push cleanup scope after remediation:
 - The MCP adapter no longer supports CDP fallback.
 - The extension manifest no longer requests universal host permissions.
 - Allowed origins are required before tabs or page actions are exposed.
-- Broker role validation is explicit, and extension ID pinning is available through legacy/current `HERMES_CHROME_EXTENSION_ID`.
+- Broker role validation is explicit, and extension ID pinning is available through `CHROME_BROWSER_CONTROL_EXTENSION_ID`.
 
 ## Residual Prototype Risks
 

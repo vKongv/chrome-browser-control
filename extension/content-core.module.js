@@ -1,7 +1,10 @@
-const REF_ATTR = 'data-hermes-ref';
+const REF_ATTR = 'data-cbc-ref';
 const INTERESTING_SELECTOR = 'a,button,input,textarea,select,summary,[role],[contenteditable]';
 const FULL_ELEMENT_LIMIT = 250;
 const COMPACT_ELEMENT_LIMIT = 100;
+const DEFAULT_COMPACT_TEXT_LIMIT = 500;
+const DEFAULT_FULL_TEXT_LIMIT = 4000;
+const MAX_TEXT_LIMIT = 100_000;
 const DEFAULT_REF_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_REFS = 500;
 
@@ -155,8 +158,20 @@ function regionSummaries(documentRef, elements) {
     .filter(Boolean);
 }
 
+function resolveTextLimit(options, mode) {
+  const defaultLimit = mode === 'full' ? DEFAULT_FULL_TEXT_LIMIT : DEFAULT_COMPACT_TEXT_LIMIT;
+  const requested = options?.textLimit ?? options?.text_limit;
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) return defaultLimit;
+  return Math.max(1, Math.min(Math.floor(requested), MAX_TEXT_LIMIT));
+}
+
+function bodyTextFor(documentRef) {
+  return (documentRef.body?.innerText || documentRef.body?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
 export function buildSnapshotFromDocument(documentRef = document, options = {}) {
   const mode = options?.mode === 'full' ? 'full' : 'compact';
+  const textLimit = resolveTextLimit(options, mode);
   const now = typeof options?.now === 'number' ? options.now : nowMs();
   cleanupRefStore(documentRef, now);
 
@@ -169,25 +184,30 @@ export function buildSnapshotFromDocument(documentRef = document, options = {}) 
   });
   cleanupRefStore(documentRef, now);
 
+  const bodyText = bodyTextFor(documentRef);
+  const textBytesOmitted = Math.max(0, bodyText.length - textLimit);
+
   if (mode === 'full') {
     return {
       title: documentRef.title,
       url: documentRef.location?.href,
       elements: items,
       omittedElements: Math.max(0, elements.length - selected.length),
-      text: (documentRef.body?.innerText || documentRef.body?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 4000)
+      text: bodyText.slice(0, textLimit),
+      textLimitApplied: textLimit,
+      ...(textBytesOmitted > 0 ? { textBytesOmitted } : {})
     };
   }
 
-  const bodyText = (documentRef.body?.innerText || documentRef.body?.textContent || '').replace(/\s+/g, ' ').trim();
   return {
     title: documentRef.title,
     url: documentRef.location?.href,
     mode: 'compact',
     elements: items,
     omittedElements: Math.max(0, elements.length - selected.length),
-    textPreview: bodyText.slice(0, 500),
-    textBytesOmitted: Math.max(0, bodyText.length - 500),
+    textPreview: bodyText.slice(0, textLimit),
+    textBytesOmitted,
+    textLimitApplied: textLimit,
     regions: regionSummaries(documentRef, selected)
   };
 }
@@ -265,7 +285,7 @@ export const __testing = {
   }
 };
 
-globalThis.HermesChromeContentCore = {
+globalThis.BrowserControlContentCore = {
   buildSnapshotFromDocument,
   isPasswordLike,
   findByRef,

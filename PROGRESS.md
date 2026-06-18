@@ -4,7 +4,7 @@
 
 The prototype has been hardened for a pre-public-push cleanup pass:
 
-- Broker and MCP adapter require the legacy/current `HERMES_CHROME_TOKEN` env var.
+- Broker and MCP adapter require `CHROME_BROWSER_CONTROL_TOKEN`.
 - Broker host validation is loopback-only.
 - Extension token defaults are blank.
 - Extension bridge URL validation allows only local `ws://` endpoints.

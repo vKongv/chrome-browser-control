@@ -6,8 +6,9 @@ import crypto from 'node:crypto';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = resolve(__dirname, '..');
 
-export const DEFAULT_TOKEN_ENV = 'HERMES_CHROME_TOKEN';
-export const DEFAULT_PORT_ENV = 'HERMES_CHROME_PORT';
+export const DEFAULT_TOKEN_ENV = 'CHROME_BROWSER_CONTROL_TOKEN';
+export const DEFAULT_PORT_ENV = 'CHROME_BROWSER_CONTROL_PORT';
+export const DEFAULT_MCP_KEY = 'chrome_browser_control';
 export const DEFAULT_PORT = '8765';
 export const LOCAL_ENV_FILE = '.env.local';
 
@@ -70,14 +71,14 @@ export function mcpServerObject({ root = repoRoot, token = '<generated-token>', 
 }
 
 export function renderJsonConfig(options = {}) {
-  return JSON.stringify({ mcpServers: { chrome_browser: mcpServerObject(options) } }, null, 2);
+  return JSON.stringify({ mcpServers: { [DEFAULT_MCP_KEY]: mcpServerObject(options) } }, null, 2);
 }
 
-export function renderHermesConfig(options = {}) {
+export function renderYamlConfig(options = {}) {
   const cfg = mcpServerObject(options);
   return [
     'mcp_servers:',
-    '  chrome_browser:',
+    `  ${DEFAULT_MCP_KEY}:`,
     `    command: ${JSON.stringify(cfg.command)}`,
     `    args: [${cfg.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
     '    env:',
@@ -91,7 +92,7 @@ export function renderHermesConfig(options = {}) {
 export function renderCodexConfig(options = {}) {
   const cfg = mcpServerObject(options);
   return [
-    '[mcp_servers.chrome_browser]',
+    `[mcp_servers.${DEFAULT_MCP_KEY}]`,
     `command = ${JSON.stringify(cfg.command)}`,
     `args = [${cfg.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
     `env = { ${DEFAULT_TOKEN_ENV} = ${JSON.stringify(cfg.env[DEFAULT_TOKEN_ENV])}, ${DEFAULT_PORT_ENV} = ${JSON.stringify(cfg.env[DEFAULT_PORT_ENV])} }`,
@@ -102,12 +103,12 @@ export function renderCodexConfig(options = {}) {
 
 export function renderConfig({ host = 'json', root = repoRoot, token = '<generated-token>', port = DEFAULT_PORT } = {}) {
   const normalized = String(host || 'json').toLowerCase();
-  if (normalized === 'hermes' || normalized === 'yaml') return renderHermesConfig({ root, token, port });
+  if (normalized === 'yaml') return renderYamlConfig({ root, token, port });
   if (normalized === 'codex') return renderCodexConfig({ root, token, port });
   if (['claude', 'claude-code', 'claude-desktop', 'cursor', 'json'].includes(normalized)) {
     return renderJsonConfig({ root, token, port });
   }
-  throw new Error(`Unsupported host: ${host}. Use hermes, claude, codex, cursor, or json.`);
+  throw new Error(`Unsupported host: ${host}. Use yaml, claude, codex, cursor, or json.`);
 }
 
 export function parseArgs(argv = process.argv.slice(2)) {

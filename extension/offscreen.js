@@ -3,7 +3,7 @@ const {
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
   validatePairingToken
-} = globalThis.HermesSecurity;
+} = globalThis.BrowserControlSecurity;
 
 let socket = null;
 let reconnectTimer = null;
@@ -21,7 +21,7 @@ function clearConnectTimeout() {
 async function setStatus(nextStatus) {
   status = nextStatus;
   await chrome.runtime
-    .sendMessage({ target: 'hermes-background', kind: 'status-update', status: nextStatus })
+    .sendMessage({ target: 'cbc-background', kind: 'status-update', status: nextStatus })
     .catch(() => undefined);
 }
 
@@ -181,7 +181,7 @@ async function handleBridgeMessage(raw) {
     response = { kind: 'response', id: request.id, ok: true };
     try {
       const backgroundResponse = await chrome.runtime.sendMessage({
-        target: 'hermes-background',
+        target: 'cbc-background',
         kind: 'bridge-request',
         action: request.action,
         params: request.params || {}
@@ -203,7 +203,7 @@ async function handleBridgeMessage(raw) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.target !== 'hermes-offscreen') return false;
+  if (message?.target !== 'cbc-offscreen') return false;
 
   if (message.action === 'connect') {
     connect({ force: Boolean(message.force), settings: message.settings })

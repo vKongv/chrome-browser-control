@@ -8,9 +8,9 @@ This repository is a local-only prototype. It is not production-ready unless you
 
 - The broker must bind only to loopback hosts.
 - The extension must connect only to loopback `ws://` bridge URLs.
-- There are no default tokens. Operators must generate and configure a high-entropy value in the legacy/current `HERMES_CHROME_TOKEN` env var.
+- There are no default tokens. Operators must generate and configure a high-entropy value in `CHROME_BROWSER_CONTROL_TOKEN`.
 - The extension exposes tabs and page actions only for allowed origins configured in the popup. Explicit entries such as `https://example.com` are supported, and `*` enables all normal `http://` and `https://` web pages while still blocking `chrome://`, `file://`, extension pages, and other non-web schemes.
-- The broker can optionally require legacy/current `HERMES_CHROME_EXTENSION_ID` to pin one installed extension.
+- The broker can optionally require `CHROME_BROWSER_CONTROL_EXTENSION_ID` to pin one installed extension.
 - Non-loopback binding is unsupported.
 - CDP fallback is unsupported in the MCP adapter because it bypasses extension pairing.
 

@@ -5,7 +5,7 @@ const statusEl = document.getElementById('status');
 const save = document.getElementById('save');
 const setupSnippet = document.getElementById('setupSnippet');
 const copyJson = document.getElementById('copyJson');
-const copyHermes = document.getElementById('copyHermes');
+const copyYaml = document.getElementById('copyYaml');
 const {
   DEFAULT_BRIDGE_URL,
   DEFAULT_ALLOWED_ORIGINS,
@@ -14,7 +14,7 @@ const {
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
   validatePairingToken
-} = globalThis.HermesSecurity;
+} = globalThis.BrowserControlSecurity;
 
 function showStatus(nextStatus) {
   statusEl.textContent = nextStatus;
@@ -32,13 +32,15 @@ function jsonConfigTemplate(currentToken = '<generated-token>', port = currentBr
   return JSON.stringify(
     {
       mcpServers: {
-        chrome_browser: {
+        chrome_browser_control: {
           command: '/absolute/path/to/chrome-browser-control/node_modules/.bin/tsx',
           args: ['/absolute/path/to/chrome-browser-control/server/index.ts'],
           env: {
-            HERMES_CHROME_TOKEN: currentToken,
-            HERMES_CHROME_PORT: port
-          }
+            CHROME_BROWSER_CONTROL_TOKEN: currentToken,
+            CHROME_BROWSER_CONTROL_PORT: port
+          },
+          timeout: 60,
+          connect_timeout: 30
         }
       }
     },
@@ -47,22 +49,22 @@ function jsonConfigTemplate(currentToken = '<generated-token>', port = currentBr
   );
 }
 
-function hermesConfigTemplate(currentToken = '<generated-token>', port = currentBridgePort()) {
+function yamlConfigTemplate(currentToken = '<generated-token>', port = currentBridgePort()) {
   return [
     'mcp_servers:',
-    '  chrome_browser:',
+    '  chrome_browser_control:',
     '    command: "/absolute/path/to/chrome-browser-control/node_modules/.bin/tsx"',
     '    args: ["/absolute/path/to/chrome-browser-control/server/index.ts"]',
     '    env:',
-    `      HERMES_CHROME_TOKEN: ${JSON.stringify(currentToken)}`,
-    `      HERMES_CHROME_PORT: ${JSON.stringify(port)}`,
+    `      CHROME_BROWSER_CONTROL_TOKEN: ${JSON.stringify(currentToken)}`,
+    `      CHROME_BROWSER_CONTROL_PORT: ${JSON.stringify(port)}`,
     '    timeout: 60',
     '    connect_timeout: 30'
   ].join('\n');
 }
 
 async function copySnippet(kind) {
-  const snippet = kind === 'hermes' ? hermesConfigTemplate() : jsonConfigTemplate();
+  const snippet = kind === 'yaml' ? yamlConfigTemplate() : jsonConfigTemplate();
   setupSnippet.value = snippet;
   try {
     await navigator.clipboard?.writeText(snippet);
@@ -111,7 +113,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 copyJson.addEventListener('click', () => copySnippet('json'));
-copyHermes.addEventListener('click', () => copySnippet('hermes'));
+copyYaml.addEventListener('click', () => copySnippet('yaml'));
 
 function requestHostPermissions(origins) {
   if (!origins.length || !chrome.permissions?.request) return Promise.resolve(true);

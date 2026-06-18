@@ -1,76 +1,77 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertSafeHost, getBrokerUrl, getToken } from '../server/env.js';
+import { assertSafeHost, getBrokerHost, getBrokerPort, getBrokerUrl, getToken } from '../server/env.js';
 
-const originalToken = process.env.HERMES_CHROME_TOKEN;
-const originalHost = process.env.HERMES_CHROME_HOST;
-const originalPort = process.env.HERMES_CHROME_PORT;
-const originalDisableLocalEnv = process.env.HERMES_CHROME_DISABLE_LOCAL_ENV;
-process.env.HERMES_CHROME_DISABLE_LOCAL_ENV = '1';
+const originalToken = process.env.CHROME_BROWSER_CONTROL_TOKEN;
+const originalHost = process.env.CHROME_BROWSER_CONTROL_HOST;
+const originalPort = process.env.CHROME_BROWSER_CONTROL_PORT;
+const originalDisableLocalEnv = process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV;
+process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV = '1';
 
 afterEach(() => {
   if (originalToken === undefined) {
-    delete process.env.HERMES_CHROME_TOKEN;
+    delete process.env.CHROME_BROWSER_CONTROL_TOKEN;
   } else {
-    process.env.HERMES_CHROME_TOKEN = originalToken;
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = originalToken;
   }
   if (originalHost === undefined) {
-    delete process.env.HERMES_CHROME_HOST;
+    delete process.env.CHROME_BROWSER_CONTROL_HOST;
   } else {
-    process.env.HERMES_CHROME_HOST = originalHost;
+    process.env.CHROME_BROWSER_CONTROL_HOST = originalHost;
   }
   if (originalPort === undefined) {
-    delete process.env.HERMES_CHROME_PORT;
+    delete process.env.CHROME_BROWSER_CONTROL_PORT;
   } else {
-    process.env.HERMES_CHROME_PORT = originalPort;
+    process.env.CHROME_BROWSER_CONTROL_PORT = originalPort;
   }
   if (originalDisableLocalEnv === undefined) {
-    process.env.HERMES_CHROME_DISABLE_LOCAL_ENV = '1';
+    process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV = '1';
   } else {
-    process.env.HERMES_CHROME_DISABLE_LOCAL_ENV = originalDisableLocalEnv;
+    process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV = originalDisableLocalEnv;
   }
 });
 
-describe('environment hardening', () => {
-  it('requires a non-default high entropy token', () => {
-    delete process.env.HERMES_CHROME_TOKEN;
-    expect(() => getToken()).toThrow('HERMES_CHROME_TOKEN is required');
+describe('env helpers', () => {
+  it('requires a configured token', () => {
+    delete process.env.CHROME_BROWSER_CONTROL_TOKEN;
+    expect(() => getToken()).toThrow('CHROME_BROWSER_CONTROL_TOKEN is required');
 
-    process.env.HERMES_CHROME_TOKEN = ['dev', 'token', 'change', 'me'].join('-');
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = ['dev', 'token', 'change', 'me'].join('-');
     expect(() => getToken()).toThrow('Refusing insecure default');
 
-    process.env.HERMES_CHROME_TOKEN = 'short';
-    expect(() => getToken()).toThrow('at least 32');
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = 'short';
+    expect(() => getToken()).toThrow('at least 32 URL-safe random characters');
 
-    process.env.HERMES_CHROME_TOKEN = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    expect(() => getToken()).toThrow('character variety');
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    expect(() => getToken()).toThrow('enough character variety');
 
-    process.env.HERMES_CHROME_TOKEN = '11111111111111111111111111111111';
-    expect(() => getToken()).toThrow('character variety');
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = '11111111111111111111111111111111';
+    expect(() => getToken()).toThrow('enough character variety');
 
-    process.env.HERMES_CHROME_TOKEN = 'abababababababababababababababab';
-    expect(() => getToken()).toThrow('character variety');
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = 'abababababababababababababababab';
+    expect(() => getToken()).toThrow('enough character variety');
 
-    process.env.HERMES_CHROME_TOKEN = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
     expect(getToken()).toBe('abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-');
   });
 
-  it('only allows loopback broker hosts', () => {
-    expect(() => assertSafeHost('127.0.0.1')).not.toThrow();
-    expect(() => assertSafeHost('localhost')).not.toThrow();
-    expect(() => assertSafeHost('::1')).not.toThrow();
-    expect(() => assertSafeHost('0.0.0.0')).toThrow('non-loopback');
-  });
+  it('defaults broker host and port', () => {
+    delete process.env.CHROME_BROWSER_CONTROL_PORT;
+    delete process.env.CHROME_BROWSER_CONTROL_HOST;
+    expect(getBrokerPort()).toBe(8765);
 
-  it('formats broker URLs for IPv4, localhost, and IPv6 loopback hosts', () => {
-    process.env.HERMES_CHROME_PORT = '8765';
+    process.env.CHROME_BROWSER_CONTROL_PORT = '8765';
+    expect(getBrokerPort()).toBe(8765);
+    process.env.CHROME_BROWSER_CONTROL_HOST = '127.0.0.1';
+    expect(getBrokerHost()).toBe('127.0.0.1');
 
-    process.env.HERMES_CHROME_HOST = '127.0.0.1';
-    expect(getBrokerUrl()).toBe('ws://127.0.0.1:8765');
-
-    process.env.HERMES_CHROME_HOST = 'localhost';
+    process.env.CHROME_BROWSER_CONTROL_HOST = 'localhost';
     expect(getBrokerUrl()).toBe('ws://localhost:8765');
 
-    process.env.HERMES_CHROME_HOST = '::1';
+    process.env.CHROME_BROWSER_CONTROL_HOST = '::1';
     expect(getBrokerUrl()).toBe('ws://[::1]:8765');
+  });
+
+  it('rejects non-loopback broker hosts', () => {
+    expect(() => assertSafeHost('0.0.0.0')).toThrow('non-loopback host');
   });
 });
