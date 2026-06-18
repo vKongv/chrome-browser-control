@@ -22,7 +22,9 @@ export function buildSnapshotFromDocument(documentRef?: Document, options?: Snap
   text?: string;
   textPreview?: string;
   textLimitApplied?: number;
+  textTotalLength?: number;
   textBytesOmitted?: number;
+  warning?: string;
   regions?: Array<Record<string, unknown>>;
 };
 export function findByRef(ref: string, documentRef?: Document): Element | null;

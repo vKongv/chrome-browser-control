@@ -165,8 +165,26 @@ function resolveTextLimit(options, mode) {
   return Math.max(1, Math.min(Math.floor(requested), MAX_TEXT_LIMIT));
 }
 
+function hadExplicitTextLimit(options) {
+  const requested = options?.textLimit ?? options?.text_limit;
+  return typeof requested === 'number' && Number.isFinite(requested);
+}
+
 function bodyTextFor(documentRef) {
   return (documentRef.body?.innerText || documentRef.body?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function textSnapshotMeta(bodyText, textLimit, options) {
+  const textBytesOmitted = Math.max(0, bodyText.length - textLimit);
+  const meta = {
+    textLimitApplied: textLimit,
+    textTotalLength: bodyText.length,
+    textBytesOmitted
+  };
+  if (textBytesOmitted > 0 && !hadExplicitTextLimit(options)) {
+    meta.warning = `Body text truncated at ${textLimit} characters (${textBytesOmitted} omitted). Pass textLimit (max ${MAX_TEXT_LIMIT}) for more.`;
+  }
+  return meta;
 }
 
 function buildSnapshotFromDocument(documentRef = document, options = {}) {
@@ -185,7 +203,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
   cleanupRefStore(documentRef, now);
 
   const bodyText = bodyTextFor(documentRef);
-  const textBytesOmitted = Math.max(0, bodyText.length - textLimit);
+  const textMeta = textSnapshotMeta(bodyText, textLimit, options);
 
   if (mode === 'full') {
     return {
@@ -194,8 +212,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
       elements: items,
       omittedElements: Math.max(0, elements.length - selected.length),
       text: bodyText.slice(0, textLimit),
-      textLimitApplied: textLimit,
-      ...(textBytesOmitted > 0 ? { textBytesOmitted } : {})
+      ...textMeta
     };
   }
 
@@ -206,8 +223,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
     elements: items,
     omittedElements: Math.max(0, elements.length - selected.length),
     textPreview: bodyText.slice(0, textLimit),
-    textBytesOmitted,
-    textLimitApplied: textLimit,
+    ...textMeta,
     regions: regionSummaries(documentRef, selected)
   };
 }

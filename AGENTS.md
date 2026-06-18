@@ -24,6 +24,7 @@ Use this file to resume work without relying on chat history.
 - Default snapshot mode is compact (500-char `textPreview`).
 - Full legacy snapshot mode remains available with `snapshot({ mode: "full" })` (4000-char `text` by default).
 - Raise `textLimit` on `snapshot` (up to 100000) to pull more page body text without broker or CDP workarounds.
+- Use MCP server key `chrome_browser_control` only; remove legacy `chrome_browser` host entries to avoid stale tool schemas.
 - Snapshot refs are per-document in-memory handles and are stable across DOM reorder in the same document.
 - Stale/disconnected/expired refs are pruned and should fail cleanly.
 - First-time setup UX is implemented with `npm run setup`, `npm run doctor`, and `npm run mcp-config`.

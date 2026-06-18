@@ -7,3 +7,4 @@ coverage/
 .cursor/
 *.log
 SETUP_LOCAL.md
+docs/scratchpad/

@@ -135,7 +135,7 @@ Then confirm from your MCP host by calling the `browser_status` tool. When ready
 - `navigate`: navigates the active tab or a specified `tabId` to an allowed URL, then waits for the tab to finish loading when possible. If loading times out, the result includes `pending: true` and a `warning`.
 - `click`: clicks an element by snapshot ref on an allowed tab.
 - `type`: types into an element by snapshot ref on an allowed tab. Password-like fields are blocked unless `force=true`.
-- `scroll`: scrolls an allowed tab by `deltaX` and `deltaY`.
+- `scroll`: scrolls an allowed tab by `deltaX` and `deltaY`. Scrolling does not paginate snapshot text — snapshots use full `document.body` innerText. Raise `textLimit` on `snapshot` instead of scroll-stitching unless the page lazy-loads content.
 
 ## Snapshot Modes And Refs
 
@@ -166,7 +166,7 @@ To read long page content (for example API docs), raise `textLimit` instead of u
 { "mode": "full", "textLimit": 100000, "tabId": 123 }
 ```
 
-Compact mode honors `textLimit` too; body text is returned in `textPreview`. When `textBytesOmitted` is greater than zero, increase `textLimit` or scroll the page and snapshot again for below-the-fold content.
+Compact mode honors `textLimit` too; body text is returned in `textPreview` (there is no `text` field in compact mode). When `textBytesOmitted` is greater than zero, increase `textLimit` or scroll the page and snapshot again only if content is lazy-loaded below the fold.
 
 Refs are per-document in-memory IDs (`h...`) assigned from element identity, not output order. They remain stable across DOM insertion/reorder in the same document, and `click` / `type` resolve through the content script's ref store. Navigating to a different page loads a new document, so old refs are expected to fail cleanly; take a fresh snapshot after navigation or major page changes. The ref store prunes disconnected, expired, and over-cap entries, and removes stale `data-cbc-ref` attributes so pruned refs cannot be reused accidentally.
 

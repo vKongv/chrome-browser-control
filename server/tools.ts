@@ -132,9 +132,17 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
     'snapshot',
     {
       title: 'Snapshot active page',
-      description: 'Return a simplified DOM snapshot for the active tab or a target tab.',
+      description:
+        'Return a simplified DOM snapshot for the active tab or a target tab. Compact mode (default) returns textPreview only — not text. Full mode returns text. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes textLimitApplied, textTotalLength, and textBytesOmitted; a warning appears when default limits truncate body text.',
       inputSchema: {
-        mode: z.enum(['compact', 'full']).optional().describe('Snapshot detail mode. Defaults to compact; full returns the legacy verbose shape.'),
+        mode: z.enum(['compact', 'full']).optional().describe('Snapshot detail mode. Defaults to compact (textPreview field). Use full for the text field and verbose element metadata.'),
+        textLimit: z
+          .number()
+          .int()
+          .positive()
+          .max(100_000)
+          .optional()
+          .describe('Max body text characters. Optional; defaults to 500 (compact) or 4000 (full). Not a hard cap — maximum 100000.'),
         tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the active tab.')
       }
     },
@@ -186,7 +194,8 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
     'scroll',
     {
       title: 'Scroll page',
-      description: 'Scroll the active tab or target tab by pixel deltas.',
+      description:
+        'Scroll the active tab or target tab by pixel deltas. Does not change snapshot body text — snapshot uses the full document innerText, not the visible viewport. Use textLimit on snapshot to capture more text; scroll only helps when the page lazy-loads content.',
       inputSchema: {
         deltaX: z.number().optional().default(0),
         deltaY: z.number().optional().default(600),

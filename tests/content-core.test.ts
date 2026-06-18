@@ -76,10 +76,23 @@ describe('extension content core', () => {
     const compact = buildSnapshotFromDocument(document as unknown as Document);
     expect(compact.textPreview).toHaveLength(500);
     expect(compact.textBytesOmitted).toBe(9500);
+    expect(compact.textTotalLength).toBe(10_000);
+    expect(compact.warning).toContain('textLimit');
 
     const full = buildSnapshotFromDocument(document as unknown as Document, { mode: 'full' });
     expect(full.text).toHaveLength(4000);
     expect(full.textBytesOmitted).toBe(6000);
+    expect(full.textTotalLength).toBe(10_000);
+    expect(full.warning).toContain('textLimit');
+  });
+
+  it('omits truncation warning when textLimit is explicitly requested', () => {
+    const body = 'x'.repeat(10_000);
+    const document = makeDocument(`<main><p>${body}</p></main>`);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document, { mode: 'full', textLimit: 4000 });
+    expect(snapshot.textBytesOmitted).toBe(6000);
+    expect(snapshot).not.toHaveProperty('warning');
   });
 
   it('clamps textLimit to the maximum allowed value', () => {

@@ -60,6 +60,18 @@ describe('registerBrowserTools', () => {
     expect(result.content[0].text).toContain('https://example.com');
   });
 
+  it('forwards snapshot textLimit to the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('snapshot')?.({ mode: 'full', textLimit: 20_000, tabId: 3 });
+
+    expect(bridge.calls).toEqual([
+      { action: 'snapshot', params: { mode: 'full', textLimit: 20_000, tabId: 3 } }
+    ]);
+  });
+
   it('forwards type calls with force=false by default when supplied by client schema', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
