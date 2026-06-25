@@ -179,7 +179,13 @@ describe('registerBrowserTools', () => {
   it('reports browser_status ready when broker and extension answer ping', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
-    bridge.result = { pong: true, status: 'connected', protocolVersion: 1, features: ['navigate-pending-warning'] };
+    bridge.result = {
+      pong: true,
+      status: 'connected',
+      protocolVersion: 1,
+      features: ['navigate-pending-warning'],
+      session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+    };
     registerBrowserTools(server, bridge);
 
     const result = await server.tools.get('browser_status')?.({});
@@ -194,9 +200,16 @@ describe('registerBrowserTools', () => {
         connected: true,
         status: 'connected',
         protocolVersion: 1,
-        features: ['navigate-pending-warning']
+        features: ['navigate-pending-warning'],
+        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
       },
-      ping: { pong: true, status: 'connected', protocolVersion: 1, features: ['navigate-pending-warning'] }
+      ping: {
+        pong: true,
+        status: 'connected',
+        protocolVersion: 1,
+        features: ['navigate-pending-warning'],
+        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+      }
     });
   });
 

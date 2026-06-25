@@ -99,7 +99,8 @@ async function browserStatus(bridge: BridgeLike) {
         connected: true,
         status: bridgeStatus,
         ...marker,
-        ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {})
+        ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {}),
+        ...(ping.session !== undefined ? { session: ping.session } : {})
       },
       ping: normalizedPing
     });
