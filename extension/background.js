@@ -292,8 +292,18 @@ async function assertScreenshotPermission(allowedOrigins) {
   );
 }
 
+async function waitForTabActive(tabId, timeoutMs = 1500) {
+  const started = Date.now();
+  while (Date.now() - started <= timeoutMs) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.active) return tab;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('Timed out waiting for Chrome tab activation before screenshot capture');
+}
+
 async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = []) {
-  const tab = await chrome.tabs.get(tabId);
+  let tab = await chrome.tabs.get(tabId);
   if (!isInjectableUrl(tab.url || '')) {
     throw new Error(`Cannot screenshot this Chrome internal or restricted page: ${tab.url || 'unknown URL'}`);
   }
@@ -303,6 +313,7 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
   let activated = false;
   if (!tab.active) {
     await chrome.tabs.update(tabId, { active: true });
+    tab = await waitForTabActive(tabId);
     activated = true;
   }
   let dataUrl;

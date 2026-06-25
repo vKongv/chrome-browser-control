@@ -95,6 +95,14 @@ function loadBackgroundHarness({
         if (loadsRemaining === 0 && tab._navigateFinal) {
           return { ...tab, ...tab._navigateFinal, status: 'complete' };
         }
+        const activationReads = Number(tab._activateAfterGets ?? -1);
+        if (tab._pendingActive && activationReads > 0) {
+          tab._activateAfterGets = activationReads - 1;
+          return { ...tab, active: false };
+        }
+        if (tab._pendingActive) {
+          Object.assign(tab, { active: true, _pendingActive: false });
+        }
         return tab;
       },
       update: async (tabId: number, update: Record<string, unknown>) => {
@@ -102,6 +110,8 @@ function loadBackgroundHarness({
         if (!tab) throw new Error(`No tab with id: ${tabId}`);
         if (update.url) {
           Object.assign(tab, update, { status: 'loading', _navigateLoadsRemaining: 1 });
+        } else if (update.active === true && tab._activateAfterGets !== undefined) {
+          Object.assign(tab, update, { active: false, _pendingActive: true });
         } else {
           Object.assign(tab, update);
         }
@@ -952,6 +962,35 @@ describe('extension background origin enforcement', () => {
       activated: true
     });
     expect(background.captures).toEqual([{ windowId: 1, options: { format: 'jpeg' } }]);
+  });
+
+  it('waits for inactive screenshot targets to become active before capture', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1,
+          _activateAfterGets: 2
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).resolves.toMatchObject({
+      mimeType: 'image/png',
+      activated: true
+    });
+    expect(background.tabs[0].active).toBe(true);
+    expect(background.captures).toEqual([{ windowId: 1, options: { format: 'png' } }]);
   });
 
   it('requires optional <all_urls> permission for wildcard screenshots before capture', async () => {

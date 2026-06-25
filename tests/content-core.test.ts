@@ -1,5 +1,5 @@
 import { Window as HappyWindow } from 'happy-dom';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   __testing,
   buildSnapshotFromDocument,
@@ -487,6 +487,32 @@ describe('extension content core', () => {
     expect(result.dedupedCount).toBe(0);
     expect(result.stepsRun).toBe(3);
     expect(scrolls).toBe(2);
+  });
+
+  it('caps collect_scroll delay to stay within the broker timeout budget', async () => {
+    const document = makeDocument('<article>One</article>');
+    const delays: number[] = [];
+    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback: TimerHandler, delay?: number) => {
+      delays.push(Number(delay));
+      if (typeof callback === 'function') callback();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    try {
+      await collectScroll(
+        {
+          steps: 2,
+          delayMs: 5000,
+          extract: { selector: 'article', includeText: true }
+        },
+        document as unknown as Document,
+        { document, scrollBy: () => undefined } as unknown as Window
+      );
+    } finally {
+      timer.mockRestore();
+    }
+
+    expect(delays).toEqual([1000]);
   });
 
   it('compact output is at least 50 percent smaller than full output on dense pages', () => {

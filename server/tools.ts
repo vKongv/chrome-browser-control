@@ -431,7 +431,7 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       inputSchema: {
         steps: z.number().int().positive().max(20),
         deltaY: z.number().optional(),
-        delayMs: z.number().int().min(0).max(2_000).optional(),
+        delayMs: z.number().int().min(0).max(1_000).optional(),
         maxItems: z.number().int().positive().max(500).optional(),
         extract: z.object({
           selector: z.string().min(1).max(500),
