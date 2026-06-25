@@ -129,7 +129,7 @@ Then confirm from your MCP host by calling the `browser_status` tool. When ready
 
 ## Tools
 
-- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, and `protocolVersion` / `features` confirm the loaded unpacked extension code.
+- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `4` includes the `act-observe` feature.
 - `name_session`: sets a human-readable session name for status/debugging.
 - `list_tabs`: lists tabs whose URL origin is allowed in the extension popup. When every open tab is filtered out, returns `{ tabs: [], detail, hiddenTabCount, allowedOrigins? }` instead of a bare `[]`. Wildcard mode is labeled clearly in `allowedOrigins`.
 - `claim_tab`: claims an allowed tab for this browser-control session and returns a `sessionTabId`. Claims are routing state, not exclusive browser locks.
@@ -137,19 +137,38 @@ Then confirm from your MCP host by calling the `browser_status` tool. When ready
 - `finalize_tabs`: releases claim state for the session without closing tabs. Pass `keep` entries to preserve handoff/deliverable claims.
 - `snapshot`: returns a simplified DOM snapshot for an allowed tab. By default this is a compact automation snapshot that includes concise actionable elements, a text preview (500 chars), omitted counts, and region summaries. Pass `mode: "full"` for verbose element metadata and a `text` field (4000 chars by default). Pass `mode: "visible"` for viewport/intersection-aware elements with bounds and scroll metadata. Pass `textLimit` (up to `100000`) when you need more page body text — check `textBytesOmitted` to see if content was truncated.
 - `visible_snapshot`: convenience tool for `snapshot({ mode: "visible" })`.
-- `navigate`: navigates the active tab or a specified `tabId` to an allowed URL, then waits for the tab to finish loading when possible. If loading times out, the result includes `pending: true` and a `warning`.
-- `click`: clicks an element by snapshot ref on an allowed tab.
-- `type`: types into an element by snapshot ref on an allowed tab. Password-like fields are blocked unless `force=true`.
-- `scroll`: scrolls an allowed tab by `deltaX` and `deltaY`. Optional `x`/`y` viewport coordinates scroll a scrollable element under that point when one is found. Scrolling does not paginate snapshot text — snapshots use full `document.body` innerText. Raise `textLimit` on `snapshot` instead of scroll-stitching unless the page lazy-loads content.
+- `navigate`: navigates the active tab or a specified `tabId` to an allowed URL, then waits for the tab to finish loading when possible. If loading times out, the result includes `pending: true` and a `warning`. Supports `after` observations after the load wait.
+- `click`: clicks an element by snapshot ref on an allowed tab. Supports `after` observations.
+- `type`: types into an element by snapshot ref on an allowed tab. Password-like fields are blocked unless `force=true`. Supports `after` observations.
+- `scroll`: scrolls an allowed tab by `deltaX` and `deltaY`. Optional `x`/`y` viewport coordinates scroll a scrollable element under that point when one is found. Scrolling does not paginate snapshot text — snapshots use full `document.body` innerText. Raise `textLimit` on `snapshot` instead of scroll-stitching unless the page lazy-loads content. Supports `after` observations.
 - `query_elements`: returns bounded refs/roles/labels/bounds for elements filtered by CSS selector, role, text, and visibility.
 - `extract_elements`: extracts bounded text/html/links/time data from a CSS selector. HTML extraction redacts password/OTP/hidden-token attribute values and marks sensitive items instead of leaking secret values. This is the supported alternative to raw JavaScript evaluation.
 - `screenshot`: captures the visible viewport of an allowed tab as a data URL. MV3 capture is viewport-only; inactive target tabs may be activated before capture. Chrome requires `<all_urls>` or `activeTab` for `captureVisibleTab`; this extension requests optional `<all_urls>` only in wildcard (`*`) mode, so wildcard screenshots need that popup grant.
-- `keypress`: dispatches common DOM keyboard events to the page. Browser/OS-level shortcuts are not guaranteed under MV3.
-- `click_at`: dispatches mouse events at viewport coordinates.
+- `keypress`: dispatches common DOM keyboard events to the page. Browser/OS-level shortcuts are not guaranteed under MV3. Supports `after` observations.
+- `click_at`: dispatches mouse events at viewport coordinates. Supports `after` observations.
 - `wait_for`: waits for bounded selector/text/URL-substring conditions and returns match/timeout evidence.
 - `page_status`: returns title, URL, ready/visibility state, viewport/scroll state, and resource counts by initiator type. It does not expose request headers or response bodies.
 - `console_logs`: returns bounded console logs captured after the content script was injected. It cannot see older page console history.
-- `collect_scroll`: scrolls a bounded number of steps, extracts selected elements each step, applies an aggregate item cap (`maxItems`, default 100), and optionally dedupes by text or href for lazy feeds. Results include omitted/truncated counts.
+- `collect_scroll`: scrolls a bounded number of steps, extracts selected elements each step, applies an aggregate item cap (`maxItems`, default 100), and optionally dedupes by text or href for lazy feeds. Results include omitted/truncated counts. Supports `after` observations.
+
+## Act Then Observe
+
+The action tools `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, and `collect_scroll` accept an optional `after` object. The extension removes `after` before sending the base action to the content script, then runs requested observations in this fixed order: `waitFor`, `snapshot`, `pageStatus`. The response is the base action result plus an `after` object with the observation results.
+
+```json
+{
+  "ref": "h12",
+  "after": {
+    "waitFor": { "selector": ".results", "timeoutMs": 5000 },
+    "snapshot": { "mode": "visible", "limit": 40 },
+    "pageStatus": true
+  }
+}
+```
+
+`after.waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is optional and capped at `20000` so the full act-then-observe chain stays within the default broker request timeout. `after.snapshot` may be `true` for default snapshot options or an object with `mode`, `textLimit`, and/or `limit`. Invalid `after` requests are rejected before the base action runs.
+
+If the base action succeeds but an `after` observation fails, the response still includes the base action result and sets `after` to `{ "ok": false, "error": "..." }`.
 
 ## Snapshot Modes And Refs
 

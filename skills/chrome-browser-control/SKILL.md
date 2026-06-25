@@ -35,12 +35,14 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
    - Click/type using refs from a recent snapshot or query result.
    - Use `click_at` only when viewport coordinates are the clearest target.
    - Use `keypress` for page-level keyboard events, not privileged browser shortcuts.
+   - When the next verification is predictable, pass `after` on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, or `collect_scroll` to run post-action observations in the same tool call.
    - After navigation, reload, major DOM changes, or stale-ref errors, collect fresh state.
 
 5. Wait and verify after actions.
    - Use `wait_for` for expected selector/text/URL changes.
    - Use `page_status` for title, URL, ready state, visibility, viewport, scroll, and lightweight resource counts.
    - Use `console_logs` for logs captured after content-script injection.
+   - Prefer `after: { waitFor, snapshot, pageStatus }` when the wait or verification is directly caused by the action; observations run in that order.
    - Prefer one authoritative signal over repeated snapshots of the same fact.
 
 6. Release control.
@@ -60,6 +62,28 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 - Long document text: `snapshot` with a higher `textLimit`.
 
 Avoid large snapshots when a query or selector extraction will do. Prefer bounded outputs with explicit limits and omitted counts.
+
+## Act Then Observe
+
+Use `after` to combine an action with its immediate verification:
+
+```json
+{
+  "ref": "h12",
+  "after": {
+    "waitFor": { "selector": ".results", "timeoutMs": 5000 },
+    "snapshot": { "mode": "visible", "limit": 40 },
+    "pageStatus": true
+  }
+}
+```
+
+Rules:
+- Supported on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, and `collect_scroll`.
+- Observations run as `waitFor`, then `snapshot`, then `pageStatus`.
+- `waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
+- `snapshot` can be `true` or options with `mode`, `textLimit`, and/or `limit`.
+- If the base action succeeds but an observation fails, inspect `after.ok === false` and `after.error`; do not assume the base action was rolled back.
 
 ## Feeds And Timelines
 

@@ -46,9 +46,70 @@ const OptionalTarget = {
 };
 const SnapshotMode = z.enum(['compact', 'full', 'visible']);
 const BoundedLimit = z.number().int().positive().max(500).optional();
+const AfterWaitFor = z
+  .object({
+    text: z.string().min(1).max(500).optional(),
+    selector: z.string().min(1).max(500).optional(),
+    urlIncludes: z.string().min(1).max(500).optional(),
+    timeoutMs: z.number().int().positive().max(20_000).optional()
+  })
+  .refine((value) => hasWaitCondition(value), {
+    message: 'after.waitFor requires at least one of text, selector, or urlIncludes'
+  });
+const AfterSnapshot = z.union([
+  z.literal(true),
+  z.object({
+    mode: SnapshotMode.optional(),
+    textLimit: z.number().int().positive().max(100_000).optional(),
+    limit: z.number().int().positive().max(500).optional()
+  })
+]);
+const AfterObservation = z
+  .object({
+    waitFor: AfterWaitFor.optional().describe('Wait for text, selector, or URL substring after the action.'),
+    snapshot: AfterSnapshot.optional().describe('Collect a snapshot after the action. Use true for default snapshot options.'),
+    pageStatus: z.boolean().optional().describe('Collect page_status after the action.')
+  })
+  .optional()
+  .describe('Optional act-then-observe requests, run after the page action in waitFor, snapshot, pageStatus order.');
 
 function hasWaitCondition(args: Record<string, unknown> = {}): boolean {
   return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
+}
+
+function isValidAfterSnapshot(snapshot: unknown): boolean {
+  return snapshot === undefined || snapshot === true || (!!snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot));
+}
+
+function validateAfterObservation(args: Record<string, unknown> = {}): string | null {
+  const after = args.after;
+  if (!after || typeof after !== 'object' || Array.isArray(after)) return null;
+  const waitFor = (after as Record<string, unknown>).waitFor;
+  if (waitFor !== undefined && (!waitFor || typeof waitFor !== 'object' || Array.isArray(waitFor) || !hasWaitCondition(waitFor as Record<string, unknown>))) {
+    return 'after.waitFor requires at least one of text, selector, or urlIncludes';
+  }
+  if (!isValidAfterSnapshot((after as Record<string, unknown>).snapshot)) {
+    return 'after.snapshot must be true or an object';
+  }
+  const pageStatus = (after as Record<string, unknown>).pageStatus;
+  if (pageStatus !== undefined && typeof pageStatus !== 'boolean') return 'after.pageStatus must be a boolean';
+  return null;
+}
+
+async function forwardActThenObserve(bridge: BridgeLike, action: BridgeAction, params: Record<string, unknown> = {}) {
+  const error = validateAfterObservation(params);
+  if (error) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: 'text' as const,
+          text: error
+        }
+      ]
+    };
+  }
+  return forward(bridge, action, params);
 }
 
 function isNoExtensionError(message: string): boolean {
@@ -242,10 +303,11 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       description: 'Navigate the active tab or target tab to a URL.',
       inputSchema: {
         url: z.string().url(),
+        after: AfterObservation,
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'navigate', args)
+    async (args) => forwardActThenObserve(bridge, 'navigate', args)
   );
 
   server.registerTool(
@@ -255,10 +317,11 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       description: 'Click an element by snapshot ref in the active tab or target tab.',
       inputSchema: {
         ref: z.string().min(1),
+        after: AfterObservation,
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'click', args)
+    async (args) => forwardActThenObserve(bridge, 'click', args)
   );
 
   server.registerTool(
@@ -270,10 +333,11 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
         ref: z.string().min(1),
         text: z.string(),
         force: z.boolean().optional().default(false),
+        after: AfterObservation,
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'type', args)
+    async (args) => forwardActThenObserve(bridge, 'type', args)
   );
 
   server.registerTool(
@@ -287,10 +351,11 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
         deltaY: z.number().optional().default(600),
         x: z.number().optional().describe('Optional viewport x coordinate to scroll a nested element under this point. Defaults to window scroll.'),
         y: z.number().optional().describe('Optional viewport y coordinate to scroll a nested element under this point. Defaults to window scroll.'),
+        after: AfterObservation,
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'scroll', args)
+    async (args) => forwardActThenObserve(bridge, 'scroll', args)
   );
 
   server.registerTool(
@@ -349,10 +414,11 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       description: 'Dispatch common DOM keyboard events in the target page. Browser/OS shortcuts are not guaranteed under MV3.',
       inputSchema: {
         keys: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)]),
+        after: AfterObservation,
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'keypress', args)
+    async (args) => forwardActThenObserve(bridge, 'keypress', args)
   );
 
   server.registerTool(
@@ -363,10 +429,11 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       inputSchema: {
         x: z.number(),
         y: z.number(),
+        after: AfterObservation,
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'click_at', args)
+    async (args) => forwardActThenObserve(bridge, 'click_at', args)
   );
 
   server.registerTool(
@@ -443,9 +510,10 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
           limitPerStep: z.number().int().positive().max(100).optional()
         }),
         dedupeBy: z.enum(['text', 'href', 'statusHref', 'none']).optional(),
+        after: AfterObservation,
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'collect_scroll', args)
+    async (args) => forwardActThenObserve(bridge, 'collect_scroll', args)
   );
 }
