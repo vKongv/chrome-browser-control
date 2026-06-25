@@ -81,7 +81,7 @@ Use `after` to combine an action with its immediate verification:
 Rules:
 - Supported on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, and `collect_scroll`.
 - Observations run as `waitFor`, then `snapshot`, then `pageStatus`.
-- `waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is capped at `30000`.
+- `waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
 - `snapshot` can be `true` or options with `mode`, `textLimit`, and/or `limit`.
 
 ## Feeds And Timelines

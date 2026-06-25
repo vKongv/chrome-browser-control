@@ -533,6 +533,68 @@ describe('extension background origin enforcement', () => {
     expect(background.sentMessages).toEqual([]);
   });
 
+  it('rejects invalid after.snapshot before running an action or observations', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ]
+    });
+
+    await expect(
+      background.handleBridgeRequest('click', { tabId: 1, ref: 'h1', after: { snapshot: false } })
+    ).rejects.toThrow('after.snapshot must be true or an object');
+    expect(background.sentMessages).toEqual([]);
+  });
+
+  it('caps after.waitFor and waits for page load once before observations', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await expect(
+      background.handleBridgeRequest('scroll', {
+        tabId: 1,
+        deltaY: 0,
+        after: { waitFor: { text: 'Done', timeoutMs: 30_000 }, snapshot: true, pageStatus: true }
+      })
+    ).resolves.toMatchObject({
+      after: {
+        waitFor: { action: 'wait_for', params: { text: 'Done', timeoutMs: 20_000 } },
+        snapshot: { action: 'snapshot', params: {} },
+        pageStatus: { action: 'page_status', params: {} }
+      }
+    });
+  });
+
   it('lists all http/https tabs when wildcard origins are configured', async () => {
     const background = loadBackgroundHarness({
       settings: {

@@ -21,6 +21,7 @@ const DEFAULTS = {
 const EXTENSION_PROTOCOL_MARKER = {
   protocolVersion: 4,
   features: [
+    'act-observe-budget',
     'act-observe',
     'navigate-pending-warning',
     'snapshot-text-limit',
@@ -37,6 +38,10 @@ const EXTENSION_PROTOCOL_MARKER = {
     'collect-scroll'
   ]
 };
+
+const BRIDGE_REQUEST_SOFT_BUDGET_MS = 55_000;
+const AFTER_OBSERVATION_BUFFER_MS = 5_000;
+const MAX_AFTER_WAIT_TIMEOUT_MS = 20_000;
 
 let status = 'disconnected';
 let sessionName = '';
@@ -261,8 +266,8 @@ async function ensureContentScripts(tabId, allowedOrigins) {
   if (!injected?.ok) throw new Error(injected?.error || 'Browser content script did not become ready after injection');
 }
 
-async function sendToContent(tabId, action, params = {}, allowedOrigins = []) {
-  await waitForTabComplete(tabId);
+async function sendToContent(tabId, action, params = {}, allowedOrigins = [], { waitForLoad = true } = {}) {
+  if (waitForLoad) await waitForTabComplete(tabId);
   await ensureContentScripts(tabId, allowedOrigins);
   const response = await chrome.tabs.sendMessage(tabId, {
     target: 'cbc-content',
@@ -282,6 +287,17 @@ function hasWaitCondition(args = {}) {
   return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
 }
 
+function boundedAfterWaitTimeout(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(1, Math.min(Math.floor(value), MAX_AFTER_WAIT_TIMEOUT_MS));
+}
+
+function normalizeSnapshotAfter(snapshot) {
+  if (snapshot === true) return {};
+  if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) return snapshot;
+  throw new Error('after.snapshot must be true or an object');
+}
+
 function validateAfterRequest(after) {
   if (after === undefined) return;
   if (!after || typeof after !== 'object' || Array.isArray(after)) {
@@ -295,31 +311,49 @@ function validateAfterRequest(after) {
       throw new Error('after.waitFor requires at least one of text, selector, or urlIncludes');
     }
   }
+  if (after.snapshot !== undefined) normalizeSnapshotAfter(after.snapshot);
+  if (after.pageStatus !== undefined && typeof after.pageStatus !== 'boolean') {
+    throw new Error('after.pageStatus must be a boolean');
+  }
 }
 
-function normalizeSnapshotAfter(snapshot) {
-  if (snapshot === true) return {};
-  if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) return snapshot;
-  throw new Error('after.snapshot must be true or an object');
+function budgetAfterWaitForParams(waitFor, startedAt = Date.now()) {
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
+  const remainingMs = BRIDGE_REQUEST_SOFT_BUDGET_MS - elapsedMs - AFTER_OBSERVATION_BUFFER_MS;
+  if (remainingMs <= 0) {
+    throw new Error('after.waitFor cannot run because the base action used the act-observe time budget');
+  }
+  const requestedTimeout = boundedAfterWaitTimeout(waitFor.timeoutMs) ?? 5000;
+  return {
+    ...waitFor,
+    timeoutMs: Math.max(1, Math.min(requestedTimeout, remainingMs))
+  };
 }
 
-async function runAfterObservations(tabId, after = {}, allowedOrigins = []) {
+async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { startedAt = Date.now() } = {}) {
   const observations = {};
+  await waitForTabComplete(tabId);
   if (after.waitFor !== undefined) {
-    observations.waitFor = await sendToContent(tabId, 'wait_for', after.waitFor, allowedOrigins);
+    observations.waitFor = await sendToContent(
+      tabId,
+      'wait_for',
+      budgetAfterWaitForParams(after.waitFor, startedAt),
+      allowedOrigins,
+      { waitForLoad: false }
+    );
   }
   if (after.snapshot !== undefined) {
-    observations.snapshot = await sendToContent(tabId, 'snapshot', normalizeSnapshotAfter(after.snapshot), allowedOrigins);
+    observations.snapshot = await sendToContent(tabId, 'snapshot', normalizeSnapshotAfter(after.snapshot), allowedOrigins, { waitForLoad: false });
   }
   if (after.pageStatus === true) {
-    observations.pageStatus = await sendToContent(tabId, 'page_status', {}, allowedOrigins);
+    observations.pageStatus = await sendToContent(tabId, 'page_status', {}, allowedOrigins, { waitForLoad: false });
   }
   return observations;
 }
 
-async function withAfterResult(result, tabId, after, allowedOrigins) {
+async function withAfterResult(result, tabId, after, allowedOrigins, options = {}) {
   if (after === undefined) return result;
-  const afterResult = await runAfterObservations(tabId, after, allowedOrigins);
+  const afterResult = await runAfterObservations(tabId, after, allowedOrigins, options);
   if (result && typeof result === 'object' && !Array.isArray(result)) {
     return { ...result, after: afterResult };
   }
@@ -327,11 +361,12 @@ async function withAfterResult(result, tabId, after, allowedOrigins) {
 }
 
 async function runPageActionWithAfter(action, params, allowedOrigins) {
+  const startedAt = Date.now();
   const { after, baseParams } = splitAfterParams(params);
   validateAfterRequest(after);
   const tabId = await resolvePageActionTabId(baseParams, allowedOrigins);
   const result = await sendToContent(tabId, action, baseParams, allowedOrigins);
-  return await withAfterResult(result, tabId, after, allowedOrigins);
+  return await withAfterResult(result, tabId, after, allowedOrigins, { startedAt });
 }
 
 async function hasExactHostPermission(origin) {
@@ -493,6 +528,7 @@ async function handleBridgeRequest(action, params = {}) {
       return { released, kept: claimedTabs.size };
     }
     case 'navigate': {
+      const startedAt = Date.now();
       const { after, baseParams } = splitAfterParams(params);
       validateAfterRequest(after);
       if (!baseParams.url) throw new Error('navigate requires url');
@@ -511,7 +547,7 @@ async function handleBridgeRequest(action, params = {}) {
         result.warning = 'Navigation did not finish loading within 15s; tab may still be loading.';
         result.pending = true;
       }
-      return await withAfterResult(result, tabId, after, settings.allowedOrigins);
+      return await withAfterResult(result, tabId, after, settings.allowedOrigins, { startedAt });
     }
     case 'visible_snapshot': {
       return await sendToContent(

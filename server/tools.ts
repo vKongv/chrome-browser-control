@@ -51,7 +51,7 @@ const AfterWaitFor = z
     text: z.string().min(1).max(500).optional(),
     selector: z.string().min(1).max(500).optional(),
     urlIncludes: z.string().min(1).max(500).optional(),
-    timeoutMs: z.number().int().positive().max(30_000).optional()
+    timeoutMs: z.number().int().positive().max(20_000).optional()
   })
   .refine((value) => hasWaitCondition(value), {
     message: 'after.waitFor requires at least one of text, selector, or urlIncludes'
@@ -77,6 +77,10 @@ function hasWaitCondition(args: Record<string, unknown> = {}): boolean {
   return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
 }
 
+function isValidAfterSnapshot(snapshot: unknown): boolean {
+  return snapshot === undefined || snapshot === true || (!!snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot));
+}
+
 function validateAfterObservation(args: Record<string, unknown> = {}): string | null {
   const after = args.after;
   if (!after || typeof after !== 'object' || Array.isArray(after)) return null;
@@ -84,6 +88,11 @@ function validateAfterObservation(args: Record<string, unknown> = {}): string | 
   if (waitFor !== undefined && (!waitFor || typeof waitFor !== 'object' || Array.isArray(waitFor) || !hasWaitCondition(waitFor as Record<string, unknown>))) {
     return 'after.waitFor requires at least one of text, selector, or urlIncludes';
   }
+  if (!isValidAfterSnapshot((after as Record<string, unknown>).snapshot)) {
+    return 'after.snapshot must be true or an object';
+  }
+  const pageStatus = (after as Record<string, unknown>).pageStatus;
+  if (pageStatus !== undefined && typeof pageStatus !== 'boolean') return 'after.pageStatus must be a boolean';
   return null;
 }
 

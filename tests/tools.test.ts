@@ -213,6 +213,20 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([]);
   });
 
+  it('rejects invalid after.snapshot before calling the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    const result = await server.tools.get('click')?.({ ref: 'h1', after: { snapshot: false } });
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ text: 'after.snapshot must be true or an object' }]
+    });
+    expect(bridge.calls).toEqual([]);
+  });
+
   it('forwards session lifecycle and coordinate/key helpers', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
