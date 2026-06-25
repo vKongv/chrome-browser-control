@@ -595,6 +595,42 @@ describe('extension background origin enforcement', () => {
     });
   });
 
+  it('returns the base action result when an after observation fails', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'snapshot') throw new Error('snapshot failed');
+        return { action: message.action, params: message.params };
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('scroll', { tabId: 1, deltaY: 0, after: { snapshot: true } })
+    ).resolves.toEqual({
+      action: 'scroll',
+      params: { tabId: 1, deltaY: 0 },
+      after: {
+        ok: false,
+        error: 'snapshot failed'
+      }
+    });
+  });
+
   it('lists all http/https tabs when wildcard origins are configured', async () => {
     const background = loadBackgroundHarness({
       settings: {

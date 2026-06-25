@@ -168,6 +168,8 @@ The action tools `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, 
 
 `after.waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is optional and capped at `20000` so the full act-then-observe chain stays within the default broker request timeout. `after.snapshot` may be `true` for default snapshot options or an object with `mode`, `textLimit`, and/or `limit`. Invalid `after` requests are rejected before the base action runs.
 
+If the base action succeeds but an `after` observation fails, the response still includes the base action result and sets `after` to `{ "ok": false, "error": "..." }`.
+
 ## Snapshot Modes And Refs
 
 Default compact snapshots are designed to reduce model-context usage while preserving browser automation. A compact snapshot looks like:

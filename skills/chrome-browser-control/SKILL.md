@@ -83,6 +83,7 @@ Rules:
 - Observations run as `waitFor`, then `snapshot`, then `pageStatus`.
 - `waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
 - `snapshot` can be `true` or options with `mode`, `textLimit`, and/or `limit`.
+- If the base action succeeds but an observation fails, inspect `after.ok === false` and `after.error`; do not assume the base action was rolled back.
 
 ## Feeds And Timelines
 

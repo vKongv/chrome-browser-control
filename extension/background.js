@@ -353,7 +353,15 @@ async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { st
 
 async function withAfterResult(result, tabId, after, allowedOrigins, options = {}) {
   if (after === undefined) return result;
-  const afterResult = await runAfterObservations(tabId, after, allowedOrigins, options);
+  let afterResult;
+  try {
+    afterResult = await runAfterObservations(tabId, after, allowedOrigins, options);
+  } catch (error) {
+    afterResult = {
+      ok: false,
+      error: (error && error.message) || String(error)
+    };
+  }
   if (result && typeof result === 'object' && !Array.isArray(result)) {
     return { ...result, after: afterResult };
   }
