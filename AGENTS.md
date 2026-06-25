@@ -15,7 +15,7 @@ Use this file to resume work without relying on chat history.
 - `scripts/setup.mjs` — first-time setup helper.
 - `scripts/mcp-config.mjs` — host-specific MCP config renderer.
 - `scripts/doctor.mjs` — local setup checker.
-- `skills/chrome-browser-control/` — distributable Codex skill for agents using the MCP tools at runtime.
+- `skills/chrome-browser-control/` — distributable skills.sh agent skill for agents using the MCP tools at runtime.
 - `docs/scratchpad/` — implementation notes/plans.
 
 ## Current state
@@ -33,7 +33,7 @@ Use this file to resume work without relying on chat history.
 - Snapshot refs are per-document in-memory handles and are stable across DOM reorder in the same document.
 - Stale/disconnected/expired refs are pruned and should fail cleanly.
 - First-time setup UX is implemented with `npm run setup`, `npm run doctor`, and `npm run mcp-config`.
-- Runtime agents should use `$chrome-browser-control` when available; it contains the operating playbook for claiming tabs, collecting bounded page state, waiting after actions, screenshots, feed scrolling, side-effect confirmation, and cleanup.
+- Runtime agents should use the `chrome-browser-control` skill when available; it contains the operating playbook for claiming tabs, collecting bounded page state, waiting after actions, screenshots, feed scrolling, side-effect confirmation, and cleanup.
 
 ## Local setup
 

@@ -117,18 +117,6 @@ JSON-style example:
 
 If your MCP host uses a config file, keep it private and outside the repository.
 
-## Agent Skill
-
-This repository includes a distributable Codex skill at:
-
-```text
-skills/chrome-browser-control/
-```
-
-Install or copy that folder into your Codex skills directory when you want agents to learn the recommended browser-control workflow, not just the raw MCP tool schemas. The skill teaches agents to start with `browser_status`, claim tabs for multi-step work, prefer bounded snapshots and queries, wait after actions, use `collect_scroll` for feeds, handle screenshot foreground requirements, confirm before external side effects, and release/finalize tabs.
-
-MCP-native clients can still use the tool descriptions directly. The skill is a lightweight runtime playbook for Codex-style clients that support skill distribution.
-
 ## Verify
 
 Run the setup checker:

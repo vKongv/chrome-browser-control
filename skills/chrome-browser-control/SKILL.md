@@ -1,6 +1,6 @@
 ---
 name: chrome-browser-control
-description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when Codex needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, visible_snapshot, query_elements, extract_elements, wait_for, page_status, console_logs, collect_scroll, and screenshot.
+description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when an agent needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, visible_snapshot, query_elements, extract_elements, wait_for, page_status, console_logs, collect_scroll, and screenshot.
 ---
 
 # Chrome Browser Control
