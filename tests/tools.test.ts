@@ -126,6 +126,20 @@ describe('registerBrowserTools', () => {
     ]);
   });
 
+  it('rejects wait_for without a condition before calling the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    const result = await server.tools.get('wait_for')?.({ timeoutMs: 1000 });
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ text: 'wait_for requires at least one of text, selector, or urlIncludes' }]
+    });
+    expect(bridge.calls).toEqual([]);
+  });
+
   it('forwards session lifecycle and coordinate/key helpers', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();

@@ -38,7 +38,7 @@ export class BrowserBridge extends EventEmitter {
     this.host = options.host ?? '127.0.0.1';
     this.port = options.port ?? 8765;
     this.token = options.token;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 60_000;
     this.helloTimeoutMs = options.helloTimeoutMs ?? 5_000;
   }
 

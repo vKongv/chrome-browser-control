@@ -47,6 +47,10 @@ const OptionalTarget = {
 const SnapshotMode = z.enum(['compact', 'full', 'visible']);
 const BoundedLimit = z.number().int().positive().max(500).optional();
 
+function hasWaitCondition(args: Record<string, unknown> = {}): boolean {
+  return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
+}
+
 function isNoExtensionError(message: string): boolean {
   return /no chrome extension connected|chrome extension disconnected/i.test(message);
 }
@@ -377,7 +381,20 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'wait_for', args)
+    async (args) => {
+      if (!hasWaitCondition(args)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text: 'wait_for requires at least one of text, selector, or urlIncludes'
+            }
+          ]
+        };
+      }
+      return forward(bridge, 'wait_for', args);
+    }
   );
 
   server.registerTool(

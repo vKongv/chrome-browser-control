@@ -46,7 +46,7 @@ export class ChromeBroker extends EventEmitter {
     this.port = options.port ?? 8765;
     this.token = options.token;
     this.extensionId = options.extensionId?.trim() || undefined;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 60_000;
     this.helloTimeoutMs = options.helloTimeoutMs ?? 5_000;
   }
 

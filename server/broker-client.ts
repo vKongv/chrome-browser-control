@@ -36,7 +36,7 @@ export class BrokerClient extends EventEmitter implements BridgeLike {
     super();
     this.url = options.url;
     this.token = options.token;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 60_000;
     this.helloTimeoutMs = options.helloTimeoutMs ?? 5_000;
   }
 

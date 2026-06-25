@@ -32,6 +32,12 @@ afterEach(async () => {
 });
 
 describe('BrowserBridge', () => {
+  it('defaults request timeout long enough for bounded page waits', () => {
+    const bridge = new BrowserBridge({ port: 0, token: 'secret' });
+
+    expect(bridge.requestTimeoutMs).toBe(60_000);
+  });
+
   it('requires a valid pairing token', async () => {
     const bridge = await makeBridge();
     const socket = new WebSocket(bridgeUrl(bridge));
