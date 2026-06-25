@@ -4,8 +4,10 @@ import { registerBrowserTools, ToolRegistrar } from '../server/tools.js';
 
 class FakeServer implements ToolRegistrar {
   tools = new Map<string, (args: any) => Promise<any>>();
+  configs = new Map<string, Record<string, unknown>>();
 
   registerTool(name: string, _config: Record<string, unknown>, cb: (args: any) => Promise<any>): unknown {
+    this.configs.set(name, _config);
     this.tools.set(name, cb);
     return undefined;
   }
@@ -74,6 +76,63 @@ describe('registerBrowserTools', () => {
     expect(result.content[0].text).toContain('https://example.com');
   });
 
+  it('forwards act-then-observe after payloads to the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('click')?.({
+      ref: 'h1',
+      after: {
+        waitFor: { selector: '.ready', timeoutMs: 1000 },
+        snapshot: { mode: 'visible', limit: 25 },
+        pageStatus: true
+      },
+      sessionTabId: 'tab-a'
+    });
+    await server.tools.get('navigate')?.({
+      url: 'https://example.com',
+      after: { snapshot: true }
+    });
+
+    expect(bridge.calls).toEqual([
+      {
+        action: 'click',
+        params: {
+          ref: 'h1',
+          after: {
+            waitFor: { selector: '.ready', timeoutMs: 1000 },
+            snapshot: { mode: 'visible', limit: 25 },
+            pageStatus: true
+          },
+          sessionTabId: 'tab-a'
+        }
+      },
+      {
+        action: 'navigate',
+        params: {
+          url: 'https://example.com',
+          after: { snapshot: true }
+        }
+      }
+    ]);
+  });
+
+  it('adds after schema to supported act tools only', () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    for (const tool of ['navigate', 'click', 'type', 'scroll', 'keypress', 'click_at', 'collect_scroll']) {
+      const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
+      expect(inputSchema.after).toBeTruthy();
+    }
+    for (const tool of ['snapshot', 'query_elements', 'extract_elements', 'wait_for', 'page_status']) {
+      const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
+      expect(inputSchema.after).toBeUndefined();
+    }
+  });
+
   it('forwards snapshot textLimit to the bridge', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
@@ -136,6 +195,20 @@ describe('registerBrowserTools', () => {
     expect(result).toMatchObject({
       isError: true,
       content: [{ text: 'wait_for requires at least one of text, selector, or urlIncludes' }]
+    });
+    expect(bridge.calls).toEqual([]);
+  });
+
+  it('rejects empty after.waitFor before calling the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    const result = await server.tools.get('scroll')?.({ deltaY: 200, after: { waitFor: { timeoutMs: 1000 } } });
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ text: 'after.waitFor requires at least one of text, selector, or urlIncludes' }]
     });
     expect(bridge.calls).toEqual([]);
   });

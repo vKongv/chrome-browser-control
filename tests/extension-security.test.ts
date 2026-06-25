@@ -321,8 +321,8 @@ describe('extension background origin enforcement', () => {
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      protocolVersion: 3,
-      features: expect.arrayContaining(['navigate-pending-warning', 'snapshot-text-limit', 'session-tabs', 'visible-snapshot'])
+      protocolVersion: 4,
+      features: expect.arrayContaining(['act-observe', 'navigate-pending-warning', 'snapshot-text-limit', 'session-tabs', 'visible-snapshot'])
     });
   });
 
@@ -410,6 +410,127 @@ describe('extension background origin enforcement', () => {
       status: 'complete',
       source: 'extension'
     });
+  });
+
+  it('runs requested after observations after a page action without forwarding after to content', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await expect(
+      background.handleBridgeRequest('click', {
+        tabId: 1,
+        ref: 'h1',
+        after: {
+          waitFor: { selector: '.ready', timeoutMs: 1000 },
+          snapshot: { mode: 'visible', limit: 2 },
+          pageStatus: true
+        }
+      })
+    ).resolves.toEqual({
+      action: 'click',
+      params: { tabId: 1, ref: 'h1' },
+      after: {
+        waitFor: { action: 'wait_for', params: { selector: '.ready', timeoutMs: 1000 } },
+        snapshot: { action: 'snapshot', params: { mode: 'visible', limit: 2 } },
+        pageStatus: { action: 'page_status', params: {} }
+      }
+    });
+    expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { tabId: 1, ref: 'h1' } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'wait_for', params: { selector: '.ready', timeoutMs: 1000 } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'snapshot', params: { mode: 'visible', limit: 2 } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'page_status', params: {} } }
+    ]);
+  });
+
+  it('runs navigate after observations only after navigation finishes loading', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Old',
+          url: 'https://example.com/old',
+          windowId: 1,
+          _navigateFinal: { title: 'Example Domain', url: 'https://example.com/' }
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await expect(
+      background.handleBridgeRequest('navigate', {
+        tabId: 1,
+        url: 'https://example.com/',
+        after: {
+          snapshot: true,
+          pageStatus: true
+        }
+      })
+    ).resolves.toEqual({
+      id: 1,
+      url: 'https://example.com/',
+      title: 'Example Domain',
+      status: 'complete',
+      source: 'extension',
+      after: {
+        snapshot: { action: 'snapshot', params: {} },
+        pageStatus: { action: 'page_status', params: {} }
+      }
+    });
+    expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'snapshot', params: {} } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'page_status', params: {} } }
+    ]);
+  });
+
+  it('rejects empty after.waitFor before running an action or observations', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ]
+    });
+
+    await expect(
+      background.handleBridgeRequest('click', { tabId: 1, ref: 'h1', after: { waitFor: { timeoutMs: 1000 } } })
+    ).rejects.toThrow('after.waitFor requires at least one of text, selector, or urlIncludes');
+    expect(background.sentMessages).toEqual([]);
   });
 
   it('lists all http/https tabs when wildcard origins are configured', async () => {
