@@ -899,6 +899,11 @@ describe('extension background origin enforcement', () => {
       sessionTabId: 'tab-1',
       tabId: 1
     });
+    await background.handleBridgeRequest('page_status');
+    expect(background.sentMessages.at(-1)).toMatchObject({
+      tabId: 2,
+      message: { action: 'page_status' }
+    });
     await expect(background.handleBridgeRequest('finalize_tabs', { keep: [{ tabId: 2, status: 'handoff' }] })).resolves.toEqual({
       released: 0,
       kept: 1

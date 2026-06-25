@@ -407,7 +407,7 @@ async function handleBridgeRequest(action, params = {}) {
       }
       const claim = claimedTabs.get(sessionTabId);
       claimedTabs.delete(sessionTabId);
-      if (currentSessionTabId === sessionTabId) currentSessionTabId = '';
+      if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
       return { released: true, sessionTabId, tabId: claim?.tabId };
     }
     case 'finalize_tabs': {
