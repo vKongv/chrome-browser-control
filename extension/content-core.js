@@ -534,7 +534,8 @@ function extractElements(options = {}, documentRef = document) {
   cleanupRefStore(documentRef, now);
   const windowRef = documentRef.defaultView || window;
   const limit = boundedLimit(options.limit, DEFAULT_EXTRACT_LIMIT, MAX_EXTRACT_LIMIT);
-  const includeText = options.includeText !== false || (!options.includeHtml && !options.includeLinks && !options.includeTimes);
+  const includeText =
+    options.includeText === true || (options.includeText === undefined && !options.includeHtml && !options.includeLinks && !options.includeTimes);
   const elements = elementsForQuery(documentRef, { selector: options.selector, visible: options.visible });
   const selected = elements.slice(0, limit);
   const items = selected.map((element) => {

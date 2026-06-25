@@ -234,6 +234,21 @@ describe('extension content core', () => {
     expect(result.items[0].html).not.toContain('csrf-secret');
     expect(result.items[0].html).not.toContain('password-secret');
     expect(result.items[0].html).not.toContain('123456');
+    expect(result.items[0].text).toBeUndefined();
+  });
+
+  it('respects includeText false and only defaults text when no extract fields are requested', () => {
+    const document = makeDocument('<article><a href="/a">Alpha</a><time datetime="2026-01-01">Jan 1</time></article>');
+
+    const defaultResult = extractElements({ selector: 'article' }, document as unknown as Document);
+    const htmlOnly = extractElements({ selector: 'article', includeHtml: true }, document as unknown as Document);
+    const linksOnly = extractElements({ selector: 'article', includeLinks: true, includeText: false }, document as unknown as Document);
+
+    expect(defaultResult.items[0].text).toBe('AlphaJan 1');
+    expect(htmlOnly.items[0].html).toContain('<article');
+    expect(htmlOnly.items[0].text).toBeUndefined();
+    expect(linksOnly.items[0].links).toEqual([{ href: 'https://example.test/a', text: 'Alpha' }]);
+    expect(linksOnly.items[0].text).toBeUndefined();
   });
 
   it('blocks typing into password-like fields unless force=true', () => {
