@@ -7,12 +7,34 @@ const DEFAULT_FULL_TEXT_LIMIT = 4000;
 const MAX_TEXT_LIMIT = 100_000;
 const DEFAULT_REF_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_REFS = 500;
+const DEFAULT_QUERY_LIMIT = 100;
+const MAX_QUERY_LIMIT = 500;
+const DEFAULT_EXTRACT_LIMIT = 100;
+const MAX_EXTRACT_LIMIT = 500;
+const MAX_EXTRACT_TEXT = 1000;
+const MAX_EXTRACT_HTML = 2000;
+const MAX_LINKS_PER_ITEM = 20;
+const MAX_CONSOLE_LOGS = 200;
+const DEFAULT_WAIT_TIMEOUT_MS = 5000;
+const MAX_WAIT_TIMEOUT_MS = 30000;
+const DEFAULT_COLLECT_STEPS = 3;
+const MAX_COLLECT_STEPS = 20;
+const DEFAULT_COLLECT_DELAY_MS = 200;
+const MAX_COLLECT_DELAY_MS = 1000;
+const DEFAULT_COLLECT_ITEM_LIMIT = 100;
+const MAX_COLLECT_ITEM_LIMIT = 500;
+const SENSITIVE_ATTR_PATTERN = /password|passwd|passcode|one-time-code|otp|2fa|mfa|token|csrf|xsrf|secret|credential|authorization|session|nonce/i;
+const HIDDEN_TOKEN_PATTERN = /token|csrf|xsrf|auth|secret|session|credential|nonce/i;
 
 let refTtlMs = DEFAULT_REF_TTL_MS;
 let maxRefs = DEFAULT_MAX_REFS;
 let nextRefId = 1;
 const elementRefs = new WeakMap();
 const refRecords = new Map();
+const consoleState = {
+  installed: false,
+  logs: []
+};
 
 export function isPasswordLike(element) {
   const type = String(element?.getAttribute?.('type') ?? '').toLowerCase();
@@ -23,6 +45,17 @@ export function isPasswordLike(element) {
   const placeholder = String(element?.getAttribute?.('placeholder') ?? '').toLowerCase();
   const haystack = `${type} ${autocomplete} ${name} ${id} ${aria} ${placeholder}`;
   return type === 'password' || /password|passwd|passcode|one-time-code|otp|2fa|mfa/.test(haystack);
+}
+
+function isHiddenTokenLike(element) {
+  const tag = String(element?.tagName || '').toLowerCase();
+  if (tag !== 'input') return false;
+  const type = String(element?.getAttribute?.('type') ?? '').toLowerCase();
+  if (type !== 'hidden') return false;
+  const name = String(element?.getAttribute?.('name') ?? '').toLowerCase();
+  const id = String(element?.getAttribute?.('id') ?? '').toLowerCase();
+  const aria = String(element?.getAttribute?.('aria-label') ?? '').toLowerCase();
+  return HIDDEN_TOKEN_PATTERN.test(`${name} ${id} ${aria}`);
 }
 
 function roleFor(element) {
@@ -128,6 +161,81 @@ function fullItemFor(element, ref) {
   };
 }
 
+function viewportFor(windowRef = window) {
+  return {
+    width: Math.round(windowRef.innerWidth || 0),
+    height: Math.round(windowRef.innerHeight || 0),
+    deviceScaleFactor: Number(windowRef.devicePixelRatio || 1)
+  };
+}
+
+function scrollFor(windowRef = window, documentRef = windowRef.document || document) {
+  const root = documentRef.documentElement || {};
+  const body = documentRef.body || {};
+  return {
+    x: Math.round(windowRef.scrollX || root.scrollLeft || body.scrollLeft || 0),
+    y: Math.round(windowRef.scrollY || root.scrollTop || body.scrollTop || 0),
+    width: Math.round(root.scrollWidth || body.scrollWidth || 0),
+    height: Math.round(root.scrollHeight || body.scrollHeight || 0)
+  };
+}
+
+function boundsForElement(element) {
+  const rect = element.getBoundingClientRect?.();
+  if (!rect) return undefined;
+  return {
+    x: Math.round(rect.x ?? rect.left ?? 0),
+    y: Math.round(rect.y ?? rect.top ?? 0),
+    width: Math.round(rect.width ?? Math.max(0, (rect.right || 0) - (rect.left || 0))),
+    height: Math.round(rect.height ?? Math.max(0, (rect.bottom || 0) - (rect.top || 0)))
+  };
+}
+
+function elementHref(element) {
+  if (element.href) return String(element.href).slice(0, 500);
+  const link = element.closest?.('a[href]') || element.querySelector?.('a[href]');
+  return link?.href ? String(link.href).slice(0, 500) : undefined;
+}
+
+function elementValue(element) {
+  if (!('value' in element) || isPasswordLike(element)) return undefined;
+  return String(element.value ?? '').slice(0, 500);
+}
+
+function isVisibleElement(element, windowRef = element.ownerDocument?.defaultView || window) {
+  const rect = element.getBoundingClientRect?.();
+  if (!rect) return true;
+  const width = rect.width ?? Math.max(0, (rect.right || 0) - (rect.left || 0));
+  const height = rect.height ?? Math.max(0, (rect.bottom || 0) - (rect.top || 0));
+  if (width <= 0 || height <= 0) return false;
+  const view = viewportFor(windowRef);
+  const left = rect.left ?? rect.x ?? 0;
+  const top = rect.top ?? rect.y ?? 0;
+  const right = rect.right ?? left + width;
+  const bottom = rect.bottom ?? top + height;
+  if (right < 0 || bottom < 0 || left > view.width || top > view.height) return false;
+  const style = windowRef.getComputedStyle?.(element);
+  if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) return false;
+  return true;
+}
+
+function visibleItemFor(element, ref, windowRef) {
+  const item = {
+    ref,
+    role: roleFor(element),
+    label: labelFor(element, 120),
+    tag: element.tagName.toLowerCase(),
+    bounds: boundsForElement(element),
+    visible: isVisibleElement(element, windowRef)
+  };
+  const href = elementHref(element);
+  const value = elementValue(element);
+  if (href) item.href = href;
+  if (value) item.value = value;
+  if (isPasswordLike(element)) item.passwordLike = true;
+  return item;
+}
+
 function compactItemFor(element, ref) {
   const item = {
     ref,
@@ -136,6 +244,31 @@ function compactItemFor(element, ref) {
   };
   if (isPasswordLike(element)) item.passwordLike = true;
   return item;
+}
+
+function boundedLimit(value, fallback, max) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.min(Math.floor(value), max));
+}
+
+export function buildVisibleSnapshotFromDocument(documentRef = document, options = {}) {
+  const windowRef = documentRef.defaultView || window;
+  const now = typeof options?.now === 'number' ? options.now : nowMs();
+  cleanupRefStore(documentRef, now);
+  const limit = boundedLimit(options.limit, COMPACT_ELEMENT_LIMIT, 250);
+  const elements = interestingElements(documentRef).filter((element) => isVisibleElement(element, windowRef));
+  const selected = elements.slice(0, limit);
+  const items = selected.map((element) => visibleItemFor(element, refForElement(element, documentRef, now), windowRef));
+  cleanupRefStore(documentRef, now);
+  return {
+    title: documentRef.title,
+    url: documentRef.location?.href,
+    mode: 'visible',
+    viewport: viewportFor(windowRef),
+    scroll: scrollFor(windowRef, documentRef),
+    elements: items,
+    omittedElements: Math.max(0, elements.length - selected.length)
+  };
 }
 
 function regionSummaries(documentRef, elements) {
@@ -188,7 +321,8 @@ function textSnapshotMeta(bodyText, textLimit, options) {
 }
 
 export function buildSnapshotFromDocument(documentRef = document, options = {}) {
-  const mode = options?.mode === 'full' ? 'full' : 'compact';
+  const mode = options?.mode === 'full' ? 'full' : options?.mode === 'visible' ? 'visible' : 'compact';
+  if (mode === 'visible') return buildVisibleSnapshotFromDocument(documentRef, options);
   const textLimit = resolveTextLimit(options, mode);
   const now = typeof options?.now === 'number' ? options.now : nowMs();
   cleanupRefStore(documentRef, now);
@@ -280,9 +414,352 @@ export function performType({ ref, text, force = false }, documentRef = document
   return { typed: String(text).length, ref };
 }
 
-export function performScroll({ deltaX = 0, deltaY = 600 } = {}, windowRef = window) {
+export function performScroll({ deltaX = 0, deltaY = 600, x, y } = {}, windowRef = window) {
+  if (typeof x === 'number' && typeof y === 'number') {
+    const target = windowRef.document?.elementFromPoint?.(x, y);
+    const scrollable = scrollableAncestor(target, windowRef);
+    if (scrollable) {
+      scrollable.scrollBy?.(deltaX, deltaY);
+      return { scrolled: true, deltaX, deltaY, x, y, target: 'element' };
+    }
+  }
   windowRef.scrollBy(deltaX, deltaY);
-  return { scrolled: true, deltaX, deltaY };
+  return { scrolled: true, deltaX, deltaY, ...(typeof x === 'number' ? { x } : {}), ...(typeof y === 'number' ? { y } : {}), target: 'window' };
+}
+
+function scrollableAncestor(element, windowRef = window) {
+  let current = element;
+  while (current && current !== windowRef.document?.body && current !== windowRef.document?.documentElement) {
+    const style = windowRef.getComputedStyle?.(current);
+    const overflow = `${style?.overflow || ''} ${style?.overflowY || ''} ${style?.overflowX || ''}`;
+    if (/(auto|scroll)/.test(overflow) && (current.scrollHeight > current.clientHeight || current.scrollWidth > current.clientWidth)) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function elementsForQuery(documentRef, options = {}) {
+  let elements;
+  if (options.selector) {
+    elements = [...documentRef.querySelectorAll(String(options.selector))];
+  } else {
+    elements = interestingElements(documentRef);
+  }
+  const windowRef = documentRef.defaultView || window;
+  return elements.filter((element) => {
+    if (options.visible === true && !isVisibleElement(element, windowRef)) return false;
+    if (options.role && roleFor(element).toLowerCase() !== String(options.role).toLowerCase()) return false;
+    if (options.text) {
+      const needle = String(options.text).toLowerCase();
+      const haystack = `${labelFor(element, 500)} ${element.textContent || ''}`.toLowerCase();
+      if (!haystack.includes(needle)) return false;
+    }
+    return true;
+  });
+}
+
+export function queryElements(options = {}, documentRef = document) {
+  const now = typeof options?.now === 'number' ? options.now : nowMs();
+  cleanupRefStore(documentRef, now);
+  const windowRef = documentRef.defaultView || window;
+  const limit = boundedLimit(options.limit, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
+  const elements = elementsForQuery(documentRef, options);
+  const selected = elements.slice(0, limit);
+  const matches = selected.map((element) => visibleItemFor(element, refForElement(element, documentRef, now), windowRef));
+  cleanupRefStore(documentRef, now);
+  return {
+    matches,
+    count: elements.length,
+    omitted: Math.max(0, elements.length - selected.length)
+  };
+}
+
+function linksForElement(element) {
+  const links = [];
+  const nested = [...(element.querySelectorAll?.('a[href]') || [])];
+  const candidates = element.matches?.('a[href]') ? [element, ...nested] : nested;
+  for (const link of candidates.slice(0, MAX_LINKS_PER_ITEM)) {
+    links.push({
+      href: String(link.href || link.getAttribute('href') || '').slice(0, 500),
+      text: labelFor(link, 160)
+    });
+  }
+  return links;
+}
+
+function timeForElement(element) {
+  const time = element.matches?.('time') ? element : element.querySelector?.('time');
+  if (!time) return undefined;
+  return {
+    datetime: time.getAttribute('datetime') || undefined,
+    text: labelFor(time, 160)
+  };
+}
+
+function sanitizeHtmlForExtraction(element) {
+  const clone = element.cloneNode(true);
+  let redactedAttributes = 0;
+  let sensitive = false;
+  let passwordLike = false;
+  const nodes = [clone, ...(clone.querySelectorAll?.('*') || [])];
+  for (const node of nodes) {
+    const original = node === clone ? element : undefined;
+    const source =
+      original ||
+      (node.getAttribute?.(REF_ATTR) ? element.ownerDocument?.querySelector?.(`[${REF_ATTR}="${escapeRef(node.getAttribute(REF_ATTR))}"]`) : null);
+    const nodePasswordLike = isPasswordLike(node) || (source ? isPasswordLike(source) : false);
+    const nodeSensitive = nodePasswordLike || isHiddenTokenLike(node) || (source ? isHiddenTokenLike(source) : false);
+    if (nodePasswordLike) passwordLike = true;
+    if (nodeSensitive) sensitive = true;
+    for (const attr of [...(node.attributes || [])]) {
+      const shouldRedact = SENSITIVE_ATTR_PATTERN.test(attr.name) || (nodeSensitive && attr.name.toLowerCase() === 'value');
+      if (!shouldRedact) continue;
+      node.setAttribute(attr.name, '[redacted]');
+      redactedAttributes += 1;
+    }
+  }
+  return {
+    html: String(clone.outerHTML || '').slice(0, MAX_EXTRACT_HTML),
+    passwordLike,
+    sensitive,
+    redactedAttributes
+  };
+}
+
+export function extractElements(options = {}, documentRef = document) {
+  if (!options.selector) throw new Error('extract_elements requires selector');
+  const now = typeof options?.now === 'number' ? options.now : nowMs();
+  cleanupRefStore(documentRef, now);
+  const windowRef = documentRef.defaultView || window;
+  const limit = boundedLimit(options.limit, DEFAULT_EXTRACT_LIMIT, MAX_EXTRACT_LIMIT);
+  const includeText =
+    options.includeText === true || (options.includeText === undefined && !options.includeHtml && !options.includeLinks && !options.includeTimes);
+  const elements = elementsForQuery(documentRef, { selector: options.selector, visible: options.visible });
+  const selected = elements.slice(0, limit);
+  const items = selected.map((element) => {
+    const item = { ref: refForElement(element, documentRef, now) };
+    if (includeText) item.text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, MAX_EXTRACT_TEXT);
+    const directPasswordLike = isPasswordLike(element);
+    const directSensitive = directPasswordLike || isHiddenTokenLike(element);
+    if (directPasswordLike) item.passwordLike = true;
+    if (directSensitive) item.sensitive = true;
+    if (options.includeHtml) {
+      const sanitized = sanitizeHtmlForExtraction(element);
+      item.html = sanitized.html;
+      if (sanitized.passwordLike) item.passwordLike = true;
+      if (sanitized.sensitive) item.sensitive = true;
+      if (sanitized.redactedAttributes > 0) item.redactedAttributes = sanitized.redactedAttributes;
+    }
+    if (options.includeLinks) item.links = linksForElement(element);
+    if (options.includeTimes) item.time = timeForElement(element);
+    if (options.visible === true) item.bounds = boundsForElement(element);
+    if (isVisibleElement(element, windowRef) === false) item.visible = false;
+    return item;
+  });
+  cleanupRefStore(documentRef, now);
+  return {
+    items,
+    count: elements.length,
+    omitted: Math.max(0, elements.length - selected.length)
+  };
+}
+
+export function performClickAt({ x, y } = {}, documentRef = document) {
+  if (typeof x !== 'number' || typeof y !== 'number') throw new Error('click_at requires numeric x and y');
+  const element = documentRef.elementFromPoint?.(x, y);
+  if (!element) throw new Error(`No element found at viewport coordinates ${x},${y}`);
+  const view = documentRef.defaultView || window;
+  const MouseEventCtor = view.MouseEvent || view.Event;
+  const ref = refForElement(element, documentRef, nowMs());
+  for (const type of ['mouseover', 'mousedown', 'mouseup', 'click']) {
+    element.dispatchEvent(new MouseEventCtor(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  }
+  return { clicked: true, x, y, ref };
+}
+
+function parseKeySpec(spec) {
+  const parts = String(spec).split('+').filter(Boolean);
+  const key = parts.pop() || spec;
+  const modifiers = new Set(parts.map((part) => part.toLowerCase()));
+  return {
+    key,
+    ctrlKey: modifiers.has('ctrl') || modifiers.has('control'),
+    metaKey: modifiers.has('meta') || modifiers.has('cmd') || modifiers.has('command'),
+    altKey: modifiers.has('alt') || modifiers.has('option'),
+    shiftKey: modifiers.has('shift')
+  };
+}
+
+export function performKeypress({ keys } = {}, documentRef = document) {
+  const keyList = Array.isArray(keys) ? keys : [keys];
+  if (!keyList.length || keyList.some((key) => !key)) throw new Error('keypress requires keys');
+  const view = documentRef.defaultView || window;
+  const KeyboardEventCtor = view.KeyboardEvent || view.Event;
+  const target = documentRef.activeElement || documentRef.body || documentRef.documentElement;
+  const pressed = [];
+  for (const spec of keyList.slice(0, 20)) {
+    const eventInit = { ...parseKeySpec(spec), bubbles: true, cancelable: true };
+    target.dispatchEvent(new KeyboardEventCtor('keydown', eventInit));
+    target.dispatchEvent(new KeyboardEventCtor('keyup', eventInit));
+    pressed.push(String(spec));
+  }
+  return { pressed };
+}
+
+export function pageStatus(documentRef = document) {
+  const windowRef = documentRef.defaultView || window;
+  const resources = windowRef.performance?.getEntriesByType?.('resource') || [];
+  const byType = {};
+  for (const entry of resources.slice(-500)) {
+    const type = entry.initiatorType || 'unknown';
+    byType[type] = (byType[type] || 0) + 1;
+  }
+  return {
+    title: documentRef.title,
+    url: documentRef.location?.href,
+    readyState: documentRef.readyState,
+    visibilityState: documentRef.visibilityState,
+    scroll: scrollFor(windowRef, documentRef),
+    viewport: viewportFor(windowRef),
+    resourceSummary: {
+      count: resources.length,
+      omitted: Math.max(0, resources.length - 500),
+      byType
+    }
+  };
+}
+
+export function waitForCondition(options = {}, documentRef = document) {
+  const timeoutMs = boundedLimit(options.timeoutMs, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      let matched = false;
+      let reason = 'timeout';
+      if (options.urlIncludes && String(documentRef.location?.href || '').includes(String(options.urlIncludes))) {
+        matched = true;
+        reason = 'urlIncludes';
+      } else if (options.selector && documentRef.querySelector(String(options.selector))) {
+        matched = true;
+        reason = 'selector';
+      } else if (options.text && bodyTextFor(documentRef).includes(String(options.text))) {
+        matched = true;
+        reason = 'text';
+      }
+      const elapsedMs = Date.now() - started;
+      if (matched || elapsedMs >= timeoutMs) {
+        resolve({ matched, reason, elapsedMs, title: documentRef.title, url: documentRef.location?.href });
+        return;
+      }
+      setTimeout(check, 100);
+    };
+    check();
+  });
+}
+
+function stringifyConsoleArg(arg) {
+  if (typeof arg === 'string') return arg.slice(0, 1000);
+  try {
+    return JSON.stringify(arg).slice(0, 1000);
+  } catch (_error) {
+    return String(arg).slice(0, 1000);
+  }
+}
+
+export function installConsoleCapture(windowRef = window) {
+  if (consoleState.installed) return { installed: true };
+  const consoleRef = windowRef.console || console;
+  for (const level of ['debug', 'info', 'log', 'warn', 'error']) {
+    const original = consoleRef[level]?.bind(consoleRef);
+    if (!original) continue;
+    consoleRef[level] = (...args) => {
+      consoleState.logs.push({
+        level,
+        text: args.map(stringifyConsoleArg).join(' '),
+        timestamp: new Date().toISOString()
+      });
+      if (consoleState.logs.length > MAX_CONSOLE_LOGS) consoleState.logs.splice(0, consoleState.logs.length - MAX_CONSOLE_LOGS);
+      return original(...args);
+    };
+  }
+  consoleState.installed = true;
+  return { installed: true };
+}
+
+export function getConsoleLogs({ levels, limit } = {}) {
+  const allowed = Array.isArray(levels) && levels.length ? new Set(levels.map((level) => String(level).toLowerCase())) : null;
+  const filtered = allowed ? consoleState.logs.filter((entry) => allowed.has(entry.level)) : consoleState.logs;
+  const appliedLimit = boundedLimit(limit, 50, MAX_CONSOLE_LOGS);
+  return {
+    logs: filtered.slice(-appliedLimit),
+    omitted: Math.max(0, filtered.length - appliedLimit),
+    capture: 'after-content-script-injection'
+  };
+}
+
+function dedupeKeyForItem(item, mode) {
+  if (mode === 'none') return undefined;
+  if (mode === 'text') return item.text;
+  const href = item.href || item.links?.[0]?.href;
+  if (mode === 'href' || mode === 'statusHref') return href || item.text;
+  return item.text;
+}
+
+export async function collectScroll(options = {}, documentRef = document, windowRef = documentRef.defaultView || window) {
+  const steps = boundedLimit(options.steps, DEFAULT_COLLECT_STEPS, MAX_COLLECT_STEPS);
+  const delayMs = Math.min(MAX_COLLECT_DELAY_MS, Math.max(0, Number(options.delayMs ?? DEFAULT_COLLECT_DELAY_MS)));
+  const deltaY = typeof options.deltaY === 'number' ? options.deltaY : 600;
+  const maxItems = boundedLimit(options.maxItems, DEFAULT_COLLECT_ITEM_LIMIT, MAX_COLLECT_ITEM_LIMIT);
+  const extract = options.extract || {};
+  if (!extract.selector) throw new Error('collect_scroll requires extract.selector');
+  const dedupeBy = options.dedupeBy || 'none';
+  const seen = new Set();
+  const items = [];
+  let dedupedCount = 0;
+  let omitted = 0;
+  let truncatedCount = 0;
+  for (let step = 0; step < steps; step += 1) {
+    const result = extractElements(
+      {
+        selector: extract.selector,
+        includeText: extract.includeText,
+        includeLinks: extract.includeLinks || dedupeBy === 'href' || dedupeBy === 'statusHref',
+        includeTimes: extract.includeTimes,
+        visible: extract.visible,
+        limit: boundedLimit(extract.limitPerStep, 20, 100)
+      },
+      documentRef
+    );
+    omitted += result.omitted || 0;
+    for (const item of result.items) {
+      const key = dedupeKeyForItem(item, dedupeBy);
+      if (key && seen.has(key)) {
+        dedupedCount += 1;
+        continue;
+      }
+      if (key) seen.add(key);
+      if (items.length < maxItems) {
+        items.push(item);
+      } else {
+        truncatedCount += 1;
+      }
+    }
+    if (step < steps - 1) {
+      performScroll({ deltaY }, windowRef);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return {
+    stepsRun: steps,
+    items,
+    count: items.length,
+    dedupedCount,
+    omitted: omitted + truncatedCount,
+    truncatedCount,
+    maxItems
+  };
 }
 
 export const __testing = {
@@ -298,15 +775,28 @@ export const __testing = {
   },
   refStoreSize() {
     return refRecords.size;
+  },
+  clearConsoleLogs() {
+    consoleState.logs = [];
   }
 };
 
 globalThis.BrowserControlContentCore = {
   buildSnapshotFromDocument,
+  buildVisibleSnapshotFromDocument,
   isPasswordLike,
   findByRef,
   performClick,
   performType,
   performScroll,
+  queryElements,
+  extractElements,
+  performClickAt,
+  performKeypress,
+  waitForCondition,
+  pageStatus,
+  installConsoleCapture,
+  getConsoleLogs,
+  collectScroll,
   cleanupRefStore
 };

@@ -67,6 +67,14 @@ afterEach(async () => {
 });
 
 describe('ChromeBroker', () => {
+  it('defaults request timeouts long enough for bounded page waits', () => {
+    const broker = new ChromeBroker({ port: 0, token: 'secret' });
+    const client = new BrokerClient({ url: 'ws://127.0.0.1:8765', token: 'secret' });
+
+    expect(broker.requestTimeoutMs).toBe(60_000);
+    expect(client.requestTimeoutMs).toBe(60_000);
+  });
+
   it('rejects MCP clients with an invalid pairing token', async () => {
     const broker = await makeBroker();
     const socket = new WebSocket(brokerUrl(broker));

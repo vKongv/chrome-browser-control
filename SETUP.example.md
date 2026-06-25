@@ -20,7 +20,7 @@ Load the unpacked Chrome extension from:
 /path/to/chrome-browser-control/extension
 ```
 
-After changing extension source files, reload the unpacked extension from `chrome://extensions` before testing. The `browser_status` tool reports `protocolVersion` and `features` from the loaded extension, which helps confirm Chrome is not still running an older background service worker.
+After changing extension source files, reload the unpacked extension from `chrome://extensions` before testing. The `browser_status` tool reports `protocolVersion` and `features` from the loaded extension, which helps confirm Chrome is not still running an older background service worker. After manifest permission changes, reload the unpacked extension, open the popup, click "Save and reconnect", and grant any new optional permission prompt.
 
 ## Token
 
@@ -43,7 +43,7 @@ http://localhost:3000
 
 Enter `*` to allow all normal `http://` and `https://` pages in the current Chrome profile. The extension stores that as `http://*/*` and `https://*/*` host permissions and does not allow `chrome://`, `file://`, extension pages, or other non-web schemes.
 
-Wildcard mode is convenient for local development, but any MCP client with the pairing token can act on every allowed web page in that profile. Prefer explicit origins when you only need a few sites.
+Wildcard mode is convenient for local development, but any MCP client with the pairing token can act on every allowed web page in that profile. Prefer explicit origins when you only need a few sites. Chrome requires `<all_urls>` or `activeTab` for `captureVisibleTab`; this project requests optional `<all_urls>` as a host permission only in wildcard mode, and background checks still block non-http(s) and disallowed URLs.
 
 ## Broker
 
@@ -92,7 +92,15 @@ Compact snapshots include concise refs/roles/labels, a short text preview, omitt
 { "tabId": 123, "mode": "full" }
 ```
 
+Use visible mode when the viewport matters:
+
+```json
+{ "tabId": 123, "mode": "visible" }
+```
+
 Refs are per-document in-memory IDs (`h...`). They are stable across DOM reorder in the same document, but navigation/reload creates a new document; take a fresh snapshot after page changes or stale-ref errors. The content script prunes expired and over-cap refs so memory stays bounded.
+
+For multi-step tasks, call `claim_tab` with an allowed tab id and pass the returned `sessionTabId` to page tools. Use `release_tab` or `finalize_tabs` when done. Claims are routing state only; they do not close or lock tabs.
 
 ## Development Checks
 

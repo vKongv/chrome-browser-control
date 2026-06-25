@@ -1,23 +1,36 @@
 export function isPasswordLike(element: any): boolean;
-export type SnapshotMode = 'compact' | 'full';
+export type SnapshotMode = 'compact' | 'full' | 'visible';
 export interface SnapshotOptions {
   mode?: SnapshotMode;
   now?: number;
   textLimit?: number;
+  limit?: number;
+}
+export interface ElementBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+export interface ElementMatch {
+  ref: string;
+  role: string;
+  label: string;
+  tag?: string;
+  passwordLike?: boolean;
+  bounds?: ElementBounds;
+  href?: string;
+  value?: string;
+  visible?: boolean;
 }
 export function cleanupRefStore(documentRef?: Document, now?: number): { retained: number; ttlMs: number; maxRefs: number };
 export function buildSnapshotFromDocument(documentRef?: Document, options?: SnapshotOptions): {
   title: string;
   url?: string;
-  mode?: 'compact';
-  elements: Array<{
-    ref: string;
-    role: string;
-    label: string;
-    tag?: string;
-    passwordLike?: boolean;
-    bounds?: { x: number; y: number; width: number; height: number };
-  }>;
+  mode?: 'compact' | 'visible';
+  viewport?: { width: number; height: number; deviceScaleFactor: number };
+  scroll?: { x: number; y: number; width: number; height: number };
+  elements: ElementMatch[];
   omittedElements?: number;
   text?: string;
   textPreview?: string;
@@ -27,6 +40,15 @@ export function buildSnapshotFromDocument(documentRef?: Document, options?: Snap
   warning?: string;
   regions?: Array<Record<string, unknown>>;
 };
+export function buildVisibleSnapshotFromDocument(documentRef?: Document, options?: SnapshotOptions): {
+  title: string;
+  url?: string;
+  mode: 'visible';
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+  scroll: { x: number; y: number; width: number; height: number };
+  elements: ElementMatch[];
+  omittedElements: number;
+};
 export function findByRef(ref: string, documentRef?: Document): Element | null;
 export function performClick(params: { ref: string }, documentRef?: Document): { clicked: string };
 export function performType(
@@ -34,11 +56,72 @@ export function performType(
   documentRef?: Document
 ): { typed: number; ref: string };
 export function performScroll(
-  params?: { deltaX?: number; deltaY?: number },
+  params?: { deltaX?: number; deltaY?: number; x?: number; y?: number },
   windowRef?: Window
-): { scrolled: boolean; deltaX: number; deltaY: number };
+): { scrolled: boolean; deltaX: number; deltaY: number; x?: number; y?: number; target?: string };
+export function queryElements(
+  params?: { selector?: string; role?: string; text?: string; visible?: boolean; limit?: number; now?: number },
+  documentRef?: Document
+): { matches: ElementMatch[]; count: number; omitted: number };
+export function extractElements(
+  params?: {
+    selector: string;
+    limit?: number;
+    includeText?: boolean;
+    includeHtml?: boolean;
+    includeLinks?: boolean;
+    includeTimes?: boolean;
+    visible?: boolean;
+    now?: number;
+  },
+  documentRef?: Document
+): {
+  items: Array<
+    Record<string, unknown> & {
+      passwordLike?: boolean;
+      sensitive?: boolean;
+      redactedAttributes?: number;
+    }
+  >;
+  count: number;
+  omitted: number;
+};
+export function performClickAt(params: { x: number; y: number }, documentRef?: Document): { clicked: boolean; x: number; y: number; ref: string };
+export function performKeypress(params: { keys: string | string[] }, documentRef?: Document): { pressed: string[] };
+export function waitForCondition(
+  params?: { text?: string; selector?: string; urlIncludes?: string; timeoutMs?: number },
+  documentRef?: Document
+): Promise<{ matched: boolean; reason: string; elapsedMs: number; title?: string; url?: string }>;
+export function pageStatus(documentRef?: Document): Record<string, unknown>;
+export function installConsoleCapture(windowRef?: Window): { installed: boolean };
+export function getConsoleLogs(params?: { levels?: string[]; limit?: number }): {
+  logs: Array<{ level: string; text: string; timestamp: string }>;
+  omitted: number;
+  capture: string;
+};
+export function collectScroll(
+  params: {
+    steps?: number;
+    deltaY?: number;
+    delayMs?: number;
+    maxItems?: number;
+    extract: { selector: string; includeText?: boolean; includeLinks?: boolean; includeTimes?: boolean; visible?: boolean; limitPerStep?: number };
+    dedupeBy?: 'text' | 'href' | 'statusHref' | 'none';
+  },
+  documentRef?: Document,
+  windowRef?: Window
+): Promise<{
+  stepsRun: number;
+  items: Array<Record<string, unknown>>;
+  count: number;
+  dedupedCount: number;
+  omitted: number;
+  truncatedCount: number;
+  maxItems: number;
+}>;
 export const __testing: {
   configureRefStore(options?: { ttlMs?: number; max?: number }): void;
   resetRefStore(): void;
   refStoreSize(): number;
+  clearConsoleLogs(): void;
 };

@@ -1,24 +1,50 @@
-import { Window } from 'happy-dom';
-import { afterEach, describe, expect, it } from 'vitest';
+import { Window as HappyWindow } from 'happy-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   __testing,
   buildSnapshotFromDocument,
+  buildVisibleSnapshotFromDocument,
+  collectScroll,
   cleanupRefStore,
+  extractElements,
   findByRef,
+  getConsoleLogs,
+  installConsoleCapture,
   isPasswordLike,
+  pageStatus,
   performClick,
+  performClickAt,
+  performKeypress,
+  queryElements,
+  waitForCondition,
   performType
 } from '../extension/content-core.module.js';
 
 function makeDocument(html: string) {
-  const window = new Window({ url: 'https://example.test/' });
+  const window = new HappyWindow({ url: 'https://example.test/' });
   window.document.write(html);
   return window.document;
+}
+
+function setRect(element: any, rect: { x: number; y: number; width: number; height: number }) {
+  if (!element) throw new Error('missing test element');
+  const full = {
+    ...rect,
+    left: rect.x,
+    top: rect.y,
+    right: rect.x + rect.width,
+    bottom: rect.y + rect.height
+  };
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => full
+  });
 }
 
 describe('extension content core', () => {
   afterEach(() => {
     __testing.resetRefStore();
+    __testing.clearConsoleLogs();
   });
 
   it('builds a compact snapshot with stable refs for interactive elements by default', () => {
@@ -53,6 +79,28 @@ describe('extension content core', () => {
     expect(snapshot.elements[0]).toMatchObject({ role: 'button', label: 'Save', tag: 'button', passwordLike: false });
     expect(snapshot.elements[0]).toHaveProperty('bounds');
     expect(snapshot.text).toContain('Body text');
+  });
+
+  it('builds a visible snapshot with viewport metadata and visible bounds only', () => {
+    const document = makeDocument(`
+      <button id="visible">Visible</button>
+      <button id="offscreen">Offscreen</button>
+      <button id="zero">Zero</button>
+    `);
+    Object.defineProperty(document.defaultView, 'innerWidth', { configurable: true, value: 800 });
+    Object.defineProperty(document.defaultView, 'innerHeight', { configurable: true, value: 600 });
+    setRect(document.querySelector('#visible'), { x: 10, y: 20, width: 100, height: 30 });
+    setRect(document.querySelector('#offscreen'), { x: 10, y: 800, width: 100, height: 30 });
+    setRect(document.querySelector('#zero'), { x: 10, y: 20, width: 0, height: 0 });
+
+    const snapshot = buildVisibleSnapshotFromDocument(document as unknown as Document);
+    const viaMode = buildSnapshotFromDocument(document as unknown as Document, { mode: 'visible' });
+
+    expect(snapshot.mode).toBe('visible');
+    expect(snapshot.viewport).toMatchObject({ width: 800, height: 600 });
+    expect(snapshot.elements).toHaveLength(1);
+    expect(snapshot.elements[0]).toMatchObject({ role: 'button', label: 'Visible', bounds: { x: 10, y: 20, width: 100, height: 30 } });
+    expect(viaMode.elements).toHaveLength(1);
   });
 
   it('honors a custom textLimit in compact and full modes', () => {
@@ -114,6 +162,93 @@ describe('extension content core', () => {
     expect(isPasswordLike(document.querySelector('#password') as unknown as Element)).toBe(true);
     expect(isPasswordLike(document.querySelector('#otp') as unknown as Element)).toBe(true);
     expect(isPasswordLike(document.querySelector('#normal') as unknown as Element)).toBe(false);
+  });
+
+  it('queries elements by selector, role, text, visibility, and limit', () => {
+    const document = makeDocument(`
+      <button id="save">Save changes</button>
+      <button id="cancel">Cancel</button>
+      <a id="docs" href="/docs">Docs</a>
+    `);
+    Object.defineProperty(document.defaultView, 'innerWidth', { configurable: true, value: 300 });
+    Object.defineProperty(document.defaultView, 'innerHeight', { configurable: true, value: 200 });
+    setRect(document.querySelector('#save'), { x: 10, y: 10, width: 80, height: 20 });
+    setRect(document.querySelector('#cancel'), { x: 10, y: 250, width: 80, height: 20 });
+    setRect(document.querySelector('#docs'), { x: 20, y: 20, width: 40, height: 20 });
+
+    const buttons = queryElements({ role: 'button', visible: true, limit: 1 }, document as unknown as Document);
+    expect(buttons.count).toBe(1);
+    expect(buttons.omitted).toBe(0);
+    expect(buttons.matches[0]).toMatchObject({ label: 'Save changes', visible: true });
+
+    const text = queryElements({ text: 'docs' }, document as unknown as Document);
+    expect(text.matches[0]).toMatchObject({ role: 'link', href: 'https://example.test/docs' });
+  });
+
+  it('extracts bounded element data and omitted counts', () => {
+    const document = makeDocument(`
+      <article><a href="/a">Alpha</a><time datetime="2026-01-01">Jan 1</time><p>${'A'.repeat(2000)}</p></article>
+      <article><a href="/b">Beta</a><p>Second</p></article>
+    `);
+
+    const result = extractElements(
+      { selector: 'article', limit: 1, includeText: true, includeHtml: true, includeLinks: true, includeTimes: true },
+      document as unknown as Document
+    );
+
+    expect(result.count).toBe(2);
+    expect(result.omitted).toBe(1);
+    expect(result.items[0].text).toHaveLength(1000);
+    expect(result.items[0].html).toHaveLength(2000);
+    expect(result.items[0].links).toEqual([{ href: 'https://example.test/a', text: 'Alpha' }]);
+    expect(result.items[0].time).toEqual({ datetime: '2026-01-01', text: 'Jan 1' });
+  });
+
+  it('redacts sensitive attributes from extracted html and marks sensitive items', () => {
+    const document = makeDocument(`
+      <form
+        data-secret="form-secret"
+        data-public="safe"
+      >
+        <input type="hidden" name="csrf_token" value="csrf-secret" />
+        <input type="password" name="password" value="password-secret" autocomplete="current-password" />
+        <input autocomplete="one-time-code" value="123456" />
+      </form>
+    `);
+
+    const result = extractElements(
+      { selector: 'form', includeHtml: true, includeText: false },
+      document as unknown as Document
+    );
+
+    expect(result.items[0]).toMatchObject({
+      sensitive: true,
+      passwordLike: true,
+      redactedAttributes: expect.any(Number)
+    });
+    expect(result.items[0].redactedAttributes).toBeGreaterThanOrEqual(4);
+    expect(result.items[0].html).toContain('data-public="safe"');
+    expect(result.items[0].html).toContain('value="[redacted]"');
+    expect(result.items[0].html).toContain('data-secret="[redacted]"');
+    expect(result.items[0].html).not.toContain('form-secret');
+    expect(result.items[0].html).not.toContain('csrf-secret');
+    expect(result.items[0].html).not.toContain('password-secret');
+    expect(result.items[0].html).not.toContain('123456');
+    expect(result.items[0].text).toBeUndefined();
+  });
+
+  it('respects includeText false and only defaults text when no extract fields are requested', () => {
+    const document = makeDocument('<article><a href="/a">Alpha</a><time datetime="2026-01-01">Jan 1</time></article>');
+
+    const defaultResult = extractElements({ selector: 'article' }, document as unknown as Document);
+    const htmlOnly = extractElements({ selector: 'article', includeHtml: true }, document as unknown as Document);
+    const linksOnly = extractElements({ selector: 'article', includeLinks: true, includeText: false }, document as unknown as Document);
+
+    expect(defaultResult.items[0].text).toBe('AlphaJan 1');
+    expect(htmlOnly.items[0].html).toContain('<article');
+    expect(htmlOnly.items[0].text).toBeUndefined();
+    expect(linksOnly.items[0].links).toEqual([{ href: 'https://example.test/a', text: 'Alpha' }]);
+    expect(linksOnly.items[0].text).toBeUndefined();
   });
 
   it('blocks typing into password-like fields unless force=true', () => {
@@ -213,6 +348,171 @@ describe('extension content core', () => {
     expect(freshFirstRef).not.toBe(firstRef);
     expect(performClick({ ref: freshFirstRef }, document as unknown as Document)).toEqual({ clicked: freshFirstRef });
     expect(clicks).toBe(1);
+  });
+
+  it('clicks viewport coordinates and dispatches keyboard events', () => {
+    const document = makeDocument('<button id="save">Save</button><input id="name" />');
+    const button = document.querySelector('#save') as unknown as HTMLElement;
+    const input = document.querySelector('#name') as unknown as HTMLElement;
+    (document as any).elementFromPoint = () => button;
+    let clicks = 0;
+    const keys: string[] = [];
+    button.addEventListener('click', () => clicks++);
+    input.addEventListener('keydown', (event) => keys.push((event as KeyboardEvent).key));
+    input.focus();
+
+    expect(performClickAt({ x: 12, y: 18 }, document as unknown as Document)).toMatchObject({ clicked: true, x: 12, y: 18 });
+    expect(clicks).toBe(1);
+
+    expect(performKeypress({ keys: ['Tab', 'Control+Enter'] }, document as unknown as Document)).toEqual({ pressed: ['Tab', 'Control+Enter'] });
+    expect(keys).toEqual(['Tab', 'Enter']);
+  });
+
+  it('waits for immediate matches and timeout evidence', async () => {
+    const document = makeDocument('<main><p>Ready now</p></main>');
+
+    await expect(waitForCondition({ text: 'Ready', timeoutMs: 50 }, document as unknown as Document)).resolves.toMatchObject({
+      matched: true,
+      reason: 'text'
+    });
+    await expect(waitForCondition({ selector: '.missing', timeoutMs: 1 }, document as unknown as Document)).resolves.toMatchObject({
+      matched: false,
+      reason: 'timeout'
+    });
+  });
+
+  it('returns lightweight page status with resource summary counts', () => {
+    const document = makeDocument('<main>Status</main>');
+    Object.defineProperty(document.defaultView, 'performance', {
+      configurable: true,
+      value: {
+        getEntriesByType: () => [
+          { initiatorType: 'script' },
+          { initiatorType: 'script' },
+          { initiatorType: 'img' }
+        ]
+      }
+    });
+
+    expect(pageStatus(document as unknown as Document)).toMatchObject({
+      title: '',
+      url: 'https://example.test/',
+      resourceSummary: { count: 3, omitted: 0, byType: { script: 2, img: 1 } }
+    });
+  });
+
+  it('captures bounded console logs after capture installation', () => {
+    const writes: string[] = [];
+    const fakeWindow = {
+      console: {
+        log: (...args: unknown[]) => writes.push(args.join(' ')),
+        error: (...args: unknown[]) => writes.push(args.join(' '))
+      }
+    };
+
+    installConsoleCapture(fakeWindow as unknown as Window);
+    (fakeWindow.console as any).log('hello', { ok: true });
+    (fakeWindow.console as any).error('boom');
+
+    expect(getConsoleLogs({ levels: ['error'], limit: 1 })).toMatchObject({
+      logs: [{ level: 'error', text: 'boom' }],
+      omitted: 0,
+      capture: 'after-content-script-injection'
+    });
+    expect(writes).toEqual(['hello [object Object]', 'boom']);
+  });
+
+  it('collects while scrolling with caps and dedupe', async () => {
+    const document = makeDocument(`
+      <article><a href="/a">Alpha</a><p>Alpha text</p></article>
+      <article><a href="/b">Beta</a><p>Beta text</p></article>
+    `);
+    let scrolls = 0;
+    const fakeWindow = {
+      document,
+      scrollBy: () => {
+        scrolls += 1;
+      }
+    };
+
+    const result = await collectScroll(
+      {
+        steps: 2,
+        delayMs: 0,
+        extract: { selector: 'article', includeText: true, includeLinks: true, limitPerStep: 5 },
+        dedupeBy: 'href'
+      },
+      document as unknown as Document,
+      fakeWindow as unknown as Window
+    );
+
+    expect(result.count).toBe(2);
+    expect(result.dedupedCount).toBe(2);
+    expect(result.stepsRun).toBe(2);
+    expect(scrolls).toBe(1);
+  });
+
+  it('caps aggregate collect_scroll output and reports truncated items', async () => {
+    const document = makeDocument(`
+      <article>One</article>
+      <article>Two</article>
+      <article>Three</article>
+      <article>Four</article>
+    `);
+    let scrolls = 0;
+    const fakeWindow = {
+      document,
+      scrollBy: () => {
+        scrolls += 1;
+      }
+    };
+
+    const result = await collectScroll(
+      {
+        steps: 3,
+        delayMs: 0,
+        maxItems: 3,
+        extract: { selector: 'article', includeText: true, limitPerStep: 4 },
+        dedupeBy: 'none'
+      },
+      document as unknown as Document,
+      fakeWindow as unknown as Window
+    );
+
+    expect(result.items).toHaveLength(3);
+    expect(result.count).toBe(3);
+    expect(result.maxItems).toBe(3);
+    expect(result.truncatedCount).toBe(9);
+    expect(result.omitted).toBe(9);
+    expect(result.dedupedCount).toBe(0);
+    expect(result.stepsRun).toBe(3);
+    expect(scrolls).toBe(2);
+  });
+
+  it('caps collect_scroll delay to stay within the broker timeout budget', async () => {
+    const document = makeDocument('<article>One</article>');
+    const delays: number[] = [];
+    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback: TimerHandler, delay?: number) => {
+      delays.push(Number(delay));
+      if (typeof callback === 'function') callback();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    try {
+      await collectScroll(
+        {
+          steps: 2,
+          delayMs: 5000,
+          extract: { selector: 'article', includeText: true }
+        },
+        document as unknown as Document,
+        { document, scrollBy: () => undefined } as unknown as Window
+      );
+    } finally {
+      timer.mockRestore();
+    }
+
+    expect(delays).toEqual([1000]);
   });
 
   it('compact output is at least 50 percent smaller than full output on dense pages', () => {

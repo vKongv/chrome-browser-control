@@ -11,6 +11,7 @@ const {
   DEFAULT_ALLOWED_ORIGINS,
   formatAllowedOriginPatternsForDisplay,
   getHostPermissionOrigins,
+  getScreenshotPermissionOrigins,
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
   validatePairingToken
@@ -127,11 +128,12 @@ save.addEventListener('click', async () => {
     const nextBridgeUrl = normalizeBridgeUrl(bridgeUrl.value);
     const nextToken = validatePairingToken(token.value);
     const nextAllowedOrigins = normalizeAllowedOriginPatterns(allowedOrigins.value);
-    const granted = await requestHostPermissions(getHostPermissionOrigins(nextAllowedOrigins));
-    if (!granted) {
+    const hostGranted = await requestHostPermissions(getHostPermissionOrigins(nextAllowedOrigins));
+    if (!hostGranted) {
       showStatus('error: allowed origin permission was not granted');
       return;
     }
+    const screenshotGranted = await requestHostPermissions(getScreenshotPermissionOrigins(nextAllowedOrigins));
     await chrome.storage.local.set({
       bridgeUrl: nextBridgeUrl,
       token: nextToken,
@@ -139,7 +141,7 @@ save.addEventListener('click', async () => {
     });
     bridgeUrl.value = nextBridgeUrl;
     allowedOrigins.value = formatAllowedOriginPatternsForDisplay(nextAllowedOrigins).join('\n');
-    showStatus('connecting');
+    showStatus(screenshotGranted ? 'connecting' : 'connecting; screenshot permission not granted');
     const response = await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: 'connect' }, resolve);
     });

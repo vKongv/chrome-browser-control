@@ -2,12 +2,26 @@ import { z } from 'zod';
 
 export const BridgeActionSchema = z.enum([
   'ping',
+  'name_session',
   'list_tabs',
+  'claim_tab',
+  'release_tab',
+  'finalize_tabs',
   'snapshot',
+  'visible_snapshot',
   'navigate',
   'click',
   'type',
-  'scroll'
+  'scroll',
+  'query_elements',
+  'extract_elements',
+  'screenshot',
+  'keypress',
+  'click_at',
+  'wait_for',
+  'page_status',
+  'console_logs',
+  'collect_scroll'
 ]);
 
 export type BridgeAction = z.infer<typeof BridgeActionSchema>;

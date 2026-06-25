@@ -3,6 +3,7 @@
   const DEFAULT_ALLOWED_ORIGINS = [];
   const WILDCARD_ORIGIN_INPUT = '*';
   const WILDCARD_ORIGIN_PATTERNS = ['http://*/*', 'https://*/*'];
+  const SCREENSHOT_ALL_URLS_PERMISSION = '<all_urls>';
   const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/;
   const MIN_TOKEN_UNIQUE_CHARS = 8;
   const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
@@ -131,6 +132,10 @@
     return normalizeAllowedOriginPatterns(patterns);
   }
 
+  function getScreenshotPermissionOrigins(patterns) {
+    return isWildcardOriginPatterns(patterns) ? [SCREENSHOT_ALL_URLS_PERMISSION] : [];
+  }
+
   function patternOrigin(pattern) {
     return String(pattern || '').endsWith('/*') ? String(pattern).slice(0, -2) : String(pattern || '');
   }
@@ -153,6 +158,7 @@
     DEFAULT_ALLOWED_ORIGINS,
     WILDCARD_ORIGIN_INPUT,
     WILDCARD_ORIGIN_PATTERNS,
+    SCREENSHOT_ALL_URLS_PERMISSION,
     normalizeBridgeUrl,
     validatePairingToken,
     normalizeAllowedOriginPattern,
@@ -160,6 +166,7 @@
     formatAllowedOriginPatternsForDisplay,
     describeAllowedOrigins,
     getHostPermissionOrigins,
+    getScreenshotPermissionOrigins,
     isWildcardOriginPatterns,
     isUrlAllowed
   };

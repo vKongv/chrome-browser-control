@@ -38,12 +38,26 @@ describe('registerBrowserTools', () => {
 
     expect([...server.tools.keys()].sort()).toEqual([
       'browser_status',
+      'claim_tab',
       'click',
+      'click_at',
+      'collect_scroll',
+      'console_logs',
+      'extract_elements',
+      'finalize_tabs',
+      'keypress',
       'list_tabs',
+      'name_session',
       'navigate',
+      'page_status',
+      'query_elements',
+      'release_tab',
+      'screenshot',
       'scroll',
       'snapshot',
-      'type'
+      'type',
+      'visible_snapshot',
+      'wait_for'
     ]);
   });
 
@@ -72,6 +86,84 @@ describe('registerBrowserTools', () => {
     ]);
   });
 
+  it('forwards visible snapshot and claimed tab targets to the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('visible_snapshot')?.({ sessionTabId: 'tab-a', limit: 25 });
+    await server.tools.get('snapshot')?.({ mode: 'visible', sessionTabId: 'tab-a' });
+
+    expect(bridge.calls).toEqual([
+      { action: 'visible_snapshot', params: { sessionTabId: 'tab-a', limit: 25 } },
+      { action: 'snapshot', params: { mode: 'visible', sessionTabId: 'tab-a' } }
+    ]);
+  });
+
+  it('forwards query, extract, wait, diagnostics, and collect helpers', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('query_elements')?.({ selector: 'button', visible: true, limit: 5 });
+    await server.tools.get('extract_elements')?.({ selector: 'article', includeText: true });
+    await server.tools.get('wait_for')?.({ text: 'Ready', timeoutMs: 1000 });
+    await server.tools.get('page_status')?.({ tabId: 4 });
+    await server.tools.get('console_logs')?.({ levels: ['error'], limit: 10 });
+    await server.tools.get('collect_scroll')?.({
+      steps: 2,
+      extract: { selector: 'article', includeText: true },
+      dedupeBy: 'text'
+    });
+
+    expect(bridge.calls.map((call) => call.action)).toEqual([
+      'query_elements',
+      'extract_elements',
+      'wait_for',
+      'page_status',
+      'console_logs',
+      'collect_scroll'
+    ]);
+  });
+
+  it('rejects wait_for without a condition before calling the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    const result = await server.tools.get('wait_for')?.({ timeoutMs: 1000 });
+
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ text: 'wait_for requires at least one of text, selector, or urlIncludes' }]
+    });
+    expect(bridge.calls).toEqual([]);
+  });
+
+  it('forwards session lifecycle and coordinate/key helpers', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('name_session')?.({ name: 'docs task' });
+    await server.tools.get('claim_tab')?.({ tabId: 3 });
+    await server.tools.get('click_at')?.({ x: 10, y: 20, sessionTabId: 'tab-1' });
+    await server.tools.get('keypress')?.({ keys: ['Tab', 'Enter'] });
+    await server.tools.get('screenshot')?.({ format: 'jpeg' });
+    await server.tools.get('release_tab')?.({ sessionTabId: 'tab-1' });
+    await server.tools.get('finalize_tabs')?.({ keep: [{ tabId: 3, status: 'handoff' }] });
+
+    expect(bridge.calls.map((call) => call.action)).toEqual([
+      'name_session',
+      'claim_tab',
+      'click_at',
+      'keypress',
+      'screenshot',
+      'release_tab',
+      'finalize_tabs'
+    ]);
+  });
+
   it('forwards type calls with force=false by default when supplied by client schema', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
@@ -87,7 +179,13 @@ describe('registerBrowserTools', () => {
   it('reports browser_status ready when broker and extension answer ping', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
-    bridge.result = { pong: true, status: 'connected', protocolVersion: 1, features: ['navigate-pending-warning'] };
+    bridge.result = {
+      pong: true,
+      status: 'connected',
+      protocolVersion: 1,
+      features: ['navigate-pending-warning'],
+      session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+    };
     registerBrowserTools(server, bridge);
 
     const result = await server.tools.get('browser_status')?.({});
@@ -102,9 +200,16 @@ describe('registerBrowserTools', () => {
         connected: true,
         status: 'connected',
         protocolVersion: 1,
-        features: ['navigate-pending-warning']
+        features: ['navigate-pending-warning'],
+        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
       },
-      ping: { pong: true, status: 'connected', protocolVersion: 1, features: ['navigate-pending-warning'] }
+      ping: {
+        pong: true,
+        status: 'connected',
+        protocolVersion: 1,
+        features: ['navigate-pending-warning'],
+        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+      }
     });
   });
 

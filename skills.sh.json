@@ -1,0 +1,11 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "notGrouped": "bottom",
+  "groupings": [
+    {
+      "title": "Browser Control",
+      "description": "Runtime playbooks for operating the chrome-browser-control MCP server.",
+      "skills": ["chrome-browser-control"]
+    }
+  ]
+}

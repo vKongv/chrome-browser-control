@@ -14,15 +14,25 @@ function loadBackgroundHarness({
   settings,
   tabs,
   bridgeStatus = 'connected',
-  staleActiveTab
+  staleActiveTab,
+  contentResult = {},
+  grantedOrigins = [],
+  grantedPermissions = [],
+  captureError
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
   bridgeStatus?: string;
   staleActiveTab?: Record<string, unknown>;
+  contentResult?: Record<string, unknown> | ((tabId: number, message: Record<string, unknown>) => Record<string, unknown>);
+  grantedOrigins?: string[];
+  grantedPermissions?: string[];
+  captureError?: Error;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
+  const sentMessages: Array<{ tabId: number; message: Record<string, unknown> }> = [];
+  const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
   const FakeDate = class extends Date {
     static now() {
       return now;
@@ -51,6 +61,19 @@ function loadBackgroundHarness({
     offscreen: {
       createDocument: async () => undefined
     },
+    permissions: {
+      getAll: async () => ({
+        origins: grantedOrigins,
+        permissions: grantedPermissions
+      }),
+      contains: (request: { origins?: string[]; permissions?: string[] }, callback?: (granted: boolean) => void) => {
+        const originsGranted = (request.origins || []).every((origin) => grantedOrigins.includes(origin));
+        const permissionsGranted = (request.permissions || []).every((permission) => grantedPermissions.includes(permission));
+        const granted = originsGranted && permissionsGranted;
+        callback?.(granted);
+        return Promise.resolve(granted);
+      }
+    },
     tabs: {
       query: async (query: Record<string, unknown> = {}) => {
         if (query.active && query.currentWindow && staleActiveTab) {
@@ -72,12 +95,26 @@ function loadBackgroundHarness({
         if (loadsRemaining === 0 && tab._navigateFinal) {
           return { ...tab, ...tab._navigateFinal, status: 'complete' };
         }
+        const activationReads = Number(tab._activateAfterGets ?? -1);
+        if (tab._pendingActive && activationReads > 0) {
+          tab._activateAfterGets = activationReads - 1;
+          return { ...tab, active: false };
+        }
+        if (tab._pendingActive) {
+          Object.assign(tab, { active: true, _pendingActive: false });
+        }
         return tab;
       },
       update: async (tabId: number, update: Record<string, unknown>) => {
         const tab = tabs.find((candidate) => candidate.id === tabId);
         if (!tab) throw new Error(`No tab with id: ${tabId}`);
-        Object.assign(tab, update, { status: 'loading', _navigateLoadsRemaining: 1 });
+        if (update.url) {
+          Object.assign(tab, update, { status: 'loading', _navigateLoadsRemaining: 1 });
+        } else if (update.active === true && tab._activateAfterGets !== undefined) {
+          Object.assign(tab, update, { active: false, _pendingActive: true });
+        } else {
+          Object.assign(tab, update);
+        }
         return tab;
       },
       create: async (createInfo: Record<string, unknown>) => {
@@ -99,7 +136,16 @@ function loadBackgroundHarness({
         tabs.push(tab);
         return tab;
       },
-      sendMessage: async () => ({ ok: true, result: {} })
+      sendMessage: async (tabId: number, message: Record<string, unknown>) => {
+        sentMessages.push({ tabId, message });
+        if (message?.action === 'ping') return { ok: true, result: { ready: true } };
+        return { ok: true, result: typeof contentResult === 'function' ? contentResult(tabId, message) : contentResult };
+      },
+      captureVisibleTab: async (windowId: number, options: Record<string, unknown>) => {
+        captures.push({ windowId, options });
+        if (captureError) throw captureError;
+        return `data:image/${options.format};base64,ZmFrZQ==`;
+      }
     },
     scripting: {
       executeScript: async () => undefined
@@ -122,11 +168,19 @@ function loadBackgroundHarness({
   (context as any).globalThis = context;
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8'), context);
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/background.js'), 'utf8'), context);
-  return (context as any).BrowserControlBackground;
+  return Object.assign((context as any).BrowserControlBackground, { sentMessages, captures, tabs });
 }
 
 describe('extension security helpers', () => {
   const security = loadSecurity();
+
+  it('declares <all_urls> only as an optional host permission for wildcard screenshots', () => {
+    const manifest = JSON.parse(readFileSync(join(process.cwd(), 'extension/manifest.json'), 'utf8'));
+
+    expect(manifest.permissions).not.toContain('<all_urls>');
+    expect(manifest.optional_permissions || []).not.toContain('<all_urls>');
+    expect(manifest.optional_host_permissions).toContain('<all_urls>');
+  });
 
   it('allows only loopback ws bridge URLs without paths', () => {
     expect(security.normalizeBridgeUrl('ws://127.0.0.1:8765')).toBe('ws://127.0.0.1:8765');
@@ -165,6 +219,8 @@ describe('extension security helpers', () => {
     expect(security.formatAllowedOriginPatternsForDisplay(['http://*/*', 'https://*/*'])).toEqual(['*']);
     expect(security.describeAllowedOrigins(['http://*/*', 'https://*/*'])).toEqual(['* (all http/https web origins)']);
     expect(security.getHostPermissionOrigins(['http://*/*', 'https://*/*'])).toEqual(['http://*/*', 'https://*/*']);
+    expect(security.getScreenshotPermissionOrigins(['http://*/*', 'https://*/*'])).toEqual(['<all_urls>']);
+    expect(security.getScreenshotPermissionOrigins(['https://example.com/*'])).toEqual([]);
     expect(security.isUrlAllowed('https://example.com/docs', ['*'])).toBe(true);
     expect(security.isUrlAllowed('http://localhost:3000/app', ['http://*/*', 'https://*/*'])).toBe(true);
     expect(security.isUrlAllowed('chrome://extensions', ['*'])).toBe(false);
@@ -261,12 +317,12 @@ describe('extension background origin enforcement', () => {
       bridgeStatus: 'connected'
     });
 
-    await expect(background.handleBridgeRequest('ping')).resolves.toEqual({
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      protocolVersion: 2,
-      features: ['navigate-pending-warning', 'snapshot-text-limit']
+      protocolVersion: 3,
+      features: expect.arrayContaining(['navigate-pending-warning', 'snapshot-text-limit', 'session-tabs', 'visible-snapshot'])
     });
   });
 
@@ -514,6 +570,40 @@ describe('extension background origin enforcement', () => {
     expect(tabs[1]).toMatchObject({ id: 2, url: 'https://allowed.example/other' });
   });
 
+  it('navigates a claimed tab to an allowed URL even if its current URL drifted out of scope', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Allowed',
+        url: 'https://allowed.example/start',
+        windowId: 1,
+        status: 'complete',
+        _navigateFinal: { title: 'Allowed', url: 'https://allowed.example/next' }
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await background.handleBridgeRequest('claim_tab', { tabId: 1 });
+    tabs[0].url = 'https://blocked.example/drifted';
+
+    await expect(background.handleBridgeRequest('navigate', { sessionTabId: 'tab-1', url: 'https://allowed.example/next' })).resolves.toEqual({
+      id: 1,
+      url: 'https://allowed.example/next',
+      title: 'Allowed',
+      status: 'complete',
+      source: 'extension'
+    });
+  });
+
   it('creates a tab for navigate without tabId when no allowed operable tab exists', async () => {
     const tabs: Array<Record<string, unknown>> = [
       {
@@ -693,5 +783,348 @@ describe('extension background origin enforcement', () => {
     });
 
     await expect(background.handleBridgeRequest('snapshot', { tabId: 404 })).rejects.toThrow('No tab with id: 404');
+  });
+
+  it('names sessions, claims tabs, and routes default page actions to the claimed tab', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Active',
+          url: 'https://allowed.example/active',
+          windowId: 1
+        },
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await expect(background.handleBridgeRequest('name_session', { name: ' Docs task ' })).resolves.toEqual({ name: 'Docs task' });
+    await expect(background.handleBridgeRequest('claim_tab', { tabId: 2 })).resolves.toMatchObject({
+      sessionTabId: 'tab-1',
+      tabId: 2,
+      title: 'Claimed'
+    });
+    await expect(background.handleBridgeRequest('snapshot')).resolves.toMatchObject({
+      action: 'snapshot'
+    });
+    expect(background.sentMessages.at(-1)).toMatchObject({
+      tabId: 2,
+      message: { action: 'snapshot' }
+    });
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
+      session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+    });
+  });
+
+  it('rejects stale claimed tabs instead of falling back to the active tab', async () => {
+    const tabs = [
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Claimed',
+        url: 'https://allowed.example/claimed',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    tabs.pop();
+
+    await expect(background.handleBridgeRequest('page_status')).rejects.toThrow(
+      'Claimed tab is no longer available'
+    );
+  });
+
+  it('releases and finalizes claimed tabs without closing user tabs', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        status: 'complete',
+        title: 'One',
+        url: 'https://allowed.example/one',
+        windowId: 1
+      },
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Two',
+        url: 'https://allowed.example/two',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await background.handleBridgeRequest('claim_tab', { tabId: 1 });
+    await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('release_tab', { tabId: 1 })).resolves.toEqual({
+      released: true,
+      sessionTabId: 'tab-1',
+      tabId: 1
+    });
+    await background.handleBridgeRequest('page_status');
+    expect(background.sentMessages.at(-1)).toMatchObject({
+      tabId: 2,
+      message: { action: 'page_status' }
+    });
+    await expect(background.handleBridgeRequest('finalize_tabs', { keep: [{ tabId: 2, status: 'handoff' }] })).resolves.toEqual({
+      released: 0,
+      kept: 1
+    });
+    expect(tabs).toHaveLength(2);
+    await expect(background.handleBridgeRequest('finalize_tabs')).resolves.toEqual({ released: 1, kept: 0 });
+    expect(tabs).toHaveLength(2);
+  });
+
+  it('keeps allowed-origin enforcement before claim and screenshot actions', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Blocked',
+          url: 'https://blocked.example/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('claim_tab', { tabId: 1 })).rejects.toThrow('unapproved origin');
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).rejects.toThrow('unapproved origin');
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('captures a visible viewport screenshot for an allowed tab', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1, format: 'jpeg' })).resolves.toEqual({
+      dataUrl: 'data:image/jpeg;base64,ZmFrZQ==',
+      mimeType: 'image/jpeg',
+      tabId: 1,
+      windowId: 1,
+      visibleOnly: true,
+      activated: true
+    });
+    expect(background.captures).toEqual([{ windowId: 1, options: { format: 'jpeg' } }]);
+  });
+
+  it('waits for inactive screenshot targets to become active before capture', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1,
+          _activateAfterGets: 2
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).resolves.toMatchObject({
+      mimeType: 'image/png',
+      activated: true
+    });
+    expect(background.tabs[0].active).toBe(true);
+    expect(background.captures).toEqual([{ windowId: 1, options: { format: 'png' } }]);
+  });
+
+  it('requires optional <all_urls> permission for wildcard screenshots before capture', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['http://*/*', 'https://*/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://example.com/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).rejects.toThrow('optional <all_urls> host permission');
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('does not treat http/https wildcard host grants as sufficient for wildcard screenshots', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['http://*/*', 'https://*/*']
+      },
+      grantedOrigins: ['http://*/*', 'https://*/*'],
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://example.com/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).rejects.toThrow('optional <all_urls> host permission');
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('does not treat a named optional <all_urls> permission as valid manifest placement', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['http://*/*', 'https://*/*']
+      },
+      grantedPermissions: ['<all_urls>'],
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://example.com/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).rejects.toThrow('optional <all_urls> host permission');
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('captures wildcard screenshots after optional <all_urls> host permission is granted', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['http://*/*', 'https://*/*']
+      },
+      grantedOrigins: ['<all_urls>'],
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://example.com/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).resolves.toMatchObject({
+      mimeType: 'image/png',
+      visibleOnly: true
+    });
+    expect(background.captures).toEqual([{ windowId: 1, options: { format: 'png' } }]);
+  });
+
+  it('maps native Chrome screenshot permission failures to an actionable project error', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['http://*/*', 'https://*/*']
+      },
+      grantedOrigins: ['<all_urls>'],
+      captureError: new Error("Either the '<all_urls>' or 'activeTab' permission is required."),
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://example.com/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1 })).rejects.toThrow(
+      'screenshot capture was blocked by Chrome permissions'
+    );
+    expect(background.captures).toEqual([{ windowId: 1, options: { format: 'png' } }]);
   });
 });

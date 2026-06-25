@@ -40,6 +40,16 @@ async function forward(bridge: BridgeLike, action: BridgeAction, params: Record<
 }
 
 const OptionalTabId = z.number().int().positive().optional();
+const OptionalTarget = {
+  tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the claimed session tab, then the active tab.'),
+  sessionTabId: z.string().min(1).optional().describe('Optional claimed tab session id returned by claim_tab.')
+};
+const SnapshotMode = z.enum(['compact', 'full', 'visible']);
+const BoundedLimit = z.number().int().positive().max(500).optional();
+
+function hasWaitCondition(args: Record<string, unknown> = {}): boolean {
+  return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
+}
 
 function isNoExtensionError(message: string): boolean {
   return /no chrome extension connected|chrome extension disconnected/i.test(message);
@@ -89,7 +99,8 @@ async function browserStatus(bridge: BridgeLike) {
         connected: true,
         status: bridgeStatus,
         ...marker,
-        ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {})
+        ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {}),
+        ...(ping.session !== undefined ? { session: ping.session } : {})
       },
       ping: normalizedPing
     });
@@ -119,6 +130,18 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
   );
 
   server.registerTool(
+    'name_session',
+    {
+      title: 'Name browser session',
+      description: 'Set a human-readable browser-control session name for status, logs, and debugging.',
+      inputSchema: {
+        name: z.string().min(1).max(120)
+      }
+    },
+    async (args) => forward(bridge, 'name_session', args)
+  );
+
+  server.registerTool(
     'list_tabs',
     {
       title: 'List Chrome tabs',
@@ -129,13 +152,63 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
   );
 
   server.registerTool(
+    'claim_tab',
+    {
+      title: 'Claim Chrome tab',
+      description:
+        'Claim an allowed Chrome tab for this browser-control session. Claims are advisory routing state, not exclusive user locks.',
+      inputSchema: {
+        tabId: z.number().int().positive()
+      }
+    },
+    async (args) => forward(bridge, 'claim_tab', args)
+  );
+
+  server.registerTool(
+    'release_tab',
+    {
+      title: 'Release claimed tab',
+      description: 'Release a previously claimed tab by sessionTabId or tabId without closing the browser tab.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).optional(),
+        tabId: OptionalTabId
+      }
+    },
+    async (args) => forward(bridge, 'release_tab', args)
+  );
+
+  server.registerTool(
+    'finalize_tabs',
+    {
+      title: 'Finalize claimed tabs',
+      description:
+        'Release browser-control ownership state for claimed tabs. This does not close user tabs; pass keep entries to preserve handoff/deliverable claims.',
+      inputSchema: {
+        keep: z
+          .array(
+            z.object({
+              sessionTabId: z.string().min(1).optional(),
+              tabId: z.number().int().positive().optional(),
+              status: z.enum(['handoff', 'deliverable']).optional()
+            })
+          )
+          .max(50)
+          .optional()
+      }
+    },
+    async (args) => forward(bridge, 'finalize_tabs', args)
+  );
+
+  server.registerTool(
     'snapshot',
     {
       title: 'Snapshot active page',
       description:
         'Return a simplified DOM snapshot for the active tab or a target tab. Compact mode (default) returns textPreview only — not text. Full mode returns text. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes textLimitApplied, textTotalLength, and textBytesOmitted; a warning appears when default limits truncate body text.',
       inputSchema: {
-        mode: z.enum(['compact', 'full']).optional().describe('Snapshot detail mode. Defaults to compact (textPreview field). Use full for the text field and verbose element metadata.'),
+        mode: SnapshotMode.optional().describe(
+          'Snapshot detail mode. Defaults to compact. Use full for text and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
+        ),
         textLimit: z
           .number()
           .int()
@@ -143,10 +216,23 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
           .max(100_000)
           .optional()
           .describe('Max body text characters. Optional; defaults to 500 (compact) or 4000 (full). Not a hard cap — maximum 100000.'),
-        tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the active tab.')
+        ...OptionalTarget
       }
     },
     async (args) => forward(bridge, 'snapshot', args)
+  );
+
+  server.registerTool(
+    'visible_snapshot',
+    {
+      title: 'Visible page snapshot',
+      description: 'Return a viewport-aware snapshot with only visible/intersecting elements, refs, labels, roles, bounds, and scroll metadata.',
+      inputSchema: {
+        limit: z.number().int().positive().max(250).optional(),
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'visible_snapshot', args)
   );
 
   server.registerTool(
@@ -156,7 +242,7 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       description: 'Navigate the active tab or target tab to a URL.',
       inputSchema: {
         url: z.string().url(),
-        tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the active tab.')
+        ...OptionalTarget
       }
     },
     async (args) => forward(bridge, 'navigate', args)
@@ -169,7 +255,7 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       description: 'Click an element by snapshot ref in the active tab or target tab.',
       inputSchema: {
         ref: z.string().min(1),
-        tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the active tab.')
+        ...OptionalTarget
       }
     },
     async (args) => forward(bridge, 'click', args)
@@ -184,7 +270,7 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
         ref: z.string().min(1),
         text: z.string(),
         force: z.boolean().optional().default(false),
-        tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the active tab.')
+        ...OptionalTarget
       }
     },
     async (args) => forward(bridge, 'type', args)
@@ -199,9 +285,167 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
       inputSchema: {
         deltaX: z.number().optional().default(0),
         deltaY: z.number().optional().default(600),
-        tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the active tab.')
+        x: z.number().optional().describe('Optional viewport x coordinate to scroll a nested element under this point. Defaults to window scroll.'),
+        y: z.number().optional().describe('Optional viewport y coordinate to scroll a nested element under this point. Defaults to window scroll.'),
+        ...OptionalTarget
       }
     },
     async (args) => forward(bridge, 'scroll', args)
+  );
+
+  server.registerTool(
+    'query_elements',
+    {
+      title: 'Query page elements',
+      description: 'Find elements by selector, role, text, and visibility without returning full page text.',
+      inputSchema: {
+        selector: z.string().min(1).max(500).optional(),
+        role: z.string().min(1).max(80).optional(),
+        text: z.string().min(1).max(500).optional(),
+        visible: z.boolean().optional(),
+        limit: BoundedLimit,
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'query_elements', args)
+  );
+
+  server.registerTool(
+    'extract_elements',
+    {
+      title: 'Extract page elements',
+      description: 'Extract bounded structured data from elements selected by CSS selector. Safer alternative to raw JavaScript evaluation.',
+      inputSchema: {
+        selector: z.string().min(1).max(500),
+        limit: BoundedLimit,
+        includeText: z.boolean().optional(),
+        includeHtml: z.boolean().optional(),
+        includeLinks: z.boolean().optional(),
+        includeTimes: z.boolean().optional(),
+        visible: z.boolean().optional(),
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'extract_elements', args)
+  );
+
+  server.registerTool(
+    'screenshot',
+    {
+      title: 'Capture visible screenshot',
+      description: 'Capture the visible viewport of an allowed tab. Returns a data URL and MIME type.',
+      inputSchema: {
+        format: z.enum(['png', 'jpeg']).optional(),
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'screenshot', args)
+  );
+
+  server.registerTool(
+    'keypress',
+    {
+      title: 'Press page keys',
+      description: 'Dispatch common DOM keyboard events in the target page. Browser/OS shortcuts are not guaranteed under MV3.',
+      inputSchema: {
+        keys: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)]),
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'keypress', args)
+  );
+
+  server.registerTool(
+    'click_at',
+    {
+      title: 'Click viewport coordinates',
+      description: 'Click the element at viewport coordinates in an allowed target tab.',
+      inputSchema: {
+        x: z.number(),
+        y: z.number(),
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'click_at', args)
+  );
+
+  server.registerTool(
+    'wait_for',
+    {
+      title: 'Wait for page condition',
+      description: 'Wait for text, selector, or URL substring in the target page with bounded timeout.',
+      inputSchema: {
+        text: z.string().min(1).max(500).optional(),
+        selector: z.string().min(1).max(500).optional(),
+        urlIncludes: z.string().min(1).max(500).optional(),
+        timeoutMs: z.number().int().positive().max(30_000).optional(),
+        ...OptionalTarget
+      }
+    },
+    async (args) => {
+      if (!hasWaitCondition(args)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text: 'wait_for requires at least one of text, selector, or urlIncludes'
+            }
+          ]
+        };
+      }
+      return forward(bridge, 'wait_for', args);
+    }
+  );
+
+  server.registerTool(
+    'page_status',
+    {
+      title: 'Page status',
+      description: 'Return lightweight page status, viewport/scroll state, and resource summary counts for an allowed target tab.',
+      inputSchema: {
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'page_status', args)
+  );
+
+  server.registerTool(
+    'console_logs',
+    {
+      title: 'Console logs',
+      description: 'Return bounded console logs captured after the content script was injected in the target tab.',
+      inputSchema: {
+        levels: z.array(z.string().min(1).max(20)).max(10).optional(),
+        limit: z.number().int().positive().max(200).optional(),
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'console_logs', args)
+  );
+
+  server.registerTool(
+    'collect_scroll',
+    {
+      title: 'Collect while scrolling',
+      description: 'Scroll a bounded number of steps, extract selected elements each step, and optionally dedupe feed-like results.',
+      inputSchema: {
+        steps: z.number().int().positive().max(20),
+        deltaY: z.number().optional(),
+        delayMs: z.number().int().min(0).max(1_000).optional(),
+        maxItems: z.number().int().positive().max(500).optional(),
+        extract: z.object({
+          selector: z.string().min(1).max(500),
+          includeText: z.boolean().optional(),
+          includeLinks: z.boolean().optional(),
+          includeTimes: z.boolean().optional(),
+          visible: z.boolean().optional(),
+          limitPerStep: z.number().int().positive().max(100).optional()
+        }),
+        dedupeBy: z.enum(['text', 'href', 'statusHref', 'none']).optional(),
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'collect_scroll', args)
   );
 }
