@@ -38,12 +38,26 @@ describe('registerBrowserTools', () => {
 
     expect([...server.tools.keys()].sort()).toEqual([
       'browser_status',
+      'claim_tab',
       'click',
+      'click_at',
+      'collect_scroll',
+      'console_logs',
+      'extract_elements',
+      'finalize_tabs',
+      'keypress',
       'list_tabs',
+      'name_session',
       'navigate',
+      'page_status',
+      'query_elements',
+      'release_tab',
+      'screenshot',
       'scroll',
       'snapshot',
-      'type'
+      'type',
+      'visible_snapshot',
+      'wait_for'
     ]);
   });
 
@@ -69,6 +83,70 @@ describe('registerBrowserTools', () => {
 
     expect(bridge.calls).toEqual([
       { action: 'snapshot', params: { mode: 'full', textLimit: 20_000, tabId: 3 } }
+    ]);
+  });
+
+  it('forwards visible snapshot and claimed tab targets to the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('visible_snapshot')?.({ sessionTabId: 'tab-a', limit: 25 });
+    await server.tools.get('snapshot')?.({ mode: 'visible', sessionTabId: 'tab-a' });
+
+    expect(bridge.calls).toEqual([
+      { action: 'visible_snapshot', params: { sessionTabId: 'tab-a', limit: 25 } },
+      { action: 'snapshot', params: { mode: 'visible', sessionTabId: 'tab-a' } }
+    ]);
+  });
+
+  it('forwards query, extract, wait, diagnostics, and collect helpers', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('query_elements')?.({ selector: 'button', visible: true, limit: 5 });
+    await server.tools.get('extract_elements')?.({ selector: 'article', includeText: true });
+    await server.tools.get('wait_for')?.({ text: 'Ready', timeoutMs: 1000 });
+    await server.tools.get('page_status')?.({ tabId: 4 });
+    await server.tools.get('console_logs')?.({ levels: ['error'], limit: 10 });
+    await server.tools.get('collect_scroll')?.({
+      steps: 2,
+      extract: { selector: 'article', includeText: true },
+      dedupeBy: 'text'
+    });
+
+    expect(bridge.calls.map((call) => call.action)).toEqual([
+      'query_elements',
+      'extract_elements',
+      'wait_for',
+      'page_status',
+      'console_logs',
+      'collect_scroll'
+    ]);
+  });
+
+  it('forwards session lifecycle and coordinate/key helpers', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('name_session')?.({ name: 'docs task' });
+    await server.tools.get('claim_tab')?.({ tabId: 3 });
+    await server.tools.get('click_at')?.({ x: 10, y: 20, sessionTabId: 'tab-1' });
+    await server.tools.get('keypress')?.({ keys: ['Tab', 'Enter'] });
+    await server.tools.get('screenshot')?.({ format: 'jpeg' });
+    await server.tools.get('release_tab')?.({ sessionTabId: 'tab-1' });
+    await server.tools.get('finalize_tabs')?.({ keep: [{ tabId: 3, status: 'handoff' }] });
+
+    expect(bridge.calls.map((call) => call.action)).toEqual([
+      'name_session',
+      'claim_tab',
+      'click_at',
+      'keypress',
+      'screenshot',
+      'release_tab',
+      'finalize_tabs'
     ]);
   });
 

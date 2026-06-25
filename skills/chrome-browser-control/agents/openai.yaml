@@ -1,0 +1,11 @@
+interface:
+  display_name: "Chrome Browser Control"
+  short_description: "Operate Chrome safely through MCP tools"
+  default_prompt: "Use $chrome-browser-control to operate the connected Chrome browser with claimed tabs, bounded snapshots, safe interactions, and cleanup."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "chrome_browser_control"
+      description: "Local Chrome Browser Control MCP server"
+      transport: "stdio"

@@ -11,6 +11,7 @@ const {
   DEFAULT_ALLOWED_ORIGINS,
   formatAllowedOriginPatternsForDisplay,
   getHostPermissionOrigins,
+  getScreenshotPermissionOrigins,
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
   validatePairingToken
@@ -127,7 +128,10 @@ save.addEventListener('click', async () => {
     const nextBridgeUrl = normalizeBridgeUrl(bridgeUrl.value);
     const nextToken = validatePairingToken(token.value);
     const nextAllowedOrigins = normalizeAllowedOriginPatterns(allowedOrigins.value);
-    const granted = await requestHostPermissions(getHostPermissionOrigins(nextAllowedOrigins));
+    const granted = await requestHostPermissions([
+      ...getHostPermissionOrigins(nextAllowedOrigins),
+      ...getScreenshotPermissionOrigins(nextAllowedOrigins)
+    ]);
     if (!granted) {
       showStatus('error: allowed origin permission was not granted');
       return;

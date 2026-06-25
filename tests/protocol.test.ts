@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BridgeActionSchema,
   parseBridgeRequest,
   parseBridgeResponse,
   parseClientHello,
@@ -39,6 +40,32 @@ describe('protocol validation', () => {
       action: 'snapshot',
       params: {}
     });
+  });
+
+  it('accepts the expanded browser-control action surface', () => {
+    expect(BridgeActionSchema.options).toEqual([
+      'ping',
+      'name_session',
+      'list_tabs',
+      'claim_tab',
+      'release_tab',
+      'finalize_tabs',
+      'snapshot',
+      'visible_snapshot',
+      'navigate',
+      'click',
+      'type',
+      'scroll',
+      'query_elements',
+      'extract_elements',
+      'screenshot',
+      'keypress',
+      'click_at',
+      'wait_for',
+      'page_status',
+      'console_logs',
+      'collect_scroll'
+    ]);
   });
 
   it('rejects unknown request actions', () => {

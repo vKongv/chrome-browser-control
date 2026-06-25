@@ -3,7 +3,9 @@ if (typeof importScripts === 'function') importScripts('security.js');
 const {
   DEFAULT_BRIDGE_URL,
   DEFAULT_ALLOWED_ORIGINS,
+  SCREENSHOT_ALL_URLS_PERMISSION,
   describeAllowedOrigins,
+  getScreenshotPermissionOrigins,
   isUrlAllowed,
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
@@ -17,11 +19,29 @@ const DEFAULTS = {
 };
 
 const EXTENSION_PROTOCOL_MARKER = {
-  protocolVersion: 2,
-  features: ['navigate-pending-warning', 'snapshot-text-limit']
+  protocolVersion: 3,
+  features: [
+    'navigate-pending-warning',
+    'snapshot-text-limit',
+    'session-tabs',
+    'visible-snapshot',
+    'query-elements',
+    'extract-elements',
+    'visible-screenshot',
+    'keypress',
+    'click-at',
+    'wait-for',
+    'page-status',
+    'console-logs',
+    'collect-scroll'
+  ]
 };
 
 let status = 'disconnected';
+let sessionName = '';
+let nextClaimId = 1;
+let currentSessionTabId = '';
+const claimedTabs = new Map();
 
 async function getSettings() {
   const settings = await chrome.storage.local.get(DEFAULTS);
@@ -95,6 +115,28 @@ function sanitizeTab(tab) {
   };
 }
 
+function sanitizeClaim(tab, sessionTabId) {
+  return {
+    sessionTabId,
+    tabId: tab.id,
+    title: tab.title,
+    url: tab.url,
+    active: tab.active,
+    windowId: tab.windowId
+  };
+}
+
+function sessionState() {
+  return {
+    name: sessionName || undefined,
+    claimedTabs: [...claimedTabs.values()].map((claim) => ({
+      sessionTabId: claim.sessionTabId,
+      tabId: claim.tabId,
+      status: claim.status
+    }))
+  };
+}
+
 async function waitForTabComplete(tabId, timeoutMs = 15000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -129,8 +171,31 @@ async function resolveExplicitTabId(tabId) {
   return tabId;
 }
 
+async function resolveSessionTabId(sessionTabId, allowedOrigins, { requireOperable = true } = {}) {
+  const claim = claimedTabs.get(sessionTabId);
+  if (!claim) throw new Error(`No claimed tab for sessionTabId: ${sessionTabId}`);
+  const tab = await getTabIfExists(claim.tabId);
+  if (!tab) {
+    claimedTabs.delete(sessionTabId);
+    if (currentSessionTabId === sessionTabId) currentSessionTabId = '';
+    throw new Error(`Claimed tab is no longer available for sessionTabId: ${sessionTabId}`);
+  }
+  if (requireOperable && !isOperableTab(tab, allowedOrigins)) {
+    throw new Error(`Claimed tab is no longer operable or allowed: ${tab.url || 'unknown URL'}`);
+  }
+  return claim.tabId;
+}
+
+async function resolveCurrentClaimedTabId(allowedOrigins, options) {
+  if (!currentSessionTabId) return null;
+  return await resolveSessionTabId(currentSessionTabId, allowedOrigins, options);
+}
+
 async function resolveNavigateTabId(params = {}, url, allowedOrigins) {
+  if (params.sessionTabId) return await resolveSessionTabId(params.sessionTabId, allowedOrigins, { requireOperable: false });
   if (params.tabId) return await resolveExplicitTabId(params.tabId);
+  const claimedTabId = await resolveCurrentClaimedTabId(allowedOrigins, { requireOperable: false });
+  if (claimedTabId) return claimedTabId;
 
   const active = await activeTabFromQuery();
   if (active?.id) {
@@ -144,7 +209,10 @@ async function resolveNavigateTabId(params = {}, url, allowedOrigins) {
 }
 
 async function resolvePageActionTabId(params = {}, allowedOrigins) {
+  if (params.sessionTabId) return await resolveSessionTabId(params.sessionTabId, allowedOrigins);
   if (params.tabId) return await resolveExplicitTabId(params.tabId);
+  const claimedTabId = await resolveCurrentClaimedTabId(allowedOrigins);
+  if (claimedTabId) return claimedTabId;
 
   const active = await activeTabFromQuery();
   if (!active?.id) throw new Error('No active Chrome tab found');
@@ -204,6 +272,61 @@ async function sendToContent(tabId, action, params = {}, allowedOrigins = []) {
   return response.result;
 }
 
+async function hasExactHostPermission(origin) {
+  if (chrome.permissions?.getAll) {
+    const permissions = await chrome.permissions.getAll();
+    return Array.isArray(permissions?.origins) && permissions.origins.includes(origin);
+  }
+  if (!chrome.permissions?.contains) return true;
+  return new Promise((resolve) => {
+    chrome.permissions.contains({ origins: [origin] }, (granted) => resolve(Boolean(granted)));
+  });
+}
+
+async function assertScreenshotPermission(allowedOrigins) {
+  const screenshotOrigins = getScreenshotPermissionOrigins(allowedOrigins);
+  if (!screenshotOrigins.includes(SCREENSHOT_ALL_URLS_PERMISSION)) return;
+  if (await hasExactHostPermission(SCREENSHOT_ALL_URLS_PERMISSION)) return;
+  throw new Error(
+    'screenshot requires the optional <all_urls> host permission when allowed origins are wildcard. Reload the extension after manifest changes, then open the extension popup, save settings, and grant the requested screenshot permission.'
+  );
+}
+
+async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = []) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!isInjectableUrl(tab.url || '')) {
+    throw new Error(`Cannot screenshot this Chrome internal or restricted page: ${tab.url || 'unknown URL'}`);
+  }
+  assertAllowedUrl(tab.url || '', allowedOrigins, 'screenshot');
+  await assertScreenshotPermission(allowedOrigins);
+  const format = params.format === 'jpeg' ? 'jpeg' : 'png';
+  let activated = false;
+  if (!tab.active) {
+    await chrome.tabs.update(tabId, { active: true });
+    activated = true;
+  }
+  let dataUrl;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format });
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (message.includes('<all_urls>') || message.includes('activeTab')) {
+      throw new Error(
+        'screenshot capture was blocked by Chrome permissions. Reload the extension after manifest changes, then open the extension popup, save settings, and grant the optional <all_urls> host permission for wildcard screenshot mode.'
+      );
+    }
+    throw error;
+  }
+  return {
+    dataUrl,
+    mimeType: `image/${format}`,
+    tabId,
+    windowId: tab.windowId,
+    visibleOnly: true,
+    activated
+  };
+}
+
 async function handleBridgeRequest(action, params = {}) {
   const settings = await getSettings();
   switch (action) {
@@ -214,8 +337,15 @@ async function handleBridgeRequest(action, params = {}) {
         pong: true,
         status: liveStatus,
         allowedOrigins: describeAllowedOrigins(settings.allowedOrigins),
+        session: sessionState(),
         ...EXTENSION_PROTOCOL_MARKER
       };
+    }
+    case 'name_session': {
+      const name = String(params.name || '').trim();
+      if (!name) throw new Error('name_session requires name');
+      sessionName = name.slice(0, 120);
+      return { name: sessionName };
     }
     case 'list_tabs': {
       const allTabs = await chrome.tabs.query({});
@@ -241,6 +371,54 @@ async function handleBridgeRequest(action, params = {}) {
         allowedOrigins: describeAllowedOrigins(settings.allowedOrigins)
       };
     }
+    case 'claim_tab': {
+      if (!params.tabId) throw new Error('claim_tab requires tabId');
+      const tab = await getTabIfExists(params.tabId);
+      if (!tab) throw new Error(`No tab with id: ${params.tabId}`);
+      if (!isInjectableUrl(tab.url || '')) {
+        throw new Error(`Cannot claim this Chrome internal or restricted page: ${tab.url || 'unknown URL'}`);
+      }
+      assertAllowedUrl(tab.url || '', settings.allowedOrigins, 'claim_tab');
+      const existing = [...claimedTabs.values()].find((claim) => claim.tabId === tab.id);
+      const sessionTabId = existing?.sessionTabId || `tab-${(nextClaimId++).toString(36)}`;
+      claimedTabs.set(sessionTabId, {
+        sessionTabId,
+        tabId: tab.id,
+        claimedAt: Date.now()
+      });
+      currentSessionTabId = sessionTabId;
+      return sanitizeClaim(tab, sessionTabId);
+    }
+    case 'release_tab': {
+      const sessionTabId = params.sessionTabId || (params.tabId ? [...claimedTabs.values()].find((claim) => claim.tabId === params.tabId)?.sessionTabId : currentSessionTabId);
+      if (!sessionTabId || !claimedTabs.has(sessionTabId)) {
+        throw new Error('No matching claimed tab to release');
+      }
+      const claim = claimedTabs.get(sessionTabId);
+      claimedTabs.delete(sessionTabId);
+      if (currentSessionTabId === sessionTabId) currentSessionTabId = '';
+      return { released: true, sessionTabId, tabId: claim?.tabId };
+    }
+    case 'finalize_tabs': {
+      const keep = Array.isArray(params.keep) ? params.keep : [];
+      const keepIds = new Set();
+      for (const entry of keep) {
+        const sessionTabId = entry?.sessionTabId || (entry?.tabId ? [...claimedTabs.values()].find((claim) => claim.tabId === entry.tabId)?.sessionTabId : undefined);
+        if (!sessionTabId || !claimedTabs.has(sessionTabId)) continue;
+        keepIds.add(sessionTabId);
+        const claim = claimedTabs.get(sessionTabId);
+        claim.status = entry.status;
+        claimedTabs.set(sessionTabId, claim);
+      }
+      let released = 0;
+      for (const sessionTabId of [...claimedTabs.keys()]) {
+        if (keepIds.has(sessionTabId)) continue;
+        claimedTabs.delete(sessionTabId);
+        released += 1;
+      }
+      if (!claimedTabs.has(currentSessionTabId)) currentSessionTabId = keepIds.values().next().value || '';
+      return { released, kept: claimedTabs.size };
+    }
     case 'navigate': {
       if (!params.url) throw new Error('navigate requires url');
       assertAllowedUrl(params.url, settings.allowedOrigins, 'navigate');
@@ -260,10 +438,28 @@ async function handleBridgeRequest(action, params = {}) {
       }
       return result;
     }
+    case 'visible_snapshot': {
+      return await sendToContent(
+        await resolvePageActionTabId(params, settings.allowedOrigins),
+        'snapshot',
+        { ...params, mode: 'visible' },
+        settings.allowedOrigins
+      );
+    }
+    case 'screenshot':
+      return await captureVisibleScreenshot(await resolvePageActionTabId(params, settings.allowedOrigins), params, settings.allowedOrigins);
     case 'snapshot':
     case 'click':
     case 'type':
     case 'scroll':
+    case 'query_elements':
+    case 'extract_elements':
+    case 'keypress':
+    case 'click_at':
+    case 'wait_for':
+    case 'page_status':
+    case 'console_logs':
+    case 'collect_scroll':
       return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins);
     default:
       throw new Error(`Unsupported bridge action: ${action}`);
