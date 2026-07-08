@@ -123,7 +123,15 @@ async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): P
 }
 
 function clearSpawnedBrokerState(): void {
+  const child = spawnedChild;
   spawnedChild = undefined;
+  if (child?.pid) {
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // Process may already have exited.
+    }
+  }
   if (ownership === 'spawned') {
     ownership = undefined;
   }

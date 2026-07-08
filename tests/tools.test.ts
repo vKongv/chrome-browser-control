@@ -396,6 +396,16 @@ describe('registerBrowserTools', () => {
         brokerPort: 8765
       })
     ).toContain('Token mismatch');
+    expect(
+      buildNextAction({
+        ready: false,
+        brokerReachable: false,
+        adapterConnected: false,
+        extensionConnected: false,
+        brokerPort: 8765,
+        portNotBroker: true
+      })
+    ).toContain('not a Chrome Browser Control broker');
   });
 
   it('reports missing token coaching through browser_status', async () => {

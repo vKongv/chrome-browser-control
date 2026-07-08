@@ -768,18 +768,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.action === 'status') {
-    chrome.storage.local
-      .get({
-        adapterStatus: null
-      })
-      .then((stored) =>
-        getBridgeStatus().then((response) =>
-          sendResponse({
-            ok: true,
-            status: response?.ok ? response.status : status,
-            adapterStatus: stored.adapterStatus
+    getBridgeStatus()
+      .then((response) =>
+        chrome.storage.local
+          .get({
+            adapterStatus: null
           })
-        )
+          .then((stored) =>
+            sendResponse({
+              ok: true,
+              status: response?.ok ? response.status : status,
+              adapterStatus: stored.adapterStatus
+            })
+          )
       )
       .catch(() => sendResponse({ ok: true, status, adapterStatus: null }));
     return true;

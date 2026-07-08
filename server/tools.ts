@@ -192,6 +192,7 @@ function statusPayload(
     extensionConnected: boolean;
     authFailed?: boolean;
     autoloadTimedOut?: boolean;
+    portNotBroker?: boolean;
   }
 ) {
   const nextAction = buildNextAction({
@@ -204,7 +205,8 @@ function statusPayload(
     extensionConnected: coaching.extensionConnected,
     authFailed: coaching.authFailed,
     brokerPort: context.brokerPort,
-    autoloadTimedOut: coaching.autoloadTimedOut
+    autoloadTimedOut: coaching.autoloadTimedOut,
+    portNotBroker: coaching.portNotBroker
   });
 
   return {
@@ -218,6 +220,10 @@ function isNoExtensionError(message: string): boolean {
 
 function isNoBrokerError(message: string): boolean {
   return /not connected to chrome broker|timed out waiting for broker|ECONNREFUSED|ENOTFOUND/i.test(message);
+}
+
+function isPortNotBrokerError(message: string | undefined): boolean {
+  return typeof message === 'string' && /did not accept a Chrome Browser Control broker handshake/i.test(message);
 }
 
 async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext = {}) {
@@ -293,7 +299,8 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
                 adapterConnected: false,
                 extensionConnected: false,
                 authFailed,
-                autoloadTimedOut
+                autoloadTimedOut,
+                portNotBroker: isPortNotBrokerError(lifecycle.error)
               }
             )
           );
