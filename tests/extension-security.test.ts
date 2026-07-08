@@ -1630,6 +1630,53 @@ describe('extension background origin enforcement', () => {
     ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-c' });
   });
 
+  it('does not let an advisory sessionTabId release a later exclusive lease', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ]
+    });
+
+    const advisory = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    expect(advisory.sessionTabId).toBe('tab-1');
+
+    const exclusive = await background.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      ttlMs: 60_000
+    });
+    expect(exclusive.sessionTabId).not.toBe(advisory.sessionTabId);
+
+    await expect(background.handleBridgeRequest('release_tab', { sessionTabId: advisory.sessionTabId })).rejects.toThrow(
+      'No matching claimed tab to release'
+    );
+
+    await expect(background.handleBridgeRequest('list_tabs')).resolves.toEqual([
+      expect.objectContaining({
+        id: 2,
+        exclusiveLease: expect.objectContaining({ ownerId: 'owner-a' })
+      })
+    ]);
+
+    await expect(
+      background.handleBridgeRequest('release_tab', { sessionTabId: exclusive.sessionTabId })
+    ).resolves.toMatchObject({ released: true, tabId: 2 });
+  });
+
   it('navigates with active:false without activating the tab', async () => {
     const tabs = [
       {

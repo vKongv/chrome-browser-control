@@ -591,7 +591,20 @@ async function handleBridgeRequest(action, params = {}) {
         throw exclusiveLeaseConflictError(tab.id, existingLease);
       }
       const existing = [...claimedTabs.values()].find((claim) => claim.tabId === tab.id);
-      const sessionTabId = existing?.sessionTabId || `tab-${(nextClaimId++).toString(36)}`;
+      let sessionTabId;
+      if (
+        existing &&
+        exclusive &&
+        (!existing.exclusive || (existing.ownerId && existing.ownerId !== params.ownerId))
+      ) {
+        // Do not reuse an advisory (or other-owner) sessionTabId for a new exclusive lease;
+        // the prior caller could release and clear the lease.
+        claimedTabs.delete(existing.sessionTabId);
+        if (currentSessionTabId === existing.sessionTabId) currentSessionTabId = '';
+        sessionTabId = `tab-${(nextClaimId++).toString(36)}`;
+      } else {
+        sessionTabId = existing?.sessionTabId || `tab-${(nextClaimId++).toString(36)}`;
+      }
       const ttlMs = boundedExclusiveLeaseTtl(params.ttlMs);
       const leaseRenewed = exclusive && existingLease?.ownerId === params.ownerId;
       const expiresAt = exclusive ? Date.now() + ttlMs : undefined;

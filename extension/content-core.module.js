@@ -962,7 +962,9 @@ function extractPostUrl(element) {
 
 function postCandidatesInScope(documentRef, scopeRoot) {
   const selector = 'article, [role="article"], [data-testid*="post"]';
-  return [...scopeRoot.querySelectorAll(selector)].filter((element) => scopeRoot.contains(element));
+  const matches = [...scopeRoot.querySelectorAll(selector)].filter((element) => scopeRoot.contains(element));
+  // Prefer root-level posts only so nested articles do not duplicate the parent post.
+  return matches.filter((element) => !matches.some((other) => other !== element && other.contains(element)));
 }
 
 export function extractFeedPosts(documentRef = document, options = {}) {

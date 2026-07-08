@@ -602,6 +602,29 @@ describe('extension content core', () => {
     expect(result.scopeApplied).toBe('feed');
   });
 
+  it('dedupes nested article posts to root candidates only', () => {
+    const document = makeDocument(`
+      <main role="feed">
+        <article>
+          <h3>Outer</h3>
+          <p>Outer post body</p>
+          <article>
+            <h3>Inner</h3>
+            <p>Nested reply body</p>
+          </article>
+        </article>
+        <article>
+          <h3>Second</h3>
+          <p>Second post body</p>
+        </article>
+      </main>
+    `);
+
+    const result = extractFeedPosts(document as unknown as Document, { maxPosts: 10 });
+    expect(result.count).toBe(2);
+    expect(result.posts.map((post) => post.author)).toEqual(['Outer', 'Second']);
+  });
+
   it('supports extended wait_for conditions', async () => {
     const document = makeDocument(`
       <main><p>Scoped ready text</p></main>
