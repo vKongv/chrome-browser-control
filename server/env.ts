@@ -1,23 +1,33 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { readEnvFile } from './env-file.js';
+import { getPackageRoot, getUserConfigPath } from './paths.js';
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/;
 const MIN_TOKEN_UNIQUE_CHARS = 8;
 let localEnvLoaded = false;
 
+function applyEnvFile(path: string): void {
+  if (!existsSync(path)) return;
+  for (const [key, value] of Object.entries(readEnvFile(path))) {
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
 function loadLocalEnvIfPresent(): void {
   if (localEnvLoaded) return;
   localEnvLoaded = true;
+
+  applyEnvFile(getUserConfigPath());
+
   if (/^(1|true|yes|on)$/i.test(process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV || '')) return;
-  const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const localEnvPath = join(repoRoot, '.env.local');
-  if (!existsSync(localEnvPath)) return;
-  for (const line of readFileSync(localEnvPath, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match || process.env[match[1]] !== undefined) continue;
-    process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
-  }
+  applyEnvFile(join(getPackageRoot(), '.env.local'));
+}
+
+export function resetEnvLoadForTests(): void {
+  localEnvLoaded = false;
 }
 
 export function envNumber(name: string, fallback: number): number {
@@ -105,4 +115,9 @@ export function getBrokerUrl(): string {
   const host = getBrokerHost();
   const formattedHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
   return `ws://${formattedHost}:${getBrokerPort()}`;
+}
+
+export function isAutoloadEnabled(explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  return envBoolean('CHROME_BROWSER_CONTROL_AUTOLOAD', false);
 }
