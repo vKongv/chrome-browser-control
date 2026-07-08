@@ -15,6 +15,8 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 
 1. Call `browser_status`.
    - Confirm the extension is connected.
+   - Read `nextAction` when `ready` is false or the bridge looks partially configured.
+   - Compare `adapter.registeredToolCount` with the host tool list if schemas look stale; restart the MCP host if counts diverge.
    - Check `protocolVersion` and `features` if behavior seems stale.
    - Check `allowedOrigins` before assuming a page is controllable.
 
