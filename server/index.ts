@@ -21,6 +21,9 @@ export async function main(): Promise<void> {
     if (lifecycle.authFailed) {
       throw new Error(lifecycle.error || 'Broker rejected the configured pairing token');
     }
+    if (!lifecycle.authOk) {
+      throw new Error(lifecycle.error || 'Broker is not ready');
+    }
     await brokerClient.connect();
   };
 
