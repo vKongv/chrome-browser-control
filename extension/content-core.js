@@ -25,6 +25,12 @@ const DEFAULT_COLLECT_ITEM_LIMIT = 100;
 const MAX_COLLECT_ITEM_LIMIT = 500;
 const SENSITIVE_ATTR_PATTERN = /password|passwd|passcode|one-time-code|otp|2fa|mfa|token|csrf|xsrf|secret|credential|authorization|session|nonce/i;
 const HIDDEN_TOKEN_PATTERN = /token|csrf|xsrf|auth|secret|session|credential|nonce/i;
+const SCOPE_VALUES = new Set(['document', 'main', 'article', 'feed']);
+const MAX_EXCLUDE_SELECTORS = 20;
+const MAX_EXCLUDE_SELECTOR_LENGTH = 500;
+const MAX_IGNORE_ROLES = 20;
+const DEFAULT_IGNORE_ROLES = ['dialog'];
+const MIN_CONTENT_STABLE_TEXT_LENGTH = 50;
 
 let refTtlMs = DEFAULT_REF_TTL_MS;
 let maxRefs = DEFAULT_MAX_REFS;
@@ -145,6 +151,143 @@ function refForElement(element, documentRef, now) {
 
 function interestingElements(documentRef) {
   return [...documentRef.querySelectorAll(INTERESTING_SELECTOR)].filter(isInteresting);
+}
+
+function hasMainLandmark(documentRef) {
+  return !!documentRef.querySelector?.('main, [role="main"]');
+}
+
+function normalizeStringArray(value, maxItems, maxLen) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => typeof item === 'string' && item.trim().length > 0)
+    .slice(0, maxItems)
+    .map((item) => item.slice(0, maxLen));
+}
+
+function isExcludedByRole(element, ignoreRoles) {
+  const role = roleFor(element).toLowerCase();
+  return ignoreRoles.some((ignored) => ignored.toLowerCase() === role);
+}
+
+function isInsideIgnoredRoleSubtree(element, ignoreRoles) {
+  let current = element;
+  while (current) {
+    if (isExcludedByRole(current, ignoreRoles)) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function isInsideExcludedSubtree(element, excludeSelectors, documentRef) {
+  for (const selector of excludeSelectors) {
+    try {
+      for (const root of documentRef.querySelectorAll(selector)) {
+        if (root === element || root.contains(element)) return true;
+      }
+    } catch (_error) {
+      // ignore invalid selectors
+    }
+  }
+  return false;
+}
+
+function resolveScopeRoot(documentRef = document, scope = 'document') {
+  const body = documentRef.body || documentRef.documentElement;
+  if (!body) return body;
+  const normalized = SCOPE_VALUES.has(scope) ? scope : 'document';
+  if (normalized === 'document') return body;
+  if (normalized === 'main') {
+    return documentRef.querySelector('main, [role="main"]') || documentRef.querySelector('article, [role="article"]') || body;
+  }
+  if (normalized === 'article') {
+    const articles = [...documentRef.querySelectorAll('article, [role="article"]')];
+    if (!articles.length) {
+      return documentRef.querySelector('main, [role="main"]') || body;
+    }
+    if (articles.length === 1) return articles[0];
+    let largest = articles[0];
+    let maxLen = 0;
+    for (const article of articles) {
+      const len = (article.innerText || article.textContent || '').length;
+      if (len > maxLen) {
+        maxLen = len;
+        largest = article;
+      }
+    }
+    return largest;
+  }
+  const feed = documentRef.querySelector('[role="feed"]');
+  if (feed) return feed;
+  const main = documentRef.querySelector('main, [role="main"]');
+  if (main && main.querySelectorAll('article, [role="article"]').length >= 2) return main;
+  return main || body;
+}
+
+function resolveSnapshotScopeOptions(documentRef, options = {}, mode = 'compact') {
+  const explicitScope = typeof options.scope === 'string' ? options.scope : undefined;
+  let scopeApplied = 'document';
+  if (explicitScope && SCOPE_VALUES.has(explicitScope)) {
+    scopeApplied = explicitScope;
+  } else if (mode !== 'full' && hasMainLandmark(documentRef)) {
+    scopeApplied = 'main';
+  }
+  const ignoreRoles =
+    options.ignoreRoles !== undefined
+      ? normalizeStringArray(options.ignoreRoles, MAX_IGNORE_ROLES, 80)
+      : scopeApplied === 'document'
+        ? []
+        : [...DEFAULT_IGNORE_ROLES];
+  const excludeSelectors = normalizeStringArray(options.excludeSelectors, MAX_EXCLUDE_SELECTORS, MAX_EXCLUDE_SELECTOR_LENGTH);
+  return { scopeApplied, excludeSelectors, ignoreRoles };
+}
+
+function scopeHintFor(root) {
+  if (!root) return undefined;
+  const tag = root.tagName?.toLowerCase() || 'body';
+  const role = root.getAttribute?.('role') || undefined;
+  const selectorHint = tag === 'main' ? 'main' : role ? `[role="${role}"]` : tag;
+  return { tag, role, selectorHint };
+}
+
+function pruneScopedClone(clone, excludeSelectors, ignoreRoles) {
+  for (const selector of excludeSelectors) {
+    try {
+      for (const element of [...clone.querySelectorAll(selector)]) {
+        element.remove();
+      }
+    } catch (_error) {
+      // ignore invalid selectors
+    }
+  }
+  for (const element of [...clone.querySelectorAll('*')]) {
+    if (isExcludedByRole(element, ignoreRoles)) element.remove();
+  }
+  return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function scopedBodyText(documentRef = document, options = {}) {
+  const mode = options?.mode === 'full' ? 'full' : 'compact';
+  const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, mode);
+  const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+  const clone = scopeRoot.cloneNode(true);
+  const text = pruneScopedClone(clone, scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
+  return { text, scopeRoot, ...scopeOptions };
+}
+
+function interestingElementsInScope(documentRef, scopeRoot, scopeOptions) {
+  const { excludeSelectors, ignoreRoles } = scopeOptions;
+  const allInScope = [...scopeRoot.querySelectorAll(INTERESTING_SELECTOR)].filter(isInteresting);
+  const filtered = allInScope.filter(
+    (element) =>
+      scopeRoot.contains(element) &&
+      !isInsideExcludedSubtree(element, excludeSelectors, documentRef) &&
+      !isInsideIgnoredRoleSubtree(element, ignoreRoles)
+  );
+  return {
+    elements: filtered,
+    excludedCount: Math.max(0, allInScope.length - filtered.length)
+  };
 }
 
 function fullItemFor(element, ref) {
@@ -327,7 +470,10 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
   const now = typeof options?.now === 'number' ? options.now : nowMs();
   cleanupRefStore(documentRef, now);
 
-  const elements = interestingElements(documentRef);
+  const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, mode);
+  const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+  const scoped = interestingElementsInScope(documentRef, scopeRoot, scopeOptions);
+  const elements = scoped.elements;
   const limit = mode === 'full' ? FULL_ELEMENT_LIMIT : COMPACT_ELEMENT_LIMIT;
   const selected = elements.slice(0, limit);
   const items = selected.map((element) => {
@@ -336,8 +482,13 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
   });
   cleanupRefStore(documentRef, now);
 
-  const bodyText = bodyTextFor(documentRef);
+  const bodyText = pruneScopedClone(scopeRoot.cloneNode(true), scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
   const textMeta = textSnapshotMeta(bodyText, textLimit, options);
+  const scopeMeta = {
+    scopeApplied: scopeOptions.scopeApplied,
+    scopeRoot: scopeHintFor(scopeRoot),
+    excludedCount: scoped.excludedCount
+  };
 
   if (mode === 'full') {
     return {
@@ -346,7 +497,8 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
       elements: items,
       omittedElements: Math.max(0, elements.length - selected.length),
       text: bodyText.slice(0, textLimit),
-      ...textMeta
+      ...textMeta,
+      ...scopeMeta
     };
   }
 
@@ -358,7 +510,8 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
     omittedElements: Math.max(0, elements.length - selected.length),
     textPreview: bodyText.slice(0, textLimit),
     ...textMeta,
-    regions: regionSummaries(documentRef, selected)
+    regions: regionSummaries(documentRef, selected),
+    ...scopeMeta
   };
 }
 
@@ -634,23 +787,73 @@ function pageStatus(documentRef = document) {
 function waitForCondition(options = {}, documentRef = document) {
   const timeoutMs = boundedLimit(options.timeoutMs, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
   const started = Date.now();
+  let contentStableLastLength = -1;
+  let contentStableSince = 0;
+  const contentStableMs =
+    typeof options.contentStableMs === 'number' && Number.isFinite(options.contentStableMs)
+      ? Math.max(1, Math.floor(options.contentStableMs))
+      : undefined;
+
   return new Promise((resolve) => {
     const check = () => {
       let matched = false;
       let reason = 'timeout';
+      let condition = 'timeout';
+
       if (options.urlIncludes && String(documentRef.location?.href || '').includes(String(options.urlIncludes))) {
         matched = true;
         reason = 'urlIncludes';
+        condition = 'urlIncludes';
+      } else if (options.selectorAbsent === true && options.selector && !documentRef.querySelector(String(options.selector))) {
+        matched = true;
+        reason = 'selectorAbsent';
+        condition = 'selectorAbsent';
       } else if (options.selector && documentRef.querySelector(String(options.selector))) {
         matched = true;
         reason = 'selector';
+        condition = 'selector';
+      } else if (options.textInScope) {
+        const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
+        const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+        const scopedText = pruneScopedClone(scopeRoot.cloneNode(true), scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
+        if (scopedText.includes(String(options.textInScope))) {
+          matched = true;
+          reason = 'textInScope';
+          condition = 'textInScope';
+        }
       } else if (options.text && bodyTextFor(documentRef).includes(String(options.text))) {
         matched = true;
         reason = 'text';
+        condition = 'text';
+      } else if (contentStableMs) {
+        const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
+        const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+        const scopedText = pruneScopedClone(scopeRoot.cloneNode(true), scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
+        const length = scopedText.length;
+        if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
+          if (length === contentStableLastLength) {
+            if (Date.now() - contentStableSince >= contentStableMs) {
+              matched = true;
+              reason = 'contentStableMs';
+              condition = 'contentStableMs';
+            }
+          } else {
+            contentStableLastLength = length;
+            contentStableSince = Date.now();
+          }
+        }
       }
+
       const elapsedMs = Date.now() - started;
       if (matched || elapsedMs >= timeoutMs) {
-        resolve({ matched, reason, elapsedMs, title: documentRef.title, url: documentRef.location?.href });
+        resolve({
+          matched,
+          reason,
+          condition,
+          elapsedMs,
+          title: documentRef.title,
+          url: documentRef.location?.href
+        });
         return;
       }
       setTimeout(check, 100);
@@ -696,6 +899,98 @@ function getConsoleLogs({ levels, limit } = {}) {
     logs: filtered.slice(-appliedLimit),
     omitted: Math.max(0, filtered.length - appliedLimit),
     capture: 'after-content-script-injection'
+  };
+}
+
+function extractAuthor(element) {
+  const heading = element.querySelector('h1,h2,h3,h4,h5,h6,[role="heading"]');
+  if (heading) {
+    const text = labelFor(heading, 160);
+    if (text) return text;
+  }
+  const link = element.querySelector('a[href]');
+  if (link) {
+    const text = labelFor(link, 160);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function extractPostText(element) {
+  const paragraphs = [...element.querySelectorAll('p')];
+  if (paragraphs.length) {
+    return paragraphs
+      .map((paragraph) => (paragraph.innerText || paragraph.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join(' ')
+      .slice(0, MAX_EXTRACT_TEXT);
+  }
+  return (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, MAX_EXTRACT_TEXT);
+}
+
+function extractAllTimes(element) {
+  const times = [...element.querySelectorAll('time')];
+  let relativeTime;
+  let absoluteTime;
+  for (const time of times) {
+    const datetime = time.getAttribute('datetime');
+    const text = labelFor(time, 160);
+    if (datetime && !absoluteTime) absoluteTime = datetime;
+    if (text && !relativeTime) relativeTime = text;
+  }
+  return { relativeTime, absoluteTime };
+}
+
+function extractLiveFlags(element) {
+  const liveLabel = element.querySelector('[aria-label*="Live" i], [aria-label*="live" i]');
+  const text = element.innerText || element.textContent || '';
+  const isLive = !!liveLabel || /\bLIVE\b/.test(text);
+  const wasLive = /\bwas live\b/i.test(text);
+  return {
+    isLive: isLive ? true : undefined,
+    wasLive: wasLive ? true : undefined
+  };
+}
+
+function extractPostUrl(element) {
+  const link = element.querySelector('a[href][aria-label*="post" i], a[href][role="link"]') || element.querySelector('a[href]');
+  if (!link?.href) return undefined;
+  return String(link.href).slice(0, 500);
+}
+
+function postCandidatesInScope(documentRef, scopeRoot) {
+  const selector = 'article, [role="article"], [data-testid*="post"]';
+  return [...scopeRoot.querySelectorAll(selector)].filter((element) => scopeRoot.contains(element));
+}
+
+function extractFeedPosts(documentRef = document, options = {}) {
+  const maxPosts = boundedLimit(options.maxPosts, 10, 50);
+  const scopeOptions = resolveSnapshotScopeOptions(documentRef, { ...options, scope: options.scope || 'feed' }, 'compact');
+  const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+  const candidates = postCandidatesInScope(documentRef, scopeRoot);
+  const posts = [];
+  for (const candidate of candidates) {
+    if (posts.length >= maxPosts) break;
+    const times = extractAllTimes(candidate);
+    const live = extractLiveFlags(candidate);
+    const text = extractPostText(candidate);
+    if (!text) continue;
+    const post = {
+      text,
+      author: extractAuthor(candidate),
+      relativeTime: times.relativeTime,
+      absoluteTime: times.absoluteTime,
+      isLive: live.isLive,
+      wasLive: live.wasLive,
+      postUrl: extractPostUrl(candidate)
+    };
+    posts.push(post);
+  }
+  return {
+    posts,
+    count: posts.length,
+    omitted: Math.max(0, candidates.length - posts.length),
+    scopeApplied: scopeOptions.scopeApplied
   };
 }
 

@@ -153,6 +153,21 @@
     return allowed.some((pattern) => patternOrigin(pattern) === url.origin);
   }
 
+  function normalizeUrlForCompare(input) {
+    try {
+      const url = new URL(String(input || ''));
+      let pathname = url.pathname;
+      if (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
+      return `${url.origin}${pathname}${url.search}`;
+    } catch (_error) {
+      return String(input || '');
+    }
+  }
+
+  function urlsEquivalent(a, b) {
+    return normalizeUrlForCompare(a) === normalizeUrlForCompare(b);
+  }
+
   global.BrowserControlSecurity = {
     DEFAULT_BRIDGE_URL,
     DEFAULT_ALLOWED_ORIGINS,
@@ -168,6 +183,7 @@
     getHostPermissionOrigins,
     getScreenshotPermissionOrigins,
     isWildcardOriginPatterns,
-    isUrlAllowed
+    isUrlAllowed,
+    urlsEquivalent
   };
 })(globalThis);

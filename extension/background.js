@@ -9,6 +9,7 @@ const {
   isUrlAllowed,
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
+  urlsEquivalent,
   validatePairingToken
 } = globalThis.BrowserControlSecurity;
 
@@ -19,13 +20,19 @@ const DEFAULTS = {
 };
 
 const EXTENSION_PROTOCOL_MARKER = {
-  protocolVersion: 4,
+  protocolVersion: 5,
   features: [
     'act-observe-budget',
     'act-observe',
     'navigate-pending-warning',
     'snapshot-text-limit',
+    'snapshot-scope',
     'session-tabs',
+    'exclusive-claims',
+    'extract-feed-posts',
+    'navigate-active',
+    'navigate-redirect-metadata',
+    'wait-for-extended',
     'visible-snapshot',
     'query-elements',
     'extract-elements',
@@ -42,12 +49,49 @@ const EXTENSION_PROTOCOL_MARKER = {
 const BRIDGE_REQUEST_SOFT_BUDGET_MS = 55_000;
 const AFTER_OBSERVATION_BUFFER_MS = 5_000;
 const MAX_AFTER_WAIT_TIMEOUT_MS = 20_000;
+const DEFAULT_EXCLUSIVE_LEASE_TTL_MS = 300_000;
+const MAX_EXCLUSIVE_LEASE_TTL_MS = 3_600_000;
 
 let status = 'disconnected';
 let sessionName = '';
 let nextClaimId = 1;
 let currentSessionTabId = '';
 const claimedTabs = new Map();
+const tabLeases = new Map();
+
+function sweepExpiredLeases(now = Date.now()) {
+  for (const [tabId, lease] of tabLeases) {
+    if (!lease?.expiresAt || lease.expiresAt <= now) tabLeases.delete(tabId);
+  }
+}
+
+function getLeaseForTab(tabId) {
+  sweepExpiredLeases();
+  return tabLeases.get(tabId);
+}
+
+function boundedExclusiveLeaseTtl(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_EXCLUSIVE_LEASE_TTL_MS;
+  return Math.max(1000, Math.min(Math.floor(value), MAX_EXCLUSIVE_LEASE_TTL_MS));
+}
+
+function clearLeaseForTab(tabId) {
+  tabLeases.delete(tabId);
+}
+
+function exclusiveLeaseConflictError(tabId, lease) {
+  const payload = {
+    code: 'TAB_EXCLUSIVE_CLAIM_CONFLICT',
+    tabId,
+    holder: {
+      ownerId: lease.ownerId,
+      owner: lease.ownerLabel || undefined,
+      sessionName: sessionName || undefined,
+      expiresAt: lease.expiresAt
+    }
+  };
+  return new Error(JSON.stringify(payload));
+}
 
 async function getSettings() {
   const settings = await chrome.storage.local.get(DEFAULTS);
@@ -110,7 +154,8 @@ function assertAllowedUrl(url, allowedOrigins, action) {
 }
 
 function sanitizeTab(tab) {
-  return {
+  const lease = getLeaseForTab(tab.id);
+  const sanitized = {
     id: tab.id,
     active: tab.active,
     highlighted: tab.highlighted,
@@ -119,10 +164,18 @@ function sanitizeTab(tab) {
     windowId: tab.windowId,
     source: 'extension'
   };
+  if (lease) {
+    sanitized.exclusiveLease = {
+      ownerId: lease.ownerId,
+      owner: lease.ownerLabel || undefined,
+      expiresAt: lease.expiresAt
+    };
+  }
+  return sanitized;
 }
 
-function sanitizeClaim(tab, sessionTabId) {
-  return {
+function sanitizeClaim(tab, sessionTabId, claim = {}) {
+  const result = {
     sessionTabId,
     tabId: tab.id,
     title: tab.title,
@@ -130,15 +183,28 @@ function sanitizeClaim(tab, sessionTabId) {
     active: tab.active,
     windowId: tab.windowId
   };
+  if (claim.exclusive) {
+    result.exclusive = true;
+    result.ownerId = claim.ownerId;
+    if (claim.ownerLabel) result.owner = claim.ownerLabel;
+    if (claim.expiresAt) result.expiresAt = claim.expiresAt;
+    if (claim.leaseRenewed) result.leaseRenewed = true;
+  }
+  return result;
 }
 
 function sessionState() {
+  sweepExpiredLeases();
   return {
     name: sessionName || undefined,
     claimedTabs: [...claimedTabs.values()].map((claim) => ({
       sessionTabId: claim.sessionTabId,
       tabId: claim.tabId,
-      status: claim.status
+      status: claim.status,
+      exclusive: claim.exclusive || undefined,
+      ownerId: claim.ownerId || undefined,
+      owner: claim.ownerLabel || undefined,
+      expiresAt: claim.expiresAt || undefined
     }))
   };
 }
@@ -284,6 +350,9 @@ function splitAfterParams(params = {}) {
 }
 
 function hasWaitCondition(args = {}) {
+  if (args.selectorAbsent === true && typeof args.selector === 'string' && args.selector.trim().length > 0) return true;
+  if (typeof args.textInScope === 'string' && args.textInScope.trim().length > 0) return true;
+  if (typeof args.contentStableMs === 'number' && Number.isFinite(args.contentStableMs) && args.contentStableMs > 0) return true;
   return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
 }
 
@@ -308,7 +377,7 @@ function validateAfterRequest(after) {
       throw new Error('after.waitFor must be an object');
     }
     if (!hasWaitCondition(after.waitFor)) {
-      throw new Error('after.waitFor requires at least one of text, selector, or urlIncludes');
+      throw new Error('after.waitFor requires at least one wait condition');
     }
   }
   if (after.snapshot !== undefined) normalizeSnapshotAfter(after.snapshot);
@@ -489,21 +558,44 @@ async function handleBridgeRequest(action, params = {}) {
     }
     case 'claim_tab': {
       if (!params.tabId) throw new Error('claim_tab requires tabId');
+      sweepExpiredLeases();
       const tab = await getTabIfExists(params.tabId);
       if (!tab) throw new Error(`No tab with id: ${params.tabId}`);
       if (!isInjectableUrl(tab.url || '')) {
         throw new Error(`Cannot claim this Chrome internal or restricted page: ${tab.url || 'unknown URL'}`);
       }
       assertAllowedUrl(tab.url || '', settings.allowedOrigins, 'claim_tab');
+      const exclusive = params.exclusive === true;
+      if (exclusive && !params.ownerId) throw new Error('exclusive claim_tab requires ownerId');
+      const existingLease = getLeaseForTab(tab.id);
+      if (exclusive && existingLease && existingLease.ownerId !== params.ownerId) {
+        throw exclusiveLeaseConflictError(tab.id, existingLease);
+      }
       const existing = [...claimedTabs.values()].find((claim) => claim.tabId === tab.id);
       const sessionTabId = existing?.sessionTabId || `tab-${(nextClaimId++).toString(36)}`;
-      claimedTabs.set(sessionTabId, {
+      const ttlMs = boundedExclusiveLeaseTtl(params.ttlMs);
+      const leaseRenewed = exclusive && existingLease?.ownerId === params.ownerId;
+      const expiresAt = exclusive ? Date.now() + ttlMs : undefined;
+      const claim = {
         sessionTabId,
         tabId: tab.id,
-        claimedAt: Date.now()
-      });
+        claimedAt: Date.now(),
+        exclusive: exclusive || undefined,
+        ownerId: exclusive ? String(params.ownerId) : undefined,
+        ownerLabel: exclusive && params.owner ? String(params.owner).slice(0, 120) : undefined,
+        expiresAt,
+        leaseRenewed: leaseRenewed || undefined
+      };
+      claimedTabs.set(sessionTabId, claim);
+      if (exclusive) {
+        tabLeases.set(tab.id, {
+          ownerId: claim.ownerId,
+          ownerLabel: claim.ownerLabel,
+          expiresAt
+        });
+      }
       currentSessionTabId = sessionTabId;
-      return sanitizeClaim(tab, sessionTabId);
+      return sanitizeClaim(tab, sessionTabId, claim);
     }
     case 'release_tab': {
       const sessionTabId = params.sessionTabId || (params.tabId ? [...claimedTabs.values()].find((claim) => claim.tabId === params.tabId)?.sessionTabId : currentSessionTabId);
@@ -512,6 +604,7 @@ async function handleBridgeRequest(action, params = {}) {
       }
       const claim = claimedTabs.get(sessionTabId);
       claimedTabs.delete(sessionTabId);
+      if (claim?.tabId) clearLeaseForTab(claim.tabId);
       if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
       return { released: true, sessionTabId, tabId: claim?.tabId };
     }
@@ -529,6 +622,8 @@ async function handleBridgeRequest(action, params = {}) {
       let released = 0;
       for (const sessionTabId of [...claimedTabs.keys()]) {
         if (keepIds.has(sessionTabId)) continue;
+        const claim = claimedTabs.get(sessionTabId);
+        if (claim?.tabId) clearLeaseForTab(claim.tabId);
         claimedTabs.delete(sessionTabId);
         released += 1;
       }
@@ -542,11 +637,17 @@ async function handleBridgeRequest(action, params = {}) {
       if (!baseParams.url) throw new Error('navigate requires url');
       assertAllowedUrl(baseParams.url, settings.allowedOrigins, 'navigate');
       const tabId = await resolveNavigateTabId(baseParams, baseParams.url, settings.allowedOrigins);
-      await chrome.tabs.update(tabId, { url: baseParams.url, active: true });
+      const requestedUrl = baseParams.url;
+      const shouldActivate = baseParams.active !== false;
+      await chrome.tabs.update(tabId, { url: requestedUrl, active: shouldActivate });
       const tab = await waitForTabComplete(tabId);
+      const finalUrl = tab.url || requestedUrl;
       const result = {
         id: tab.id,
-        url: tab.url || baseParams.url,
+        url: finalUrl,
+        requestedUrl,
+        finalUrl,
+        redirected: !urlsEquivalent(requestedUrl, finalUrl),
         title: tab.title,
         status: tab.status,
         source: 'extension'
@@ -575,6 +676,7 @@ async function handleBridgeRequest(action, params = {}) {
       return await runPageActionWithAfter(action, params, settings.allowedOrigins);
     case 'query_elements':
     case 'extract_elements':
+    case 'extract_feed_posts':
       return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins);
     case 'keypress':
     case 'click_at':

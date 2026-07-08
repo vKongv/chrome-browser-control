@@ -25,12 +25,14 @@ export async function main(): Promise<void> {
 
   console.error('[chrome-browser-control] CDP fallback is unsupported in the MCP adapter; use the extension bridge.');
 
+  const ownerId = crypto.randomUUID();
+
   const server = new McpServer({
     name: 'chrome-browser-control',
     version: '0.1.0'
   });
 
-  registerBrowserTools(server, brokerClient);
+  registerBrowserTools(server, brokerClient, { ownerId });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

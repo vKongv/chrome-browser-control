@@ -46,22 +46,51 @@ const OptionalTarget = {
 };
 const SnapshotMode = z.enum(['compact', 'full', 'visible']);
 const BoundedLimit = z.number().int().positive().max(500).optional();
+const SnapshotScope = z.enum(['document', 'main', 'article', 'feed']);
+const SnapshotScopeOptions = {
+  scope: SnapshotScope.optional().describe(
+    'Content root for text and elements. Compact defaults to main when a main landmark exists; use document for legacy full-body text.'
+  ),
+  excludeSelectors: z
+    .array(z.string().min(1).max(500))
+    .max(20)
+    .optional()
+    .describe('CSS selectors for subtrees removed from the scoped snapshot.'),
+  ignoreRoles: z
+    .array(z.string().min(1).max(80))
+    .max(20)
+    .optional()
+    .describe('Computed roles to exclude from scoped snapshots. Compact/main defaults to ["dialog"].')
+};
 const AfterWaitFor = z
   .object({
     text: z.string().min(1).max(500).optional(),
     selector: z.string().min(1).max(500).optional(),
     urlIncludes: z.string().min(1).max(500).optional(),
+    selectorAbsent: z.boolean().optional().describe('Wait until selector is absent from the document.'),
+    textInScope: z.string().min(1).max(500).optional().describe('Wait for substring in scoped page text.'),
+    scope: SnapshotScope.optional().describe('Scope for textInScope and contentStableMs waits.'),
+    excludeSelectors: SnapshotScopeOptions.excludeSelectors,
+    ignoreRoles: SnapshotScopeOptions.ignoreRoles,
+    contentStableMs: z
+      .number()
+      .int()
+      .positive()
+      .max(30_000)
+      .optional()
+      .describe('Wait until scoped text length is stable for this many milliseconds.'),
     timeoutMs: z.number().int().positive().max(20_000).optional()
   })
   .refine((value) => hasWaitCondition(value), {
-    message: 'after.waitFor requires at least one of text, selector, or urlIncludes'
+    message: 'after.waitFor requires at least one wait condition'
   });
 const AfterSnapshot = z.union([
   z.literal(true),
   z.object({
     mode: SnapshotMode.optional(),
     textLimit: z.number().int().positive().max(100_000).optional(),
-    limit: z.number().int().positive().max(500).optional()
+    limit: z.number().int().positive().max(500).optional(),
+    ...SnapshotScopeOptions
   })
 ]);
 const AfterObservation = z
@@ -74,7 +103,10 @@ const AfterObservation = z
   .describe('Optional act-then-observe requests, run after the page action in waitFor, snapshot, pageStatus order.');
 
 function hasWaitCondition(args: Record<string, unknown> = {}): boolean {
-  return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
+  if (args.selectorAbsent === true && typeof args.selector === 'string' && args.selector.trim().length > 0) return true;
+  if (typeof args.textInScope === 'string' && args.textInScope.trim().length > 0) return true;
+  if (typeof args.contentStableMs === 'number' && Number.isFinite(args.contentStableMs) && args.contentStableMs > 0) return true;
+  return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && String(args[key]).trim().length > 0);
 }
 
 function isValidAfterSnapshot(snapshot: unknown): boolean {
@@ -86,7 +118,7 @@ function validateAfterObservation(args: Record<string, unknown> = {}): string | 
   if (!after || typeof after !== 'object' || Array.isArray(after)) return null;
   const waitFor = (after as Record<string, unknown>).waitFor;
   if (waitFor !== undefined && (!waitFor || typeof waitFor !== 'object' || Array.isArray(waitFor) || !hasWaitCondition(waitFor as Record<string, unknown>))) {
-    return 'after.waitFor requires at least one of text, selector, or urlIncludes';
+    return 'after.waitFor requires at least one wait condition';
   }
   if (!isValidAfterSnapshot((after as Record<string, unknown>).snapshot)) {
     return 'after.snapshot must be true or an object';
@@ -179,7 +211,11 @@ async function browserStatus(bridge: BridgeLike) {
   }
 }
 
-export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridge | BridgeLike): void {
+export function registerBrowserTools(
+  server: ToolRegistrar,
+  bridge: BrowserBridge | BridgeLike,
+  options: { ownerId?: string } = {}
+): void {
   server.registerTool(
     'browser_status',
     {
@@ -217,12 +253,33 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
     {
       title: 'Claim Chrome tab',
       description:
-        'Claim an allowed Chrome tab for this browser-control session. Claims are advisory routing state, not exclusive user locks.',
+        'Claim an allowed Chrome tab for this browser-control session. Advisory claims are default. Use exclusive=true with ttlMs for fail-fast tab leases across parallel agents.',
       inputSchema: {
-        tabId: z.number().int().positive()
+        tabId: z.number().int().positive(),
+        exclusive: z.boolean().optional().describe('When true, acquire an exclusive lease on this tab until expiry or release.'),
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .max(3_600_000)
+          .optional()
+          .describe('Exclusive lease TTL in milliseconds. Defaults to 300000 (5 minutes).'),
+        owner: z.string().min(1).max(120).optional().describe('Optional human-readable owner label for conflict diagnostics.')
       }
     },
-    async (args) => forward(bridge, 'claim_tab', args)
+    async (args) => {
+      const params = { ...args } as Record<string, unknown>;
+      if (args.exclusive === true) {
+        if (!options.ownerId) {
+          return {
+            isError: true,
+            content: [{ type: 'text' as const, text: 'exclusive claim_tab requires MCP adapter ownerId' }]
+          };
+        }
+        params.ownerId = options.ownerId;
+      }
+      return forward(bridge, 'claim_tab', params);
+    }
   );
 
   server.registerTool(
@@ -265,7 +322,7 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
     {
       title: 'Snapshot active page',
       description:
-        'Return a simplified DOM snapshot for the active tab or a target tab. Compact mode (default) returns textPreview only — not text. Full mode returns text. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes textLimitApplied, textTotalLength, and textBytesOmitted; a warning appears when default limits truncate body text.',
+        'Return a simplified DOM snapshot for the active tab or a target tab. Compact mode (default) returns textPreview only — not text. Full mode returns text. Compact defaults to main-landmark scope when present; pass scope: "document" for legacy full-body text. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes textLimitApplied, textTotalLength, and textBytesOmitted; a warning appears when default limits truncate body text.',
       inputSchema: {
         mode: SnapshotMode.optional().describe(
           'Snapshot detail mode. Defaults to compact. Use full for text and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
@@ -277,6 +334,7 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
           .max(100_000)
           .optional()
           .describe('Max body text characters. Optional; defaults to 500 (compact) or 4000 (full). Not a hard cap — maximum 100000.'),
+        ...SnapshotScopeOptions,
         ...OptionalTarget
       }
     },
@@ -300,9 +358,11 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
     'navigate',
     {
       title: 'Navigate Chrome tab',
-      description: 'Navigate the active tab or target tab to a URL.',
+      description:
+        'Navigate the active tab or target tab to a URL. Default activates the tab; pass active: false for background audits without focus stealing.',
       inputSchema: {
         url: z.string().url(),
+        active: z.boolean().optional().describe('Whether to activate the tab. Defaults to true for backward compatibility.'),
         after: AfterObservation,
         ...OptionalTarget
       }
@@ -395,6 +455,21 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
   );
 
   server.registerTool(
+    'extract_feed_posts',
+    {
+      title: 'Extract feed posts',
+      description:
+        'Extract structured feed/post records (author, text, times, live flags) from a scoped feed region without site-specific selectors.',
+      inputSchema: {
+        maxPosts: z.number().int().positive().max(50).optional().describe('Maximum posts to return. Defaults to 10.'),
+        ...SnapshotScopeOptions,
+        ...OptionalTarget
+      }
+    },
+    async (args) => forward(bridge, 'extract_feed_posts', args)
+  );
+
+  server.registerTool(
     'screenshot',
     {
       title: 'Capture visible screenshot',
@@ -440,11 +515,24 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
     'wait_for',
     {
       title: 'Wait for page condition',
-      description: 'Wait for text, selector, or URL substring in the target page with bounded timeout.',
+      description:
+        'Wait for text, selector, URL substring, selector absence, scoped text, or bounded content stability in the target page.',
       inputSchema: {
         text: z.string().min(1).max(500).optional(),
         selector: z.string().min(1).max(500).optional(),
         urlIncludes: z.string().min(1).max(500).optional(),
+        selectorAbsent: z.boolean().optional().describe('Wait until selector is absent from the document.'),
+        textInScope: z.string().min(1).max(500).optional().describe('Wait for substring in scoped page text.'),
+        scope: SnapshotScope.optional().describe('Scope for textInScope and contentStableMs waits.'),
+        excludeSelectors: SnapshotScopeOptions.excludeSelectors,
+        ignoreRoles: SnapshotScopeOptions.ignoreRoles,
+        contentStableMs: z
+          .number()
+          .int()
+          .positive()
+          .max(30_000)
+          .optional()
+          .describe('Wait until scoped text length is stable for this many milliseconds.'),
         timeoutMs: z.number().int().positive().max(30_000).optional(),
         ...OptionalTarget
       }
@@ -456,7 +544,7 @@ export function registerBrowserTools(server: ToolRegistrar, bridge: BrowserBridg
           content: [
             {
               type: 'text' as const,
-              text: 'wait_for requires at least one of text, selector, or urlIncludes'
+              text: 'wait_for requires at least one wait condition'
             }
           ]
         };

@@ -1,10 +1,21 @@
 export function isPasswordLike(element: any): boolean;
 export type SnapshotMode = 'compact' | 'full' | 'visible';
-export interface SnapshotOptions {
+export type SnapshotScope = 'document' | 'main' | 'article' | 'feed';
+export interface SnapshotScopeOptions {
+  scope?: SnapshotScope;
+  excludeSelectors?: string[];
+  ignoreRoles?: string[];
+}
+export interface SnapshotOptions extends SnapshotScopeOptions {
   mode?: SnapshotMode;
   now?: number;
   textLimit?: number;
   limit?: number;
+}
+export interface ScopeRootHint {
+  tag: string;
+  role?: string;
+  selectorHint?: string;
 }
 export interface ElementBounds {
   x: number;
@@ -23,6 +34,26 @@ export interface ElementMatch {
   value?: string;
   visible?: boolean;
 }
+export interface FeedPost {
+  author?: string;
+  text: string;
+  relativeTime?: string;
+  absoluteTime?: string;
+  isLive?: boolean;
+  wasLive?: boolean;
+  postUrl?: string;
+}
+export function resolveScopeRoot(documentRef?: Document, scope?: SnapshotScope): Element;
+export function scopedBodyText(
+  documentRef?: Document,
+  options?: SnapshotOptions
+): {
+  text: string;
+  scopeRoot: Element;
+  scopeApplied: SnapshotScope;
+  excludeSelectors: string[];
+  ignoreRoles: string[];
+};
 export function cleanupRefStore(documentRef?: Document, now?: number): { retained: number; ttlMs: number; maxRefs: number };
 export function buildSnapshotFromDocument(documentRef?: Document, options?: SnapshotOptions): {
   title: string;
@@ -39,6 +70,9 @@ export function buildSnapshotFromDocument(documentRef?: Document, options?: Snap
   textBytesOmitted?: number;
   warning?: string;
   regions?: Array<Record<string, unknown>>;
+  scopeApplied?: SnapshotScope;
+  scopeRoot?: ScopeRootHint;
+  excludedCount?: number;
 };
 export function buildVisibleSnapshotFromDocument(documentRef?: Document, options?: SnapshotOptions): {
   title: string;
@@ -86,12 +120,29 @@ export function extractElements(
   count: number;
   omitted: number;
 };
+export function extractFeedPosts(
+  documentRef?: Document,
+  options?: SnapshotScopeOptions & { maxPosts?: number }
+): {
+  posts: FeedPost[];
+  count: number;
+  omitted?: number;
+  scopeApplied: SnapshotScope;
+};
 export function performClickAt(params: { x: number; y: number }, documentRef?: Document): { clicked: boolean; x: number; y: number; ref: string };
 export function performKeypress(params: { keys: string | string[] }, documentRef?: Document): { pressed: string[] };
 export function waitForCondition(
-  params?: { text?: string; selector?: string; urlIncludes?: string; timeoutMs?: number },
+  params?: SnapshotScopeOptions & {
+    text?: string;
+    selector?: string;
+    urlIncludes?: string;
+    selectorAbsent?: boolean;
+    textInScope?: string;
+    contentStableMs?: number;
+    timeoutMs?: number;
+  },
   documentRef?: Document
-): Promise<{ matched: boolean; reason: string; elapsedMs: number; title?: string; url?: string }>;
+): Promise<{ matched: boolean; reason: string; condition: string; elapsedMs: number; title?: string; url?: string }>;
 export function pageStatus(documentRef?: Document): Record<string, unknown>;
 export function installConsoleCapture(windowRef?: Window): { installed: boolean };
 export function getConsoleLogs(params?: { levels?: string[]; limit?: number }): {
