@@ -10,6 +10,19 @@ function loadSecurity() {
   return (context as any).BrowserControlSecurity;
 }
 
+function withNavigateMetadata(expected: Record<string, unknown>, requestedUrl?: string) {
+  const security = loadSecurity();
+  const requested = requestedUrl ?? String(expected.url ?? '');
+  const finalUrl = String(expected.url ?? requested);
+  return {
+    ...expected,
+    requestedUrl: requested,
+    finalUrl,
+    redirected: !security.urlsEquivalent(requested, finalUrl),
+    url: finalUrl
+  };
+}
+
 function loadBackgroundHarness({
   settings,
   tabs,
@@ -168,7 +181,14 @@ function loadBackgroundHarness({
   (context as any).globalThis = context;
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8'), context);
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/background.js'), 'utf8'), context);
-  return Object.assign((context as any).BrowserControlBackground, { sentMessages, captures, tabs });
+  return Object.assign((context as any).BrowserControlBackground, {
+    sentMessages,
+    captures,
+    tabs,
+    advanceTime(ms: number) {
+      now += ms;
+    }
+  });
 }
 
 describe('extension security helpers', () => {
@@ -321,8 +341,17 @@ describe('extension background origin enforcement', () => {
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      protocolVersion: 4,
-      features: expect.arrayContaining(['act-observe', 'navigate-pending-warning', 'snapshot-text-limit', 'session-tabs', 'visible-snapshot'])
+      protocolVersion: 5,
+      features: expect.arrayContaining([
+        'act-observe',
+        'navigate-pending-warning',
+        'snapshot-text-limit',
+        'snapshot-scope',
+        'exclusive-claims',
+        'extract-feed-posts',
+        'session-tabs',
+        'visible-snapshot'
+      ])
     });
   });
 
@@ -403,13 +432,15 @@ describe('extension background origin enforcement', () => {
 
     await expect(
       background.handleBridgeRequest('navigate', { tabId: 1, url: 'https://example.com/' })
-    ).resolves.toEqual({
-      id: 1,
-      url: 'https://example.com/',
-      title: 'Example Domain',
-      status: 'complete',
-      source: 'extension'
-    });
+    ).resolves.toEqual(
+      withNavigateMetadata({
+        id: 1,
+        url: 'https://example.com/',
+        title: 'Example Domain',
+        status: 'complete',
+        source: 'extension'
+      })
+    );
   });
 
   it('runs requested after observations after a page action without forwarding after to content', async () => {
@@ -490,17 +521,19 @@ describe('extension background origin enforcement', () => {
           pageStatus: true
         }
       })
-    ).resolves.toEqual({
-      id: 1,
-      url: 'https://example.com/',
-      title: 'Example Domain',
-      status: 'complete',
-      source: 'extension',
-      after: {
-        snapshot: { action: 'snapshot', params: {} },
-        pageStatus: { action: 'page_status', params: {} }
-      }
-    });
+    ).resolves.toEqual(
+      withNavigateMetadata({
+        id: 1,
+        url: 'https://example.com/',
+        title: 'Example Domain',
+        status: 'complete',
+        source: 'extension',
+        after: {
+          snapshot: { action: 'snapshot', params: {} },
+          pageStatus: { action: 'page_status', params: {} }
+        }
+      })
+    );
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
       { tabId: 1, message: { target: 'cbc-content', action: 'snapshot', params: {} } },
       { tabId: 1, message: { target: 'cbc-content', action: 'page_status', params: {} } }
@@ -529,7 +562,7 @@ describe('extension background origin enforcement', () => {
 
     await expect(
       background.handleBridgeRequest('click', { tabId: 1, ref: 'h1', after: { waitFor: { timeoutMs: 1000 } } })
-    ).rejects.toThrow('after.waitFor requires at least one of text, selector, or urlIncludes');
+    ).rejects.toThrow('after.waitFor requires at least one wait condition');
     expect(background.sentMessages).toEqual([]);
   });
 
@@ -696,15 +729,17 @@ describe('extension background origin enforcement', () => {
 
     await expect(
       background.handleBridgeRequest('navigate', { tabId: 1, url: 'https://example.com/' })
-    ).resolves.toEqual({
-      id: 1,
-      url: 'https://example.com/',
-      title: 'Example Domain',
-      status: 'loading',
-      source: 'extension',
-      warning: 'Navigation did not finish loading within 15s; tab may still be loading.',
-      pending: true
-    });
+    ).resolves.toEqual(
+      withNavigateMetadata({
+        id: 1,
+        url: 'https://example.com/',
+        title: 'Example Domain',
+        status: 'loading',
+        source: 'extension',
+        warning: 'Navigation did not finish loading within 15s; tab may still be loading.',
+        pending: true
+      })
+    );
   });
 
   it('creates a new tab for navigate without tabId when the active tab id is stale', async () => {
@@ -735,13 +770,15 @@ describe('extension background origin enforcement', () => {
       }
     });
 
-    await expect(background.handleBridgeRequest('navigate', { url: 'https://allowed.example/next' })).resolves.toEqual({
-      id: 3,
-      url: 'https://allowed.example/next',
-      title: 'New Tab',
-      status: 'complete',
-      source: 'extension'
-    });
+    await expect(background.handleBridgeRequest('navigate', { url: 'https://allowed.example/next' })).resolves.toEqual(
+      withNavigateMetadata({
+        id: 3,
+        url: 'https://allowed.example/next',
+        title: 'New Tab',
+        status: 'complete',
+        source: 'extension'
+      })
+    );
     expect(tabs).toHaveLength(2);
     expect(tabs[0]).toMatchObject({ id: 2, url: 'https://allowed.example/docs' });
     expect(tabs[1]).toMatchObject({ id: 3, url: 'https://allowed.example/next' });
@@ -778,13 +815,15 @@ describe('extension background origin enforcement', () => {
       tabs
     });
 
-    await expect(background.handleBridgeRequest('navigate', { url: 'https://allowed.example/next' })).resolves.toEqual({
-      id: 1,
-      url: 'https://allowed.example/next',
-      title: 'Allowed',
-      status: 'complete',
-      source: 'extension'
-    });
+    await expect(background.handleBridgeRequest('navigate', { url: 'https://allowed.example/next' })).resolves.toEqual(
+      withNavigateMetadata({
+        id: 1,
+        url: 'https://allowed.example/next',
+        title: 'Allowed',
+        status: 'complete',
+        source: 'extension'
+      })
+    );
     expect(tabs).toHaveLength(2);
     expect(tabs[1]).toMatchObject({ id: 2, url: 'https://allowed.example/other' });
   });
@@ -814,13 +853,15 @@ describe('extension background origin enforcement', () => {
     await background.handleBridgeRequest('claim_tab', { tabId: 1 });
     tabs[0].url = 'https://blocked.example/drifted';
 
-    await expect(background.handleBridgeRequest('navigate', { sessionTabId: 'tab-1', url: 'https://allowed.example/next' })).resolves.toEqual({
-      id: 1,
-      url: 'https://allowed.example/next',
-      title: 'Allowed',
-      status: 'complete',
-      source: 'extension'
-    });
+    await expect(background.handleBridgeRequest('navigate', { sessionTabId: 'tab-1', url: 'https://allowed.example/next' })).resolves.toEqual(
+      withNavigateMetadata({
+        id: 1,
+        url: 'https://allowed.example/next',
+        title: 'Allowed',
+        status: 'complete',
+        source: 'extension'
+      })
+    );
   });
 
   it('creates a tab for navigate without tabId when no allowed operable tab exists', async () => {
@@ -843,13 +884,15 @@ describe('extension background origin enforcement', () => {
       tabs
     });
 
-    await expect(background.handleBridgeRequest('navigate', { url: 'https://example.com/start' })).resolves.toEqual({
-      id: 2,
-      url: 'https://example.com/start',
-      title: 'New Tab',
-      status: 'complete',
-      source: 'extension'
-    });
+    await expect(background.handleBridgeRequest('navigate', { url: 'https://example.com/start' })).resolves.toEqual(
+      withNavigateMetadata({
+        id: 2,
+        url: 'https://example.com/start',
+        title: 'New Tab',
+        status: 'complete',
+        source: 'extension'
+      })
+    );
     expect(tabs).toHaveLength(2);
     expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start' });
   });
@@ -1345,5 +1388,149 @@ describe('extension background origin enforcement', () => {
       'screenshot capture was blocked by Chrome permissions'
     );
     expect(background.captures).toEqual([{ windowId: 1, options: { format: 'png' } }]);
+  });
+
+  it('rejects exclusive claim conflicts with structured holder metadata', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ]
+    });
+
+    await background.handleBridgeRequest('name_session', { name: 'Audit A' });
+    await expect(
+      background.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-a',
+        owner: 'Agent A',
+        ttlMs: 60_000
+      })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-a', owner: 'Agent A' });
+
+    try {
+      await background.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-b',
+        ttlMs: 60_000
+      });
+      throw new Error('expected conflict');
+    } catch (error) {
+      expect((error as Error).message).toContain('TAB_EXCLUSIVE_CLAIM_CONFLICT');
+      const payload = JSON.parse((error as Error).message);
+      expect(payload).toMatchObject({
+        code: 'TAB_EXCLUSIVE_CLAIM_CONFLICT',
+        tabId: 2,
+        holder: { ownerId: 'owner-a', owner: 'Agent A', sessionName: 'Audit A' }
+      });
+    }
+  });
+
+  it('allows same-owner exclusive lease renewal and expiry release', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(
+      background.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-a', ttlMs: 1000 })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-a' });
+
+    background.advanceTime(1500);
+
+    await expect(
+      background.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-b', ttlMs: 1000 })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
+  });
+
+  it('navigates with active:false without activating the tab', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: false,
+        highlighted: false,
+        title: 'Background',
+        url: 'https://allowed.example/docs',
+        windowId: 1,
+        status: 'complete',
+        _activateAfterGets: 2,
+        _navigateFinal: { title: 'Next', url: 'https://allowed.example/next' }
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await expect(
+      background.handleBridgeRequest('navigate', { tabId: 1, url: 'https://allowed.example/next', active: false })
+    ).resolves.toMatchObject({
+      finalUrl: 'https://allowed.example/next',
+      redirected: false
+    });
+    expect(tabs[0].active).toBe(false);
+  });
+
+  it('reports redirected=true when final URL differs from requested URL', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Allowed',
+          url: 'https://allowed.example/docs',
+          windowId: 1,
+          status: 'complete',
+          _navigateFinal: { title: 'Canonical', url: 'https://allowed.example/canonical/' }
+        }
+      ]
+    });
+
+    await expect(
+      background.handleBridgeRequest('navigate', { tabId: 1, url: 'https://allowed.example/vanity' })
+    ).resolves.toMatchObject({
+      requestedUrl: 'https://allowed.example/vanity',
+      finalUrl: 'https://allowed.example/canonical/',
+      redirected: true,
+      url: 'https://allowed.example/canonical/'
+    });
   });
 });
