@@ -2,21 +2,24 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { BrokerClient } from './broker-client.js';
 import { ensureBroker, getBrokerOwnership } from './broker-lifecycle.js';
-import { assertSafeHost, getBrokerHost, getBrokerPort, getBrokerUrl, getToken } from './env.js';
+import { assertSafeHost, getBrokerHost, getBrokerPort, getBrokerUrl, resolveToken } from './env.js';
 import { ADAPTER_PROTOCOL_VERSION, registerBrowserTools } from './tools.js';
 
 export async function main(): Promise<void> {
-  const token = getToken();
+  const { token, issue: tokenIssue } = resolveToken();
   const host = getBrokerHost();
   const port = getBrokerPort();
   const url = getBrokerUrl();
   assertSafeHost(host);
 
-  const brokerClient = new BrokerClient({ url, token });
-  const lifecycleOptions = { url, token, host, port };
+  const brokerClient = new BrokerClient({ url, token: token ?? '' });
+  const lifecycleOptions = { url, token: token ?? '', host, port };
   const ensureBrokerReady = () => ensureBroker(lifecycleOptions);
 
   const connectBridge = async () => {
+    if (tokenIssue) {
+      throw new Error('CHROME_BROWSER_CONTROL_TOKEN is not configured');
+    }
     const lifecycle = await ensureBrokerReady();
     if (lifecycle.authFailed) {
       throw new Error(lifecycle.error || 'Broker rejected the configured pairing token');
@@ -54,7 +57,8 @@ export async function main(): Promise<void> {
       registeredToolCount,
       brokerOwnership: getBrokerOwnership(),
       brokerPort: port,
-      ensureBroker: ensureBrokerReady
+      ...(tokenIssue ? { tokenIssue } : {}),
+      ensureBroker: tokenIssue ? undefined : ensureBrokerReady
     })
   });
 
@@ -63,14 +67,20 @@ export async function main(): Promise<void> {
     registeredToolCount
   });
 
-  try {
-    await connectBridge();
-    console.error(`[chrome-browser-control] Connected to Chrome broker at ws://${host}:${port}`);
-  } catch (error) {
+  if (tokenIssue) {
     console.error(
-      `[chrome-browser-control] Could not connect to Chrome broker at ws://${host}:${port}: ${(error as Error).message}`
+      `[chrome-browser-control] CHROME_BROWSER_CONTROL_TOKEN is ${tokenIssue}. Call browser_status for setup coaching before using other tools.`
     );
-    console.error('[chrome-browser-control] MCP tools will retry broker autoload on browser_status until the bridge is ready.');
+  } else {
+    try {
+      await connectBridge();
+      console.error(`[chrome-browser-control] Connected to Chrome broker at ws://${host}:${port}`);
+    } catch (error) {
+      console.error(
+        `[chrome-browser-control] Could not connect to Chrome broker at ws://${host}:${port}: ${(error as Error).message}`
+      );
+      console.error('[chrome-browser-control] MCP tools will retry broker autoload on browser_status until the bridge is ready.');
+    }
   }
 
   const transport = new StdioServerTransport();
