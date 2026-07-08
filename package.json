@@ -3,12 +3,22 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Local MCP server and Chrome MV3 extension for controlling the current Chrome profile from any stdio MCP host.",
+  "bin": {
+    "chrome-browser-control": "./dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "extension",
+    "package.json",
+    "README.md"
+  ],
   "scripts": {
     "broker": "tsx server/broker-main.ts",
     "mcp": "tsx server/index.ts",
     "start": "tsx server/index.ts",
-    "build": "tsc --noEmit && node --check extension/security.js && node --check extension/background.js && node --check extension/content-core.js && node --check extension/content.js && node --check extension/offscreen.js && node --check extension/popup.js",
+    "build": "tsc -p tsconfig.build.json && node --check extension/security.js && node --check extension/background.js && node --check extension/content-core.js && node --check extension/content.js && node --check extension/offscreen.js && node --check extension/popup.js",
     "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "setup": "node scripts/setup.mjs",
     "doctor": "node scripts/doctor.mjs",
