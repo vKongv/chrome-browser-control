@@ -21,6 +21,24 @@ describe('protocol validation', () => {
     expect(() => parseClientHello({ kind: 'hello', token: 'dev-token' })).toThrow();
   });
 
+  it('accepts MCP client hello role with adapter metadata', () => {
+    expect(
+      parseClientHello({
+        kind: 'hello',
+        token: 'dev-token',
+        role: 'mcp_client',
+        adapterProtocolVersion: 1,
+        registeredToolCount: 22
+      })
+    ).toEqual({
+      kind: 'hello',
+      token: 'dev-token',
+      role: 'mcp_client',
+      adapterProtocolVersion: 1,
+      registeredToolCount: 22
+    });
+  });
+
   it('accepts MCP client hello role', () => {
     expect(parseClientHello({ kind: 'hello', token: 'dev-token', role: 'mcp_client' })).toEqual({
       kind: 'hello',

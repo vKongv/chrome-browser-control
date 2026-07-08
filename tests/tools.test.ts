@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BridgeAction } from '../server/protocol.js';
-import { registerBrowserTools, ToolRegistrar } from '../server/tools.js';
+import { ADAPTER_PROTOCOL_VERSION, registerBrowserTools, ToolRegistrar } from '../server/tools.js';
+import { buildNextAction } from '../server/status-coaching.js';
 
 class FakeServer implements ToolRegistrar {
   tools = new Map<string, (args: any) => Promise<any>>();
@@ -33,11 +34,12 @@ class FakeBridge {
 }
 
 describe('registerBrowserTools', () => {
-  it('registers the required MCP tools', () => {
+  it('registers the required MCP tools and returns the tool count', () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
-    registerBrowserTools(server, bridge);
+    const count = registerBrowserTools(server, bridge);
 
+    expect(count).toBe(22);
     expect([...server.tools.keys()].sort()).toEqual([
       'browser_status',
       'claim_tab',
@@ -274,7 +276,13 @@ describe('registerBrowserTools', () => {
       features: ['navigate-pending-warning'],
       session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
     };
-    registerBrowserTools(server, bridge);
+    registerBrowserTools(server, bridge, {
+      getStatusContext: () => ({
+        adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
+        registeredToolCount: 22,
+        brokerOwnership: 'adopted'
+      })
+    });
 
     const result = await server.tools.get('browser_status')?.({});
     const status = JSON.parse(result.content[0].text);
@@ -282,8 +290,8 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([{ action: 'ping', params: {} }]);
     expect(status).toMatchObject({
       ready: true,
-      adapter: { connected: true },
-      broker: { reachable: true },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 22 },
+      broker: { reachable: true, ownership: 'adopted' },
       extension: {
         connected: true,
         status: 'connected',
@@ -299,6 +307,7 @@ describe('registerBrowserTools', () => {
         session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
       }
     });
+    expect(status.nextAction).toBeUndefined();
   });
 
   it('normalizes stale disconnected ping status when the extension answers ping', async () => {
@@ -321,18 +330,21 @@ describe('registerBrowserTools', () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
     bridge.error = new Error('No Chrome extension connected to broker');
-    registerBrowserTools(server, bridge);
+    registerBrowserTools(server, bridge, {
+      getStatusContext: () => ({ registeredToolCount: 22, brokerPort: 8765 })
+    });
 
     const result = await server.tools.get('browser_status')?.({});
     const status = JSON.parse(result.content[0].text);
 
     expect(status).toMatchObject({
       ready: false,
-      adapter: { connected: true },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 22 },
       broker: { reachable: true },
       extension: { connected: false },
       error: 'No Chrome extension connected to broker'
     });
+    expect(status.nextAction).toContain('extension');
   });
 
   it('reports browser_status when the adapter is not connected to the broker', async () => {
@@ -343,7 +355,17 @@ describe('registerBrowserTools', () => {
       bridge.connectCalls += 1;
       throw new Error('connect ECONNREFUSED 127.0.0.1:8765');
     };
-    registerBrowserTools(server, bridge);
+    registerBrowserTools(server, bridge, {
+      getStatusContext: () => ({
+        brokerPort: 8765,
+        ensureBroker: async () => ({
+          reachable: false,
+          authOk: false,
+          autoloadTimedOut: true,
+          ownership: 'spawned'
+        })
+      })
+    });
 
     const result = await server.tools.get('browser_status')?.({});
     const status = JSON.parse(result.content[0].text);
@@ -351,11 +373,43 @@ describe('registerBrowserTools', () => {
     expect(bridge.connectCalls).toBe(1);
     expect(status).toMatchObject({
       ready: false,
-      adapter: { connected: false },
-      broker: { reachable: false },
+      adapter: { connected: false, protocolVersion: ADAPTER_PROTOCOL_VERSION },
+      broker: { reachable: false, ownership: 'spawned' },
       extension: { connected: false },
       error: 'connect ECONNREFUSED 127.0.0.1:8765'
     });
+    expect(status.nextAction).toContain('autoload timed out');
+  });
+
+  it('coaches token and auth failures through nextAction', async () => {
+    expect(buildNextAction({ ready: false, tokenMissing: true, brokerReachable: false, adapterConnected: false, extensionConnected: false })).toContain(
+      'npm run setup'
+    );
+    expect(
+      buildNextAction({
+        ready: false,
+        authFailed: true,
+        brokerReachable: true,
+        adapterConnected: false,
+        extensionConnected: false,
+        brokerPort: 8765
+      })
+    ).toContain('Token mismatch');
+  });
+
+  it('reports missing token coaching through browser_status', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge, {
+      getStatusContext: () => ({ tokenIssue: 'missing' })
+    });
+
+    const result = await server.tools.get('browser_status')?.({});
+    const status = JSON.parse(result.content[0].text);
+
+    expect(status.ready).toBe(false);
+    expect(status.nextAction).toContain('npm run setup');
+    expect(bridge.calls).toEqual([]);
   });
 
   it('forwards exclusive claim ownerId from adapter options', async () => {
