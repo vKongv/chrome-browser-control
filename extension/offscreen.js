@@ -125,6 +125,7 @@ async function connect(options = {}) {
     if (socket !== ws) return;
     socket = null;
     clearConnectTimeout();
+    chrome.storage.local.remove('adapterStatus').catch(() => undefined);
     if (event.code === 1008) {
       setStatus(`auth_failed: ${event.reason || 'bridge rejected pairing'}`).catch(() => undefined);
     } else if (!opened && event.code === 1006) {

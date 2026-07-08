@@ -362,7 +362,8 @@ describe('registerBrowserTools', () => {
           reachable: false,
           authOk: false,
           autoloadTimedOut: true,
-          ownership: 'spawned'
+          ownership: 'spawned',
+          error: 'Timed out waiting for broker at ws://127.0.0.1:8765 after autoload'
         })
       })
     });
@@ -370,13 +371,13 @@ describe('registerBrowserTools', () => {
     const result = await server.tools.get('browser_status')?.({});
     const status = JSON.parse(result.content[0].text);
 
-    expect(bridge.connectCalls).toBe(1);
+    expect(bridge.connectCalls).toBe(0);
     expect(status).toMatchObject({
       ready: false,
       adapter: { connected: false, protocolVersion: ADAPTER_PROTOCOL_VERSION },
       broker: { reachable: false, ownership: 'spawned' },
       extension: { connected: false },
-      error: 'connect ECONNREFUSED 127.0.0.1:8765'
+      error: 'Timed out waiting for broker at ws://127.0.0.1:8765 after autoload'
     });
     expect(status.nextAction).toContain('autoload timed out');
   });

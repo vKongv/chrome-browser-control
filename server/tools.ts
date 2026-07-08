@@ -275,6 +275,29 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
             )
           );
         }
+
+        if (!lifecycle.authOk) {
+          return toolResult(
+            statusPayload(
+              {
+                ready: false,
+                adapter: adapterBlock(false, { ...context, brokerOwnership: ownership }),
+                broker: brokerBlock(lifecycle.reachable, { ...context, brokerOwnership: ownership }),
+                extension: { connected: false },
+                error: lifecycle.error
+              },
+              { ...context, brokerOwnership: ownership },
+              {
+                ready: false,
+                brokerReachable: lifecycle.reachable,
+                adapterConnected: false,
+                extensionConnected: false,
+                authFailed,
+                autoloadTimedOut
+              }
+            )
+          );
+        }
       }
 
       await bridge.connect();
