@@ -612,6 +612,10 @@ describe('extension content core', () => {
       waitForCondition({ textInScope: 'Scoped ready', scope: 'main', timeoutMs: 50 }, document as unknown as Document)
     ).resolves.toMatchObject({ matched: true, condition: 'textInScope' });
 
+    await expect(
+      waitForCondition({ selector: '#spinner', selectorAbsent: true, timeoutMs: 50 }, document as unknown as Document)
+    ).resolves.toMatchObject({ matched: false, condition: 'timeout' });
+
     const spinner = document.getElementById('spinner');
     spinner?.remove();
 

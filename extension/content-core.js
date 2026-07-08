@@ -804,10 +804,12 @@ function waitForCondition(options = {}, documentRef = document) {
         matched = true;
         reason = 'urlIncludes';
         condition = 'urlIncludes';
-      } else if (options.selectorAbsent === true && options.selector && !documentRef.querySelector(String(options.selector))) {
-        matched = true;
-        reason = 'selectorAbsent';
-        condition = 'selectorAbsent';
+      } else if (options.selectorAbsent === true) {
+        if (options.selector && !documentRef.querySelector(String(options.selector))) {
+          matched = true;
+          reason = 'selectorAbsent';
+          condition = 'selectorAbsent';
+        }
       } else if (options.selector && documentRef.querySelector(String(options.selector))) {
         matched = true;
         reason = 'selector';
@@ -1086,6 +1088,7 @@ globalThis.BrowserControlContentCore = {
   performScroll,
   queryElements,
   extractElements,
+  extractFeedPosts,
   performClickAt,
   performKeypress,
   waitForCondition,

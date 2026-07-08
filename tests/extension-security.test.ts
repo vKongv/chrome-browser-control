@@ -897,6 +897,36 @@ describe('extension background origin enforcement', () => {
     expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start' });
   });
 
+  it('creates a background tab when navigate has no target and active is false', async () => {
+    const tabs: Array<Record<string, unknown>> = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Extensions',
+        url: 'chrome://extensions',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs
+    });
+
+    await expect(
+      background.handleBridgeRequest('navigate', { url: 'https://example.com/start', active: false })
+    ).resolves.toMatchObject({
+      id: 2,
+      finalUrl: 'https://example.com/start'
+    });
+    expect(tabs[0]).toMatchObject({ id: 1, active: true });
+    expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start', active: false });
+  });
+
   it('returns a clear error when an explicit navigate tabId is missing', async () => {
     const background = loadBackgroundHarness({
       settings: {
@@ -1474,7 +1504,7 @@ describe('extension background origin enforcement', () => {
     ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
   });
 
-  it('does not let advisory release revoke another owner exclusive lease', async () => {
+  it('does not let advisory claim overwrite exclusive lease metadata', async () => {
     const background = loadBackgroundHarness({
       settings: {
         bridgeUrl: 'ws://127.0.0.1:8765',
@@ -1504,26 +1534,8 @@ describe('extension background origin enforcement', () => {
     });
 
     await background.handleBridgeRequest('name_session', { name: 'Caller B' });
-    await background.handleBridgeRequest('claim_tab', { tabId: 2 });
-    await expect(background.handleBridgeRequest('release_tab', { tabId: 2 })).resolves.toMatchObject({
-      released: true,
-      tabId: 2
-    });
-
-    await expect(background.handleBridgeRequest('list_tabs')).resolves.toEqual([
-      expect.objectContaining({
-        id: 2,
-        exclusiveLease: expect.objectContaining({ ownerId: 'owner-a' })
-      })
-    ]);
-
     try {
-      await background.handleBridgeRequest('claim_tab', {
-        tabId: 2,
-        exclusive: true,
-        ownerId: 'owner-c',
-        ttlMs: 60_000
-      });
+      await background.handleBridgeRequest('claim_tab', { tabId: 2 });
       throw new Error('expected conflict');
     } catch (error) {
       const payload = JSON.parse((error as Error).message);
@@ -1532,8 +1544,37 @@ describe('extension background origin enforcement', () => {
         tabId: 2,
         holder: { ownerId: 'owner-a', owner: 'Agent A', sessionName: 'Holder A' }
       });
-      expect(payload.holder.sessionName).not.toBe('Caller B');
     }
+
+    await expect(background.handleBridgeRequest('list_tabs')).resolves.toEqual([
+      expect.objectContaining({
+        id: 2,
+        exclusiveLease: expect.objectContaining({ ownerId: 'owner-a' })
+      })
+    ]);
+
+    await expect(
+      background.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-a',
+        ttlMs: 60_000
+      })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-a', leaseRenewed: true });
+
+    await expect(background.handleBridgeRequest('release_tab', { tabId: 2 })).resolves.toMatchObject({
+      released: true,
+      tabId: 2
+    });
+
+    await expect(
+      background.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-c',
+        ttlMs: 60_000
+      })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-c' });
   });
 
   it('navigates with active:false without activating the tab', async () => {

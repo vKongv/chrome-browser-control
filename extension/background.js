@@ -282,7 +282,8 @@ async function resolveNavigateTabId(params = {}, url, allowedOrigins) {
     if (live && isOperableTab(live, allowedOrigins)) return live.id;
   }
 
-  const created = await chrome.tabs.create({ url, active: true });
+  const shouldActivate = params.active !== false;
+  const created = await chrome.tabs.create({ url, active: shouldActivate });
   if (!created?.id) throw new Error('Failed to create a tab for navigation');
   return created.id;
 }
@@ -575,6 +576,11 @@ async function handleBridgeRequest(action, params = {}) {
       const exclusive = params.exclusive === true;
       if (exclusive && !params.ownerId) throw new Error('exclusive claim_tab requires ownerId');
       const existingLease = getLeaseForTab(tab.id);
+      // Advisory claims must not overwrite an active exclusive lease holder's claim metadata
+      // (that would prevent the holder from clearing tabLeases on release).
+      if (!exclusive && existingLease) {
+        throw exclusiveLeaseConflictError(tab.id, existingLease);
+      }
       if (exclusive && existingLease && existingLease.ownerId !== params.ownerId) {
         throw exclusiveLeaseConflictError(tab.id, existingLease);
       }
