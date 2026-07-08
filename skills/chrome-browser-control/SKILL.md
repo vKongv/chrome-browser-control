@@ -1,6 +1,6 @@
 ---
 name: chrome-browser-control
-description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when an agent needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, visible_snapshot, query_elements, extract_elements, wait_for, page_status, console_logs, collect_scroll, and screenshot.
+description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when an agent needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, visible_snapshot, query_elements, extract_elements, extract_feed_posts, wait_for, page_status, console_logs, collect_scroll, and screenshot.
 ---
 
 # Chrome Browser Control
@@ -21,13 +21,16 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 2. Pick a tab deliberately.
    - Use `list_tabs` for existing pages.
    - Use `navigate` for an allowed URL when opening or reusing a page is appropriate.
+   - For batch audits, prefer `navigate({ active: false })` to avoid stealing the user's focused tab.
    - For multi-step work, call `claim_tab` and keep the returned `sessionTabId`.
+   - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })` and handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab.
    - Do not rely on active-tab fallback for a task with more than one action.
 
 3. Collect the cheapest state that answers the next question.
    - Use `query_elements` when selector, role, text, or visibility filters are enough.
    - Use `visible_snapshot` for viewport-bound UI, virtualized pages, coordinate planning, and before visual interactions.
-   - Use compact `snapshot` for broad page orientation.
+   - Use compact `snapshot` for broad page orientation. Compact defaults to main-landmark scope when present; pass `scope: "document"` for legacy full-body text.
+   - Use `extract_feed_posts` for structured post records (author, text, times, live flags) on feed-like pages.
    - Use `snapshot({ mode: "full", textLimit })` only when long page text is needed.
    - Use `extract_elements` for bounded selector extraction instead of raw JavaScript evaluation.
 
@@ -39,7 +42,7 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
    - After navigation, reload, major DOM changes, or stale-ref errors, collect fresh state.
 
 5. Wait and verify after actions.
-   - Use `wait_for` for expected selector/text/URL changes.
+   - Use `wait_for` for expected selector/text/URL changes, selector absence, scoped text, or bounded content stability.
    - Use `page_status` for title, URL, ready state, visibility, viewport, scroll, and lightweight resource counts.
    - Use `console_logs` for logs captured after content-script injection.
    - Prefer `after: { waitFor, snapshot, pageStatus }` when the wait or verification is directly caused by the action; observations run in that order.
@@ -54,7 +57,7 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 
 - Page overview: `snapshot` or `visible_snapshot`.
 - Specific element lookup: `query_elements`.
-- Structured content extraction: `extract_elements`.
+- Structured content extraction: `extract_elements` or `extract_feed_posts` for feed/post heuristics.
 - Infinite scroll or feeds: `collect_scroll`.
 - Post-action synchronization: `wait_for`.
 - Debugging: `page_status`, then `console_logs`.
@@ -81,7 +84,7 @@ Use `after` to combine an action with its immediate verification:
 Rules:
 - Supported on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, and `collect_scroll`.
 - Observations run as `waitFor`, then `snapshot`, then `pageStatus`.
-- `waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
+- `waitFor` must include at least one wait condition (`text`, `selector`, `urlIncludes`, `selectorAbsent` + `selector`, `textInScope`, or `contentStableMs`); `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
 - `snapshot` can be `true` or options with `mode`, `textLimit`, and/or `limit`.
 - If the base action succeeds but an observation fails, inspect `after.ok === false` and `after.error`; do not assume the base action was rolled back.
 
