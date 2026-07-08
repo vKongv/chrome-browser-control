@@ -21,16 +21,17 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 2. Pick a tab deliberately.
    - Use `list_tabs` for existing pages.
    - Use `navigate` for an allowed URL when opening or reusing a page is appropriate.
+   - After `navigate`, verify the landing entity with `requestedUrl`, `finalUrl`, and `redirected` (`url` aliases `finalUrl`) — especially after vanity URLs or redirects.
    - For batch audits, prefer `navigate({ active: false })` to avoid stealing the user's focused tab.
-   - For multi-step work, call `claim_tab` and keep the returned `sessionTabId`.
-   - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })` and handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab.
+   - For multi-step work, call `claim_tab` (advisory by default) and keep the returned `sessionTabId`.
+   - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases.
    - Do not rely on active-tab fallback for a task with more than one action.
 
 3. Collect the cheapest state that answers the next question.
    - Use `query_elements` when selector, role, text, or visibility filters are enough.
    - Use `visible_snapshot` for viewport-bound UI, virtualized pages, coordinate planning, and before visual interactions.
-   - Use compact `snapshot` for broad page orientation. Compact defaults to main-landmark scope when present; pass `scope: "document"` for legacy full-body text.
-   - Use `extract_feed_posts` for structured post records (author, text, times, live flags) on feed-like pages.
+   - Use compact `snapshot` for broad page orientation. Compact defaults to main-landmark scope when present; pass `scope: "document"` for legacy full-body text. Tune with `excludeSelectors` or `ignoreRoles` when chrome noise persists; compact/main defaults ignore `dialog` role.
+   - Use `extract_feed_posts` for structured post records (author, text, times, live flags) on feed-like pages. Times and LIVE flags may be omitted when the DOM does not expose them — report honest gaps instead of guessing.
    - Use `snapshot({ mode: "full", textLimit })` only when long page text is needed.
    - Use `extract_elements` for bounded selector extraction instead of raw JavaScript evaluation.
 
@@ -56,6 +57,7 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 ## Tool Selection
 
 - Page overview: `snapshot` or `visible_snapshot`.
+- Landing verification: `navigate` result fields `requestedUrl`, `finalUrl`, `redirected`.
 - Specific element lookup: `query_elements`.
 - Structured content extraction: `extract_elements` or `extract_feed_posts` for feed/post heuristics.
 - Infinite scroll or feeds: `collect_scroll`.
@@ -89,6 +91,8 @@ Rules:
 - If the base action succeeds but an observation fails, inspect `after.ok === false` and `after.error`; do not assume the base action was rolled back.
 
 ## Feeds And Timelines
+
+Use `extract_feed_posts` first when you need author, text, times, or live flags from visible feed cards. Treat missing `relativeTime`, `absoluteTime`, or `isLive` as unknown — the extractor omits fields the DOM does not expose rather than inferring them.
 
 Use `collect_scroll` for lazy-loaded feeds instead of manually scrolling one step at a time.
 
