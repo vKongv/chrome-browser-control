@@ -61,7 +61,14 @@ const tabLeases = new Map();
 
 function sweepExpiredLeases(now = Date.now()) {
   for (const [tabId, lease] of tabLeases) {
-    if (!lease?.expiresAt || lease.expiresAt <= now) tabLeases.delete(tabId);
+    if (!lease?.expiresAt || lease.expiresAt <= now) {
+      tabLeases.delete(tabId);
+      for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
+        if (claim.tabId !== tabId || !claim.exclusive || claim.ownerId !== lease.ownerId) continue;
+        claimedTabs.delete(sessionTabId);
+        if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
+      }
+    }
   }
 }
 
@@ -599,6 +606,11 @@ async function handleBridgeRequest(action, params = {}) {
       ) {
         // Do not reuse an advisory (or other-owner) sessionTabId for a new exclusive lease;
         // the prior caller could release and clear the lease.
+        claimedTabs.delete(existing.sessionTabId);
+        if (currentSessionTabId === existing.sessionTabId) currentSessionTabId = '';
+        sessionTabId = `tab-${(nextClaimId++).toString(36)}`;
+      } else if (existing?.exclusive && !existingLease) {
+        // Expired exclusive claim row; do not reuse sessionTabId for a new caller.
         claimedTabs.delete(existing.sessionTabId);
         if (currentSessionTabId === existing.sessionTabId) currentSessionTabId = '';
         sessionTabId = `tab-${(nextClaimId++).toString(36)}`;
