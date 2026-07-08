@@ -46,6 +46,7 @@ describe('registerBrowserTools', () => {
       'collect_scroll',
       'console_logs',
       'extract_elements',
+      'extract_feed_posts',
       'finalize_tabs',
       'keypress',
       'list_tabs',
@@ -194,7 +195,7 @@ describe('registerBrowserTools', () => {
 
     expect(result).toMatchObject({
       isError: true,
-      content: [{ text: 'wait_for requires at least one of text, selector, or urlIncludes' }]
+      content: [{ text: 'wait_for requires at least one wait condition' }]
     });
     expect(bridge.calls).toEqual([]);
   });
@@ -208,7 +209,7 @@ describe('registerBrowserTools', () => {
 
     expect(result).toMatchObject({
       isError: true,
-      content: [{ text: 'after.waitFor requires at least one of text, selector, or urlIncludes' }]
+      content: [{ text: 'after.waitFor requires at least one wait condition' }]
     });
     expect(bridge.calls).toEqual([]);
   });
@@ -355,5 +356,45 @@ describe('registerBrowserTools', () => {
       extension: { connected: false },
       error: 'connect ECONNREFUSED 127.0.0.1:8765'
     });
+  });
+
+  it('forwards exclusive claim ownerId from adapter options', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge, { ownerId: 'adapter-owner-1' });
+
+    await server.tools.get('claim_tab')?.({ tabId: 3, exclusive: true, owner: 'Audit bot' });
+
+    expect(bridge.calls).toEqual([
+      {
+        action: 'claim_tab',
+        params: { tabId: 3, exclusive: true, owner: 'Audit bot', ownerId: 'adapter-owner-1' }
+      }
+    ]);
+  });
+
+  it('forwards snapshot scope options to the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('snapshot')?.({
+      scope: 'main',
+      excludeSelectors: ['nav'],
+      ignoreRoles: ['dialog'],
+      tabId: 3
+    });
+
+    expect(bridge.calls).toEqual([
+      {
+        action: 'snapshot',
+        params: {
+          scope: 'main',
+          excludeSelectors: ['nav'],
+          ignoreRoles: ['dialog'],
+          tabId: 3
+        }
+      }
+    ]);
   });
 });

@@ -7,6 +7,7 @@ import {
   collectScroll,
   cleanupRefStore,
   extractElements,
+  extractFeedPosts,
   findByRef,
   getConsoleLogs,
   installConsoleCapture,
@@ -524,5 +525,157 @@ describe('extension content core', () => {
     const fullBytes = JSON.stringify(buildSnapshotFromDocument(document as unknown as Document, { mode: 'full' })).length;
 
     expect(compactBytes).toBeLessThan(fullBytes * 0.5);
+  });
+
+  it('defaults compact snapshots to main scope and omits nav/footer text', () => {
+    const document = makeDocument(`
+      <nav>Sidebar navigation noise</nav>
+      <main><p>Main feed content for audit</p><button>Like</button></main>
+      <footer>Footer legal copy</footer>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.scopeApplied).toBe('main');
+    expect(snapshot.textPreview).toContain('Main feed content');
+    expect(snapshot.textPreview).not.toContain('Sidebar navigation');
+    expect(snapshot.textPreview).not.toContain('Footer legal');
+  });
+
+  it('uses document scope when explicitly requested', () => {
+    const document = makeDocument(`
+      <nav>Sidebar navigation noise</nav>
+      <main><p>Main feed content</p></main>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document, { scope: 'document' });
+
+    expect(snapshot.scopeApplied).toBe('document');
+    expect(snapshot.textPreview).toContain('Sidebar navigation');
+  });
+
+  it('excludes dialog role subtrees from scoped compact snapshots by default', () => {
+    const document = makeDocument(`
+      <main>
+        <p>Feed text</p>
+        <div role="dialog"><p>Messenger chat noise</p><button>Close chat</button></div>
+      </main>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.textPreview).toContain('Feed text');
+    expect(snapshot.textPreview).not.toContain('Messenger chat');
+    expect(snapshot.excludedCount).toBeGreaterThan(0);
+  });
+
+  it('extracts structured feed posts with times when present', () => {
+    const document = makeDocument(`
+      <main role="feed">
+        <article>
+          <h3>Alice</h3>
+          <p>First post body</p>
+          <time datetime="2026-07-08T10:00:00Z">2h</time>
+        </article>
+        <article>
+          <h3>Bob</h3>
+          <p>Second post body</p>
+          <time datetime="2026-07-08T08:00:00Z">4h</time>
+        </article>
+        <article>
+          <h3>Carol</h3>
+          <p>Third post body <span aria-label="Live now">LIVE</span></p>
+        </article>
+      </main>
+    `);
+
+    const result = extractFeedPosts(document as unknown as Document, { maxPosts: 10 });
+
+    expect(result.count).toBeGreaterThanOrEqual(3);
+    expect(result.posts[0]).toMatchObject({
+      author: 'Alice',
+      text: expect.stringContaining('First post body'),
+      absoluteTime: '2026-07-08T10:00:00Z',
+      relativeTime: '2h'
+    });
+    expect(result.posts[2].isLive).toBe(true);
+    expect(result.scopeApplied).toBe('feed');
+  });
+
+  it('dedupes nested article posts to root candidates only', () => {
+    const document = makeDocument(`
+      <main role="feed">
+        <article>
+          <h3>Outer</h3>
+          <p>Outer post body</p>
+          <article>
+            <h3>Inner</h3>
+            <p>Nested reply body</p>
+          </article>
+        </article>
+        <article>
+          <h3>Second</h3>
+          <p>Second post body</p>
+        </article>
+      </main>
+    `);
+
+    const result = extractFeedPosts(document as unknown as Document, { maxPosts: 10 });
+    expect(result.count).toBe(2);
+    expect(result.posts.map((post) => post.author)).toEqual(['Outer', 'Second']);
+  });
+
+  it('supports extended wait_for conditions', async () => {
+    const document = makeDocument(`
+      <main><p>Scoped ready text</p></main>
+      <div id="spinner">Loading</div>
+    `);
+
+    await expect(
+      waitForCondition({ textInScope: 'Scoped ready', scope: 'main', timeoutMs: 50 }, document as unknown as Document)
+    ).resolves.toMatchObject({ matched: true, condition: 'textInScope' });
+
+    await expect(
+      waitForCondition({ selector: '#spinner', selectorAbsent: true, timeoutMs: 50 }, document as unknown as Document)
+    ).resolves.toMatchObject({ matched: false, condition: 'timeout' });
+
+    const spinner = document.getElementById('spinner');
+    spinner?.remove();
+
+    await expect(
+      waitForCondition({ selector: '#spinner', selectorAbsent: true, timeoutMs: 50 }, document as unknown as Document)
+    ).resolves.toMatchObject({ matched: true, condition: 'selectorAbsent' });
+  });
+
+  it('resets contentStableMs after scoped text drops below minimum length', async () => {
+    vi.useFakeTimers();
+    try {
+      const stableText = 'a'.repeat(100);
+      const document = makeDocument(`<main><p>${stableText}</p></main>`);
+
+      const waitPromise = waitForCondition(
+        { contentStableMs: 300, scope: 'main', timeoutMs: 5000 },
+        document as unknown as Document
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+      const main = document.querySelector('main');
+      main!.innerHTML = '<p>x</p>';
+      await vi.advanceTimersByTimeAsync(100);
+      main!.innerHTML = `<p>${stableText}</p>`;
+
+      await vi.advanceTimersByTimeAsync(200);
+      let settled = false;
+      waitPromise.then(() => {
+        settled = true;
+      });
+      await vi.runOnlyPendingTimersAsync();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(waitPromise).resolves.toMatchObject({ matched: true, condition: 'contentStableMs' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -15,6 +15,7 @@ export const BridgeActionSchema = z.enum([
   'scroll',
   'query_elements',
   'extract_elements',
+  'extract_feed_posts',
   'screenshot',
   'keypress',
   'click_at',

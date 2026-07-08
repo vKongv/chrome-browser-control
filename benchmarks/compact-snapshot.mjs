@@ -39,19 +39,27 @@ window.document.write(makeFixture());
 const document = window.document;
 
 const compact = buildSnapshotFromDocument(document, { mode: 'compact' });
+const scopedCompact = buildSnapshotFromDocument(document, { mode: 'compact', scope: 'main' });
 const full = buildSnapshotFromDocument(document, { mode: 'full' });
 const compactBytes = byteLength(compact);
+const scopedCompactBytes = byteLength(scopedCompact);
 const fullBytes = byteLength(full);
 const reduction = 1 - compactBytes / fullBytes;
+const scopedReduction = 1 - scopedCompactBytes / fullBytes;
 
 const result = {
   compactBytes,
+  scopedCompactBytes,
   fullBytes,
   reductionPercent: Number((reduction * 100).toFixed(2)),
+  scopedReductionPercent: Number((scopedReduction * 100).toFixed(2)),
   compactElements: compact.elements.length,
+  scopedCompactElements: scopedCompact.elements.length,
   fullElements: full.elements.length,
   compactOmittedElements: compact.omittedElements,
-  fullOmittedElements: full.omittedElements
+  scopedCompactOmittedElements: scopedCompact.omittedElements,
+  fullOmittedElements: full.omittedElements,
+  scopedCompactScopeApplied: scopedCompact.scopeApplied
 };
 
 console.log(JSON.stringify(result, null, 2));

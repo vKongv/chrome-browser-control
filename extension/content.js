@@ -35,6 +35,9 @@
         case 'extract_elements':
           result = core.extractElements(message.params || {}, document);
           break;
+        case 'extract_feed_posts':
+          result = core.extractFeedPosts(message.params || {}, document);
+          break;
         case 'click_at':
           result = core.performClickAt(message.params || {}, document);
           break;
