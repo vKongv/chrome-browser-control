@@ -589,7 +589,7 @@ describe('extension content core', () => {
       </main>
     `);
 
-    const result = extractFeedPosts(document as unknown as Document, { maxPosts: 10 });
+    const result = extractFeedPosts({ maxPosts: 10 }, document as unknown as Document);
 
     expect(result.count).toBeGreaterThanOrEqual(3);
     expect(result.posts[0]).toMatchObject({
@@ -620,7 +620,7 @@ describe('extension content core', () => {
       </main>
     `);
 
-    const result = extractFeedPosts(document as unknown as Document, { maxPosts: 10 });
+    const result = extractFeedPosts({ maxPosts: 10 }, document as unknown as Document);
     expect(result.count).toBe(2);
     expect(result.posts.map((post) => post.author)).toEqual(['Outer', 'Second']);
   });

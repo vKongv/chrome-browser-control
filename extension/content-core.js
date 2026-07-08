@@ -970,7 +970,7 @@ function postCandidatesInScope(documentRef, scopeRoot) {
   return matches.filter((element) => !matches.some((other) => other !== element && other.contains(element)));
 }
 
-function extractFeedPosts(documentRef = document, options = {}) {
+function extractFeedPosts(options = {}, documentRef = document) {
   const maxPosts = boundedLimit(options.maxPosts, 10, 50);
   const scopeOptions = resolveSnapshotScopeOptions(documentRef, { ...options, scope: options.scope || 'feed' }, 'compact');
   const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);

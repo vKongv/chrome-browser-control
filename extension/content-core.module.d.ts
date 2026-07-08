@@ -121,8 +121,8 @@ export function extractElements(
   omitted: number;
 };
 export function extractFeedPosts(
-  documentRef?: Document,
-  options?: SnapshotScopeOptions & { maxPosts?: number }
+  options?: SnapshotScopeOptions & { maxPosts?: number },
+  documentRef?: Document
 ): {
   posts: FeedPost[];
   count: number;
