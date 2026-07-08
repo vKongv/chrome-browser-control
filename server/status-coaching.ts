@@ -16,16 +16,16 @@ export interface NextActionInputs {
 
 export function buildNextAction(inputs: NextActionInputs): string | undefined {
   if (inputs.tokenMissing) {
-    return 'Run npm run setup to generate CHROME_BROWSER_CONTROL_TOKEN, then add the same token to your MCP host env block and the extension popup before restarting the MCP server.';
+    return 'Run chrome-browser-control setup to generate CHROME_BROWSER_CONTROL_TOKEN, then add the same token to your MCP host env block and the extension popup before restarting the MCP server.';
   }
 
   if (inputs.tokenInvalid) {
-    return 'CHROME_BROWSER_CONTROL_TOKEN is missing or invalid in the MCP adapter env. Run npm run setup, copy the token into your MCP host config env block, and match it in the extension popup.';
+    return 'CHROME_BROWSER_CONTROL_TOKEN is missing or invalid in the MCP adapter env. Run chrome-browser-control setup, copy the token into your MCP host config env block, and match it in the extension popup.';
   }
 
   if (inputs.authFailed) {
     const port = inputs.brokerPort ?? 8765;
-    return `Token mismatch on port ${port}. Align CHROME_BROWSER_CONTROL_TOKEN in .env.local, your MCP host env, and the extension popup, then restart the MCP server.`;
+    return `Token mismatch on port ${port}. Align CHROME_BROWSER_CONTROL_TOKEN in your user config, MCP host env, and the extension popup, then restart the MCP server.`;
   }
 
   if (inputs.portNotBroker) {
@@ -36,10 +36,10 @@ export function buildNextAction(inputs: NextActionInputs): string | undefined {
   if (!inputs.brokerReachable) {
     if (inputs.autoloadTimedOut) {
       const port = inputs.brokerPort ?? 8765;
-      return `Broker autoload timed out on port ${port}. Start it manually with npm run broker, verify the port is free, and confirm the pairing token matches your MCP host and extension popup.`;
+      return `Broker autoload timed out on port ${port}. Start it manually with chrome-browser-control start, verify the port is free, and confirm the pairing token matches your MCP host and extension popup.`;
     }
     const port = inputs.brokerPort ?? 8765;
-    return `Broker is not reachable on port ${port}. Start it with npm run broker or restart the MCP server so autoload can spawn it, then verify token and port settings.`;
+    return `Broker is not reachable on port ${port}. Run chrome-browser-control start before launching the MCP adapter, or use mcp --autoload as a recovery fallback.`;
   }
 
   if (inputs.adapterConnected && !inputs.extensionConnected) {

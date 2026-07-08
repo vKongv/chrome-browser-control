@@ -1,8 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { getCompiledBrokerMainPath } from './paths.js';
 
 export type BrokerOwnership = 'adopted' | 'spawned' | 'external';
 
@@ -15,6 +14,7 @@ export interface EnsureBrokerOptions {
   host: string;
   port: number;
   spawnTimeoutMs?: number;
+  autoloadEnabled?: boolean;
 }
 
 export interface EnsureBrokerResult {
@@ -31,18 +31,6 @@ let inFlightEnsure: Promise<EnsureBrokerResult> | undefined;
 let cachedSuccess: EnsureBrokerResult | undefined;
 let ownership: BrokerOwnership | undefined;
 let spawnedChild: ChildProcess | undefined;
-
-function repoRoot(): string {
-  return dirname(dirname(fileURLToPath(import.meta.url)));
-}
-
-function brokerEntryPath(): string {
-  return join(repoRoot(), 'server', 'broker-main.ts');
-}
-
-function tsxPath(): string {
-  return join(repoRoot(), 'node_modules', '.bin', 'tsx');
-}
 
 export function getBrokerOwnership(): BrokerOwnership | undefined {
   return ownership;
@@ -168,7 +156,8 @@ function clearSpawnedBrokerState(): void {
 }
 
 function spawnDetachedBroker(host: string, port: number, token: string): ChildProcess {
-  const child = spawn(tsxPath(), [brokerEntryPath()], {
+  const brokerMain = getCompiledBrokerMainPath();
+  const child = spawn(process.execPath, [brokerMain], {
     detached: true,
     stdio: 'ignore',
     env: {
@@ -205,6 +194,7 @@ async function waitForBrokerReady(
 async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBrokerResult> {
   const { url, token, host, port } = options;
   const spawnTimeoutMs = options.spawnTimeoutMs ?? BROKER_AUTOLOAD_TIMEOUT_MS;
+  const autoloadEnabled = options.autoloadEnabled ?? false;
 
   const portOpen = await probePortOpen(host, port);
 
@@ -235,6 +225,14 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
       authOk: false,
       portNotBroker: true,
       error: `Port ${port} is open but did not accept a Chrome Browser Control broker handshake`
+    };
+  }
+
+  if (!autoloadEnabled) {
+    return {
+      reachable: false,
+      authOk: false,
+      error: `Broker is not reachable on port ${port}. Run chrome-browser-control start or use mcp --autoload.`
     };
   }
 
