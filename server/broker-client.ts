@@ -8,6 +8,11 @@ import {
 } from './protocol.js';
 import type { BridgeLike } from './tools.js';
 
+export interface BrokerClientHelloMetadata {
+  adapterProtocolVersion?: number;
+  registeredToolCount?: number;
+}
+
 export interface BrokerClientOptions {
   url: string;
   token: string;
@@ -31,6 +36,7 @@ export class BrokerClient extends EventEmitter implements BridgeLike {
   private authenticated = false;
   private connecting?: Promise<void>;
   private pending = new Map<string, PendingRequest>();
+  private helloMetadata: BrokerClientHelloMetadata = {};
 
   constructor(options: BrokerClientOptions) {
     super();
@@ -42,6 +48,10 @@ export class BrokerClient extends EventEmitter implements BridgeLike {
 
   get connected(): boolean {
     return this.authenticated && this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  setHelloMetadata(metadata: BrokerClientHelloMetadata): void {
+    this.helloMetadata = { ...metadata };
   }
 
   async connect(): Promise<void> {
@@ -76,7 +86,13 @@ export class BrokerClient extends EventEmitter implements BridgeLike {
             JSON.stringify({
               kind: 'hello',
               token: this.token,
-              role: 'mcp_client'
+              role: 'mcp_client',
+              ...(this.helloMetadata.adapterProtocolVersion !== undefined
+                ? { adapterProtocolVersion: this.helloMetadata.adapterProtocolVersion }
+                : {}),
+              ...(this.helloMetadata.registeredToolCount !== undefined
+                ? { registeredToolCount: this.helloMetadata.registeredToolCount }
+                : {})
             })
           );
           return;
