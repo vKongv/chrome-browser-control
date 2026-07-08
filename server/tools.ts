@@ -76,14 +76,21 @@ const AfterWaitFor = z
       .number()
       .int()
       .positive()
-      .max(30_000)
+      .max(20_000)
       .optional()
-      .describe('Wait until scoped text length is stable for this many milliseconds.'),
+      .describe('Wait until scoped text length is stable for this many milliseconds (capped at after.waitFor timeoutMs).'),
     timeoutMs: z.number().int().positive().max(20_000).optional()
   })
   .refine((value) => hasWaitCondition(value), {
     message: 'after.waitFor requires at least one wait condition'
-  });
+  })
+  .refine(
+    (value) =>
+      typeof value.contentStableMs !== 'number' ||
+      typeof value.timeoutMs !== 'number' ||
+      value.contentStableMs <= value.timeoutMs,
+    { message: 'after.waitFor contentStableMs cannot exceed timeoutMs' }
+  );
 const AfterSnapshot = z.union([
   z.literal(true),
   z.object({

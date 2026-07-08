@@ -1154,6 +1154,59 @@ describe('extension background origin enforcement', () => {
     );
   });
 
+  it('clears exclusive lease when a claimed tab disappears', async () => {
+    const tabs = [
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Claimed',
+        url: 'https://allowed.example/claimed',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await background.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      ttlMs: 60_000
+    });
+    tabs.pop();
+
+    await expect(background.handleBridgeRequest('page_status')).rejects.toThrow(
+      'Claimed tab is no longer available'
+    );
+
+    tabs.push({
+      id: 2,
+      active: false,
+      highlighted: false,
+      status: 'complete',
+      title: 'Reopened',
+      url: 'https://allowed.example/claimed',
+      windowId: 1
+    });
+
+    await expect(
+      background.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-b',
+        ttlMs: 60_000
+      })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
+  });
+
   it('releases and finalizes claimed tabs without closing user tabs', async () => {
     const tabs = [
       {

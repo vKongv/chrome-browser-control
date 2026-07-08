@@ -256,6 +256,7 @@ async function resolveSessionTabId(sessionTabId, allowedOrigins, { requireOperab
   const tab = await getTabIfExists(claim.tabId);
   if (!tab) {
     claimedTabs.delete(sessionTabId);
+    clearLeaseIfHeldByClaim(claim);
     if (currentSessionTabId === sessionTabId) currentSessionTabId = '';
     throw new Error(`Claimed tab is no longer available for sessionTabId: ${sessionTabId}`);
   }
@@ -401,10 +402,15 @@ function budgetAfterWaitForParams(waitFor, startedAt = Date.now()) {
     throw new Error('after.waitFor cannot run because the base action used the act-observe time budget');
   }
   const requestedTimeout = boundedAfterWaitTimeout(waitFor.timeoutMs) ?? 5000;
-  return {
+  const timeoutMs = Math.max(1, Math.min(requestedTimeout, remainingMs));
+  const next = {
     ...waitFor,
-    timeoutMs: Math.max(1, Math.min(requestedTimeout, remainingMs))
+    timeoutMs
   };
+  if (typeof waitFor.contentStableMs === 'number' && Number.isFinite(waitFor.contentStableMs)) {
+    next.contentStableMs = Math.max(1, Math.min(Math.floor(waitFor.contentStableMs), timeoutMs));
+  }
+  return next;
 }
 
 async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { startedAt = Date.now() } = {}) {
