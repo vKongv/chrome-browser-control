@@ -64,7 +64,30 @@ describe('ensureBroker', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it('spawns exactly once per adapter process when the port is refused', async () => {
+  it('does not spawn when autoload is disabled and the port is refused', async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const host = '127.0.0.1';
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+
+    const url = `ws://${host}:${port}`;
+    const result = await ensureBroker({
+      url,
+      token: 'spawn-token-123456789012345678901234',
+      host,
+      port,
+      autoloadEnabled: false
+    });
+
+    expect(result).toMatchObject({ reachable: false, authOk: false });
+    expect(result.error).toContain('chrome-browser-control start');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('spawns exactly once per adapter process when autoload is enabled and the port is refused', async () => {
     const listener = createServer();
     await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
     const address = listener.address();
@@ -81,18 +104,22 @@ describe('ensureBroker', () => {
       token: 'spawn-token-123456789012345678901234',
       host,
       port,
-      spawnTimeoutMs: 50
+      spawnTimeoutMs: 50,
+      autoloadEnabled: true
     });
     const second = ensureBroker({
       url,
       token: 'spawn-token-123456789012345678901234',
       host,
       port,
-      spawnTimeoutMs: 50
+      spawnTimeoutMs: 50,
+      autoloadEnabled: true
     });
     const [resultA, resultB] = await Promise.all([first, second]);
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]?.[0]).toBe(process.execPath);
+    expect(String(spawnMock.mock.calls[0]?.[1]?.[0] ?? '')).toContain('dist/server/broker-main.js');
     expect(resultA).toBe(resultB);
     expect(resultA).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
   });
@@ -114,7 +141,7 @@ describe('ensureBroker', () => {
 
     spawnMock.mockReturnValue({ unref: vi.fn(), on: vi.fn(), pid: 5151 });
 
-    const second = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50 });
+    const second = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50, autoloadEnabled: true });
     expect(second).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
@@ -132,10 +159,10 @@ describe('ensureBroker', () => {
     const token = 'spawn-token-123456789012345678901234';
     spawnMock.mockReturnValue({ unref: vi.fn(), on: vi.fn(), pid: 4242 });
 
-    const first = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50 });
+    const first = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50, autoloadEnabled: true });
     expect(first).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
 
-    const second = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50 });
+    const second = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50, autoloadEnabled: true });
     expect(second).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
