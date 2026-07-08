@@ -2,9 +2,13 @@ const bridgeUrl = document.getElementById('bridgeUrl');
 const token = document.getElementById('token');
 const allowedOrigins = document.getElementById('allowedOrigins');
 const statusEl = document.getElementById('status');
+const extensionProtocolEl = document.getElementById('extensionProtocol');
+const adapterProtocolEl = document.getElementById('adapterProtocol');
+const registeredToolCountEl = document.getElementById('registeredToolCount');
 const save = document.getElementById('save');
 const setupSnippet = document.getElementById('setupSnippet');
 const copyJson = document.getElementById('copyJson');
+const copyCursor = document.getElementById('copyCursor');
 const copyYaml = document.getElementById('copyYaml');
 const {
   DEFAULT_BRIDGE_URL,
@@ -19,6 +23,23 @@ const {
 
 function showStatus(nextStatus) {
   statusEl.textContent = nextStatus;
+}
+
+function renderAdapterStatus(adapterStatus) {
+  const adapterProtocol =
+    adapterStatus && typeof adapterStatus.adapterProtocolVersion === 'number' && adapterStatus.adapterProtocolVersion > 0
+      ? String(adapterStatus.adapterProtocolVersion)
+      : '—';
+  const toolCount =
+    adapterStatus && typeof adapterStatus.registeredToolCount === 'number'
+      ? String(adapterStatus.registeredToolCount)
+      : '0';
+  adapterProtocolEl.textContent = adapterProtocol;
+  registeredToolCountEl.textContent = toolCount;
+}
+
+function cursorConfigTemplate(currentToken = '<generated-token>', port = currentBridgePort()) {
+  return jsonConfigTemplate(currentToken, port);
 }
 
 function currentBridgePort() {
@@ -65,7 +86,14 @@ function yamlConfigTemplate(currentToken = '<generated-token>', port = currentBr
 }
 
 async function copySnippet(kind) {
-  const snippet = kind === 'yaml' ? yamlConfigTemplate() : jsonConfigTemplate();
+  const settings = await chrome.storage.local.get({ token: '' });
+  const currentToken = settings.token || '<generated-token>';
+  const snippet =
+    kind === 'yaml'
+      ? yamlConfigTemplate(currentToken)
+      : kind === 'cursor'
+        ? cursorConfigTemplate(currentToken)
+        : jsonConfigTemplate(currentToken);
   setupSnippet.value = snippet;
   try {
     await navigator.clipboard?.writeText(snippet);
@@ -86,15 +114,19 @@ async function refresh() {
     bridgeUrl: DEFAULT_BRIDGE_URL,
     token: '',
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
-    status: 'unknown'
+    status: 'unknown',
+    adapterStatus: null
   });
   bridgeUrl.value = settings.bridgeUrl;
   token.value = settings.token;
   allowedOrigins.value = formatAllowedOriginPatternsForDisplay(settings.allowedOrigins).join('\n');
-  setupSnippet.value = jsonConfigTemplate();
+  setupSnippet.value = jsonConfigTemplate(settings.token || '<generated-token>');
   showStatus(settings.status);
+  extensionProtocolEl.textContent = '5';
+  renderAdapterStatus(settings.adapterStatus);
   const response = await queryLiveStatus();
   if (response?.ok) showStatus(response.status);
+  if (response?.adapterStatus !== undefined) renderAdapterStatus(response.adapterStatus);
 }
 
 async function waitForSettledStatus(timeoutMs = 15000) {
@@ -109,11 +141,13 @@ async function waitForSettledStatus(timeoutMs = 15000) {
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || !changes.status) return;
-  showStatus(changes.status.newValue);
+  if (area !== 'local') return;
+  if (changes.status) showStatus(changes.status.newValue);
+  if (changes.adapterStatus) renderAdapterStatus(changes.adapterStatus.newValue);
 });
 
 copyJson.addEventListener('click', () => copySnippet('json'));
+copyCursor.addEventListener('click', () => copySnippet('cursor'));
 copyYaml.addEventListener('click', () => copySnippet('yaml'));
 
 function requestHostPermissions(origins) {

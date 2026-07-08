@@ -161,6 +161,21 @@ async function connect(options = {}) {
         setStatus('connected').catch(() => undefined);
         return;
       }
+      if (message?.kind === 'adapter_status') {
+        chrome.storage.local
+          .set({
+            adapterStatus: {
+              adapterProtocolVersion:
+                typeof message.adapterProtocolVersion === 'number' ? message.adapterProtocolVersion : null,
+              registeredToolCount:
+                typeof message.registeredToolCount === 'number' ? message.registeredToolCount : 0,
+              mcpClientCount: typeof message.mcpClientCount === 'number' ? message.mcpClientCount : 0,
+              updatedAt: typeof message.updatedAt === 'number' ? message.updatedAt : Date.now()
+            }
+          })
+          .catch(() => undefined);
+        return;
+      }
     } catch (_error) {
       // Let the normal bridge request handler return a structured error.
     }
