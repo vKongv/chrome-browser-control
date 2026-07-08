@@ -646,4 +646,36 @@ describe('extension content core', () => {
       waitForCondition({ selector: '#spinner', selectorAbsent: true, timeoutMs: 50 }, document as unknown as Document)
     ).resolves.toMatchObject({ matched: true, condition: 'selectorAbsent' });
   });
+
+  it('resets contentStableMs after scoped text drops below minimum length', async () => {
+    vi.useFakeTimers();
+    try {
+      const stableText = 'a'.repeat(100);
+      const document = makeDocument(`<main><p>${stableText}</p></main>`);
+
+      const waitPromise = waitForCondition(
+        { contentStableMs: 300, scope: 'main', timeoutMs: 5000 },
+        document as unknown as Document
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+      const main = document.querySelector('main');
+      main!.innerHTML = '<p>x</p>';
+      await vi.advanceTimersByTimeAsync(100);
+      main!.innerHTML = `<p>${stableText}</p>`;
+
+      await vi.advanceTimersByTimeAsync(200);
+      let settled = false;
+      waitPromise.then(() => {
+        settled = true;
+      });
+      await vi.runOnlyPendingTimersAsync();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(waitPromise).resolves.toMatchObject({ matched: true, condition: 'contentStableMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

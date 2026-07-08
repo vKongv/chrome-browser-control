@@ -264,7 +264,7 @@ async function resolveSessionTabId(sessionTabId, allowedOrigins, { requireOperab
   if (!tab) {
     claimedTabs.delete(sessionTabId);
     clearLeaseIfHeldByClaim(claim);
-    if (currentSessionTabId === sessionTabId) currentSessionTabId = '';
+    if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
     throw new Error(`Claimed tab is no longer available for sessionTabId: ${sessionTabId}`);
   }
   if (requireOperable && !isOperableTab(tab, allowedOrigins)) {

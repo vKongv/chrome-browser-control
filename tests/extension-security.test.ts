@@ -1165,6 +1165,60 @@ describe('extension background origin enforcement', () => {
     );
   });
 
+  it('promotes another claim when the current claimed tab disappears', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'First claim',
+        url: 'https://allowed.example/one',
+        windowId: 1
+      },
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Second claim',
+        url: 'https://allowed.example/two',
+        windowId: 1
+      },
+      {
+        id: 3,
+        active: true,
+        highlighted: true,
+        status: 'complete',
+        title: 'Active fallback',
+        url: 'https://allowed.example/active',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await background.handleBridgeRequest('claim_tab', { tabId: 1 });
+    await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    tabs.splice(1, 1);
+
+    await expect(background.handleBridgeRequest('page_status')).rejects.toThrow(
+      'Claimed tab is no longer available'
+    );
+
+    await background.handleBridgeRequest('page_status');
+    expect(background.sentMessages.at(-1)).toMatchObject({
+      tabId: 1,
+      message: { action: 'page_status' }
+    });
+  });
+
   it('clears exclusive lease when a claimed tab disappears', async () => {
     const tabs = [
       {

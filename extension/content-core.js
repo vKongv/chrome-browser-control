@@ -843,6 +843,9 @@ function waitForCondition(options = {}, documentRef = document) {
             contentStableLastLength = length;
             contentStableSince = Date.now();
           }
+        } else {
+          contentStableLastLength = -1;
+          contentStableSince = 0;
         }
       }
 
