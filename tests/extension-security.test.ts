@@ -46,6 +46,7 @@ function loadBackgroundHarness({
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
   const sentMessages: Array<{ tabId: number; message: Record<string, unknown> }> = [];
   const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
+  const tabRemovedListeners: Array<(tabId: number) => void> = [];
   const FakeDate = class extends Date {
     static now() {
       return now;
@@ -88,6 +89,11 @@ function loadBackgroundHarness({
       }
     },
     tabs: {
+      onRemoved: {
+        addListener: (listener: (tabId: number) => void) => {
+          tabRemovedListeners.push(listener);
+        }
+      },
       query: async (query: Record<string, unknown> = {}) => {
         if (query.active && query.currentWindow && staleActiveTab) {
           return [staleActiveTab];
@@ -187,6 +193,11 @@ function loadBackgroundHarness({
     tabs,
     advanceTime(ms: number) {
       now += ms;
+    },
+    removeTab(tabId: number) {
+      const index = tabs.findIndex((tab) => tab.id === tabId);
+      if (index >= 0) tabs.splice(index, 1);
+      for (const listener of tabRemovedListeners) listener(tabId);
     }
   });
 }
@@ -1193,6 +1204,55 @@ describe('extension background origin enforcement', () => {
       highlighted: false,
       status: 'complete',
       title: 'Reopened',
+      url: 'https://allowed.example/claimed',
+      windowId: 1
+    });
+
+    await expect(
+      background.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-b',
+        ttlMs: 60_000
+      })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
+  });
+
+  it('clears exclusive lease immediately when a tab is closed', async () => {
+    const tabs = [
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Claimed',
+        url: 'https://allowed.example/claimed',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await background.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      ttlMs: 60_000
+    });
+    background.removeTab(2);
+
+    tabs.push({
+      id: 2,
+      active: false,
+      highlighted: false,
+      status: 'complete',
+      title: 'Reused id',
       url: 'https://allowed.example/claimed',
       windowId: 1
     });

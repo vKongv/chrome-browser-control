@@ -727,6 +727,14 @@ async function handleBridgeRequest(action, params = {}) {
 
 chrome.runtime.onInstalled.addListener(() => connectBridge().catch(() => undefined));
 chrome.runtime.onStartup.addListener(() => connectBridge().catch(() => undefined));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  clearLeaseForTab(tabId);
+  for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
+    if (claim.tabId !== tabId) continue;
+    claimedTabs.delete(sessionTabId);
+    if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
+  }
+});
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target === 'cbc-background' && message?.kind === 'status-update') {
     setStatus(message.status || 'unknown');
