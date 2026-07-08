@@ -197,9 +197,9 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
       };
     }
     return {
-      reachable: false,
+      reachable: true,
       authOk: false,
-      error: `Port ${port} is open but did not accept a Chrome Browser Control broker handshake`
+      error: `Broker on port ${port} did not respond to handshake in time`
     };
   }
 

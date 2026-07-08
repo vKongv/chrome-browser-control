@@ -251,6 +251,7 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
   let ownership = context.brokerOwnership;
   let authFailed = false;
   let autoloadTimedOut = false;
+  let brokerConfirmedReachable = false;
 
   if (!adapterConnected && typeof bridge.connect === 'function') {
     try {
@@ -259,6 +260,7 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
         ownership = lifecycle.ownership ?? ownership;
         authFailed = lifecycle.authFailed === true;
         autoloadTimedOut = lifecycle.autoloadTimedOut === true;
+        brokerConfirmedReachable = lifecycle.authOk && lifecycle.reachable;
 
         if (lifecycle.authFailed) {
           return toolResult(
@@ -311,7 +313,7 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
       adapterConnected = bridge.connected === true;
     } catch (error) {
       const message = (error as Error).message || String(error);
-      const brokerReachable = authFailed || !isNoBrokerError(message);
+      const brokerReachable = brokerConfirmedReachable || authFailed || !isNoBrokerError(message);
       return toolResult(
         statusPayload(
           {

@@ -347,6 +347,56 @@ describe('registerBrowserTools', () => {
     expect(status.nextAction).toContain('extension');
   });
 
+  it('keeps broker reachable when connect fails after ensureBroker succeeded', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    bridge.connected = false;
+    bridge.connect = async () => {
+      bridge.connectCalls += 1;
+      throw new Error('timed out waiting for broker authentication');
+    };
+    registerBrowserTools(server, bridge, {
+      getStatusContext: () => ({
+        brokerPort: 8765,
+        ensureBroker: async () => ({
+          reachable: true,
+          authOk: true,
+          ownership: 'adopted'
+        })
+      })
+    });
+
+    const result = await server.tools.get('browser_status')?.({});
+    const status = JSON.parse(result.content[0].text);
+
+    expect(bridge.connectCalls).toBe(1);
+    expect(status.broker.reachable).toBe(true);
+    expect(status.nextAction ?? '').not.toContain('not a Chrome Browser Control broker');
+  });
+
+  it('does not coach port-not-broker for handshake timeout lifecycle errors', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    bridge.connected = false;
+    registerBrowserTools(server, bridge, {
+      getStatusContext: () => ({
+        brokerPort: 8765,
+        ensureBroker: async () => ({
+          reachable: true,
+          authOk: false,
+          error: 'Broker on port 8765 did not respond to handshake in time'
+        })
+      })
+    });
+
+    const result = await server.tools.get('browser_status')?.({});
+    const status = JSON.parse(result.content[0].text);
+
+    expect(bridge.connectCalls).toBe(0);
+    expect(status.broker.reachable).toBe(true);
+    expect(status.nextAction ?? '').not.toContain('not a Chrome Browser Control broker');
+  });
+
   it('reports browser_status when the adapter is not connected to the broker', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
