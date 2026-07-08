@@ -23,6 +23,7 @@ export interface EnsureBrokerResult {
   authOk: boolean;
   authFailed?: boolean;
   autoloadTimedOut?: boolean;
+  portNotBroker?: boolean;
   error?: string;
 }
 
@@ -75,18 +76,30 @@ async function probePortOpen(host: string, port: number): Promise<boolean> {
   });
 }
 
-async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): Promise<'ok' | 'auth_failed' | 'unreachable'> {
+type BrokerProbeResult = 'ok' | 'auth_failed' | 'not_broker' | 'handshake_timeout' | 'unreachable';
+
+async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): Promise<BrokerProbeResult> {
   return await new Promise((resolve) => {
     const socket = new WebSocket(url);
     let settled = false;
+    let sawAuthRequired = false;
+    let sawOpen = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       socket.close();
+      if (sawAuthRequired) {
+        resolve('handshake_timeout');
+        return;
+      }
+      if (sawOpen) {
+        resolve('not_broker');
+        return;
+      }
       resolve('unreachable');
     }, timeoutMs);
 
-    const cleanup = (result: 'ok' | 'auth_failed' | 'unreachable') => {
+    const cleanup = (result: BrokerProbeResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -97,7 +110,20 @@ async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): P
       resolve(result);
     };
 
-    socket.once('error', () => cleanup('unreachable'));
+    socket.once('open', () => {
+      sawOpen = true;
+    });
+    socket.once('error', () => {
+      if (sawAuthRequired) {
+        cleanup('handshake_timeout');
+        return;
+      }
+      if (sawOpen) {
+        cleanup('not_broker');
+        return;
+      }
+      cleanup('unreachable');
+    });
     socket.on('message', (raw) => {
       let message: { kind?: string; ok?: boolean };
       try {
@@ -107,6 +133,7 @@ async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): P
       }
 
       if (message.kind === 'auth_required') {
+        sawAuthRequired = true;
         socket.send(JSON.stringify({ kind: 'hello', token, role: 'mcp_client' }));
         return;
       }
@@ -196,10 +223,18 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
         error: `Broker on port ${port} rejected the configured pairing token`
       };
     }
+    if (auth === 'handshake_timeout') {
+      return {
+        reachable: true,
+        authOk: false,
+        error: `Broker on port ${port} did not respond to handshake in time`
+      };
+    }
     return {
       reachable: true,
       authOk: false,
-      error: `Broker on port ${port} did not respond to handshake in time`
+      portNotBroker: true,
+      error: `Port ${port} is open but did not accept a Chrome Browser Control broker handshake`
     };
   }
 

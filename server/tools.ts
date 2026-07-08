@@ -222,10 +222,6 @@ function isNoBrokerError(message: string): boolean {
   return /not connected to chrome broker|timed out waiting for broker|ECONNREFUSED|ENOTFOUND/i.test(message);
 }
 
-function isPortNotBrokerError(message: string | undefined): boolean {
-  return typeof message === 'string' && /did not accept a Chrome Browser Control broker handshake/i.test(message);
-}
-
 async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext = {}) {
   if (context.tokenIssue) {
     return toolResult(
@@ -302,7 +298,7 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
                 extensionConnected: false,
                 authFailed,
                 autoloadTimedOut,
-                portNotBroker: isPortNotBrokerError(lifecycle.error)
+                portNotBroker: lifecycle.portNotBroker === true
               }
             )
           );

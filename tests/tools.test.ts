@@ -456,6 +456,40 @@ describe('registerBrowserTools', () => {
         portNotBroker: true
       })
     ).toContain('not a Chrome Browser Control broker');
+    expect(
+      buildNextAction({
+        ready: false,
+        brokerReachable: true,
+        adapterConnected: false,
+        extensionConnected: false,
+        brokerPort: 8765,
+        portNotBroker: true
+      })
+    ).toContain('not a Chrome Browser Control broker');
+  });
+
+  it('reports port-not-broker coaching from ensureBroker lifecycle', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    bridge.connected = false;
+    registerBrowserTools(server, bridge, {
+      getStatusContext: () => ({
+        brokerPort: 8765,
+        ensureBroker: async () => ({
+          reachable: true,
+          authOk: false,
+          portNotBroker: true,
+          error: 'Port 8765 is open but did not accept a Chrome Browser Control broker handshake'
+        })
+      })
+    });
+
+    const result = await server.tools.get('browser_status')?.({});
+    const status = JSON.parse(result.content[0].text);
+
+    expect(bridge.connectCalls).toBe(0);
+    expect(status.broker.reachable).toBe(true);
+    expect(status.nextAction).toContain('not a Chrome Browser Control broker');
   });
 
   it('reports missing token coaching through browser_status', async () => {

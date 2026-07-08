@@ -28,11 +28,12 @@ export function buildNextAction(inputs: NextActionInputs): string | undefined {
     return `Token mismatch on port ${port}. Align CHROME_BROWSER_CONTROL_TOKEN in .env.local, your MCP host env, and the extension popup, then restart the MCP server.`;
   }
 
+  if (inputs.portNotBroker) {
+    const port = inputs.brokerPort ?? 8765;
+    return `Port ${port} is open but is not a Chrome Browser Control broker. Stop the other service on that port or change CHROME_BROWSER_CONTROL_PORT in your MCP host env and extension popup.`;
+  }
+
   if (!inputs.brokerReachable) {
-    if (inputs.portNotBroker) {
-      const port = inputs.brokerPort ?? 8765;
-      return `Port ${port} is open but is not a Chrome Browser Control broker. Stop the other service on that port or change CHROME_BROWSER_CONTROL_PORT in your MCP host env and extension popup.`;
-    }
     if (inputs.autoloadTimedOut) {
       const port = inputs.brokerPort ?? 8765;
       return `Broker autoload timed out on port ${port}. Start it manually with npm run broker, verify the port is free, and confirm the pairing token matches your MCP host and extension popup.`;
