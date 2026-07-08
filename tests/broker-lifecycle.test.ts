@@ -74,7 +74,7 @@ describe('ensureBroker', () => {
     await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
 
     const url = `ws://${host}:${port}`;
-    spawnMock.mockReturnValue({ unref: vi.fn(), pid: 4242 });
+    spawnMock.mockReturnValue({ unref: vi.fn(), on: vi.fn(), pid: 4242 });
 
     const first = ensureBroker({
       url,
@@ -99,5 +99,44 @@ describe('ensureBroker', () => {
 
   it('uses a bounded autoload timeout constant', () => {
     expect(BROKER_AUTOLOAD_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it('re-probes and recovers when a cached broker stops responding', async () => {
+    const broker = await makeBroker();
+    const { host, port } = brokerHostPort(broker);
+    const url = brokerUrl(broker);
+    const token = 'secret-token-for-broker-lifecycle-tests';
+
+    const first = await ensureBroker({ url, token, host, port });
+    expect(first).toMatchObject({ ownership: 'adopted', reachable: true, authOk: true });
+
+    await broker.stop();
+
+    spawnMock.mockReturnValue({ unref: vi.fn(), on: vi.fn(), pid: 5151 });
+
+    const second = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50 });
+    expect(second).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('respawns after a failed autoload when the port stays refused', async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const host = '127.0.0.1';
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+
+    const url = `ws://${host}:${port}`;
+    const token = 'spawn-token-123456789012345678901234';
+    spawnMock.mockReturnValue({ unref: vi.fn(), on: vi.fn(), pid: 4242 });
+
+    const first = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50 });
+    expect(first).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
+
+    const second = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50 });
+    expect(second).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 });

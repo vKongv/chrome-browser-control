@@ -122,6 +122,16 @@ async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): P
   });
 }
 
+function clearSpawnedBrokerState(): void {
+  spawnedChild = undefined;
+  if (ownership === 'spawned') {
+    ownership = undefined;
+  }
+  if (cachedSuccess?.ownership === 'spawned') {
+    cachedSuccess = undefined;
+  }
+}
+
 function spawnDetachedBroker(host: string, port: number, token: string): ChildProcess {
   const child = spawn(tsxPath(), [brokerEntryPath()], {
     detached: true,
@@ -134,6 +144,11 @@ function spawnDetachedBroker(host: string, port: number, token: string): ChildPr
     }
   });
   child.unref();
+  child.on('exit', () => {
+    if (spawnedChild === child) {
+      clearSpawnedBrokerState();
+    }
+  });
   return child;
 }
 
@@ -190,9 +205,13 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
   if (ready === 'ok') {
     return { ownership, reachable: true, authOk: true };
   }
+
+  const failedOwnership = ownership;
+  clearSpawnedBrokerState();
+
   if (ready === 'auth_failed') {
     return {
-      ownership,
+      ownership: failedOwnership,
       reachable: true,
       authOk: false,
       authFailed: true,
@@ -201,7 +220,7 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
   }
 
   return {
-    ownership,
+    ownership: failedOwnership,
     reachable: false,
     authOk: false,
     autoloadTimedOut: true,
@@ -211,7 +230,16 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
 
 export async function ensureBroker(options: EnsureBrokerOptions): Promise<EnsureBrokerResult> {
   if (cachedSuccess?.authOk) {
-    return cachedSuccess;
+    const auth = await probeBrokerAuth(options.url, options.token);
+    if (auth === 'ok') {
+      return cachedSuccess;
+    }
+    cachedSuccess = undefined;
+    if (ownership === 'spawned') {
+      clearSpawnedBrokerState();
+    } else {
+      ownership = undefined;
+    }
   }
 
   if (!inFlightEnsure) {
