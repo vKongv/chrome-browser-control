@@ -35,7 +35,9 @@ export const ExtensionHelloSchema = z.object({
 });
 
 export const ClientHelloSchema = ExtensionHelloSchema.extend({
-  role: z.enum(['extension', 'mcp_client'])
+  role: z.enum(['extension', 'mcp_client']),
+  adapterProtocolVersion: z.number().int().positive().optional(),
+  registeredToolCount: z.number().int().nonnegative().optional()
 });
 
 export const BridgeRequestSchema = z.object({

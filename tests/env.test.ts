@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertSafeHost, getBrokerHost, getBrokerPort, getBrokerUrl, getToken } from '../server/env.js';
+import { assertSafeHost, getBrokerHost, getBrokerPort, getBrokerUrl, getToken, resolveToken } from '../server/env.js';
 
 const originalToken = process.env.CHROME_BROWSER_CONTROL_TOKEN;
 const originalHost = process.env.CHROME_BROWSER_CONTROL_HOST;
@@ -31,6 +31,17 @@ afterEach(() => {
 });
 
 describe('env helpers', () => {
+  it('resolves token issues without throwing', () => {
+    delete process.env.CHROME_BROWSER_CONTROL_TOKEN;
+    expect(resolveToken()).toEqual({ issue: 'missing' });
+
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = 'short';
+    expect(resolveToken()).toEqual({ issue: 'invalid' });
+
+    process.env.CHROME_BROWSER_CONTROL_TOKEN = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
+    expect(resolveToken()).toEqual({ token: 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-' });
+  });
+
   it('requires a configured token', () => {
     delete process.env.CHROME_BROWSER_CONTROL_TOKEN;
     expect(() => getToken()).toThrow('CHROME_BROWSER_CONTROL_TOKEN is required');

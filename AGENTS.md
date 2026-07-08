@@ -42,6 +42,7 @@ Use this file to resume work without relying on chat history.
 - Snapshot refs are per-document in-memory handles and are stable across DOM reorder in the same document.
 - Stale/disconnected/expired refs are pruned and should fail cleanly.
 - First-time setup UX is implemented with `npm run setup`, `npm run doctor`, and `npm run mcp-config`.
+- Call `browser_status` first on a new session; read `nextAction` for onboarding coaching and `adapter.registeredToolCount` to detect stale MCP host tool catalogs.
 - Runtime agents should use the `chrome-browser-control` skill when available; it contains the operating playbook for claiming tabs, collecting bounded page state, waiting after actions, screenshots, feed scrolling, side-effect confirmation, and cleanup.
 
 ## Local setup

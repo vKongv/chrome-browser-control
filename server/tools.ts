@@ -1,6 +1,11 @@
 import { z } from 'zod';
+import type { BrokerOwnership } from './broker-lifecycle.js';
+import type { EnsureBrokerResult } from './broker-lifecycle.js';
 import { BrowserBridge } from './bridge.js';
 import { BridgeAction } from './protocol.js';
+import { buildNextAction } from './status-coaching.js';
+
+export const ADAPTER_PROTOCOL_VERSION = 1;
 
 export interface ToolRegistrar {
   registerTool: (name: string, config: Record<string, unknown>, cb: (args: any) => Promise<any>) => unknown;
@@ -151,6 +156,64 @@ async function forwardActThenObserve(bridge: BridgeLike, action: BridgeAction, p
   return forward(bridge, action, params);
 }
 
+export interface BrowserStatusContext {
+  adapterProtocolVersion?: number;
+  registeredToolCount?: number;
+  brokerOwnership?: BrokerOwnership;
+  brokerPort?: number;
+  tokenIssue?: 'missing' | 'invalid';
+  ensureBroker?: () => Promise<EnsureBrokerResult>;
+}
+
+function adapterBlock(connected: boolean, context: BrowserStatusContext = {}) {
+  return {
+    connected,
+    protocolVersion: context.adapterProtocolVersion ?? ADAPTER_PROTOCOL_VERSION,
+    ...(connected && context.registeredToolCount !== undefined
+      ? { registeredToolCount: context.registeredToolCount }
+      : {})
+  };
+}
+
+function brokerBlock(reachable: boolean, context: BrowserStatusContext = {}) {
+  return {
+    reachable,
+    ...(context.brokerOwnership ? { ownership: context.brokerOwnership } : {})
+  };
+}
+
+function statusPayload(
+  base: Record<string, unknown>,
+  context: BrowserStatusContext,
+  coaching: {
+    ready: boolean;
+    brokerReachable: boolean;
+    adapterConnected: boolean;
+    extensionConnected: boolean;
+    authFailed?: boolean;
+    autoloadTimedOut?: boolean;
+    portNotBroker?: boolean;
+  }
+) {
+  const nextAction = buildNextAction({
+    ready: coaching.ready,
+    tokenMissing: context.tokenIssue === 'missing',
+    tokenInvalid: context.tokenIssue === 'invalid',
+    brokerReachable: coaching.brokerReachable,
+    brokerOwnership: context.brokerOwnership,
+    adapterConnected: coaching.adapterConnected,
+    extensionConnected: coaching.extensionConnected,
+    authFailed: coaching.authFailed,
+    brokerPort: context.brokerPort,
+    autoloadTimedOut: coaching.autoloadTimedOut,
+    portNotBroker: coaching.portNotBroker
+  });
+
+  return {
+    ...base,
+    ...(nextAction ? { nextAction } : {})
+  };
+}
 function isNoExtensionError(message: string): boolean {
   return /no chrome extension connected|chrome extension disconnected/i.test(message);
 }
@@ -159,30 +222,122 @@ function isNoBrokerError(message: string): boolean {
   return /not connected to chrome broker|timed out waiting for broker|ECONNREFUSED|ENOTFOUND/i.test(message);
 }
 
-async function browserStatus(bridge: BridgeLike) {
+async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext = {}) {
+  if (context.tokenIssue) {
+    return toolResult(
+      statusPayload(
+        {
+          ready: false,
+          adapter: adapterBlock(false, context),
+          broker: brokerBlock(false, context),
+          extension: { connected: false }
+        },
+        context,
+        {
+          ready: false,
+          brokerReachable: false,
+          adapterConnected: false,
+          extensionConnected: false
+        }
+      )
+    );
+  }
+
   let adapterConnected = bridge.connected === true;
+  let ownership = context.brokerOwnership;
+  let authFailed = false;
+  let autoloadTimedOut = false;
+  let brokerConfirmedReachable = false;
 
   if (!adapterConnected && typeof bridge.connect === 'function') {
     try {
+      if (context.ensureBroker) {
+        const lifecycle = await context.ensureBroker();
+        ownership = lifecycle.ownership ?? ownership;
+        authFailed = lifecycle.authFailed === true;
+        autoloadTimedOut = lifecycle.autoloadTimedOut === true;
+        brokerConfirmedReachable = lifecycle.authOk && lifecycle.reachable;
+
+        if (lifecycle.authFailed) {
+          return toolResult(
+            statusPayload(
+              {
+                ready: false,
+                adapter: adapterBlock(false, { ...context, brokerOwnership: ownership }),
+                broker: brokerBlock(true, { ...context, brokerOwnership: ownership }),
+                extension: { connected: false },
+                error: lifecycle.error
+              },
+              { ...context, brokerOwnership: ownership },
+              {
+                ready: false,
+                brokerReachable: true,
+                adapterConnected: false,
+                extensionConnected: false,
+                authFailed: true
+              }
+            )
+          );
+        }
+
+        if (!lifecycle.authOk) {
+          return toolResult(
+            statusPayload(
+              {
+                ready: false,
+                adapter: adapterBlock(false, { ...context, brokerOwnership: ownership }),
+                broker: brokerBlock(lifecycle.reachable, { ...context, brokerOwnership: ownership }),
+                extension: { connected: false },
+                error: lifecycle.error
+              },
+              { ...context, brokerOwnership: ownership },
+              {
+                ready: false,
+                brokerReachable: lifecycle.reachable,
+                adapterConnected: false,
+                extensionConnected: false,
+                authFailed,
+                autoloadTimedOut,
+                portNotBroker: lifecycle.portNotBroker === true
+              }
+            )
+          );
+        }
+      }
+
       await bridge.connect();
       adapterConnected = bridge.connected === true;
     } catch (error) {
       const message = (error as Error).message || String(error);
-      const brokerReachable = !isNoBrokerError(message);
-      return toolResult({
-        ready: false,
-        adapter: { connected: false },
-        broker: { reachable: brokerReachable },
-        extension: { connected: false },
-        error: message
-      });
+      const brokerReachable = brokerConfirmedReachable || authFailed || !isNoBrokerError(message);
+      return toolResult(
+        statusPayload(
+          {
+            ready: false,
+            adapter: adapterBlock(false, { ...context, brokerOwnership: ownership }),
+            broker: brokerBlock(brokerReachable, { ...context, brokerOwnership: ownership }),
+            extension: { connected: false },
+            error: message
+          },
+          { ...context, brokerOwnership: ownership },
+          {
+            ready: false,
+            brokerReachable,
+            adapterConnected: false,
+            extensionConnected: false,
+            authFailed,
+            autoloadTimedOut
+          }
+        )
+      );
     }
   }
+
+  const activeContext = { ...context, brokerOwnership: ownership };
 
   try {
     const ping = (await bridge.call('ping', {})) as Record<string, unknown>;
     const rawStatus = typeof ping.status === 'string' ? ping.status : undefined;
-    // A successful ping means the extension handled the request; stale "disconnected" is misleading.
     const bridgeStatus =
       rawStatus === 'disconnected' || rawStatus === undefined ? 'connected' : rawStatus;
     const normalizedPing = { ...ping, status: bridgeStatus };
@@ -191,49 +346,79 @@ async function browserStatus(bridge: BridgeLike) {
       ...(Array.isArray(ping.features) ? { features: ping.features } : {})
     };
 
-    return toolResult({
-      ready: true,
-      adapter: { connected: true },
-      broker: { reachable: true },
-      extension: {
-        connected: true,
-        status: bridgeStatus,
-        ...marker,
-        ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {}),
-        ...(ping.session !== undefined ? { session: ping.session } : {})
-      },
-      ping: normalizedPing
-    });
+    return toolResult(
+      statusPayload(
+        {
+          ready: true,
+          adapter: adapterBlock(true, activeContext),
+          broker: brokerBlock(true, activeContext),
+          extension: {
+            connected: true,
+            status: bridgeStatus,
+            ...marker,
+            ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {}),
+            ...(ping.session !== undefined ? { session: ping.session } : {})
+          },
+          ping: normalizedPing
+        },
+        activeContext,
+        {
+          ready: true,
+          brokerReachable: true,
+          adapterConnected: true,
+          extensionConnected: true
+        }
+      )
+    );
   } catch (error) {
     const message = (error as Error).message || String(error);
     const brokerReachable = adapterConnected || !isNoBrokerError(message);
-    return toolResult({
-      ready: false,
-      adapter: { connected: brokerReachable },
-      broker: { reachable: brokerReachable },
-      extension: { connected: false },
-      error: message,
-      ...(isNoExtensionError(message) ? { detail: 'Broker is reachable, but no Chrome extension is connected.' } : {})
-    });
+    const extensionConnected = false;
+    return toolResult(
+      statusPayload(
+        {
+          ready: false,
+          adapter: adapterBlock(brokerReachable, activeContext),
+          broker: brokerBlock(brokerReachable, activeContext),
+          extension: { connected: extensionConnected },
+          error: message,
+          ...(isNoExtensionError(message) ? { detail: 'Broker is reachable, but no Chrome extension is connected.' } : {})
+        },
+        activeContext,
+        {
+          ready: false,
+          brokerReachable,
+          adapterConnected: brokerReachable,
+          extensionConnected
+        }
+      )
+    );
   }
 }
 
 export function registerBrowserTools(
   server: ToolRegistrar,
   bridge: BrowserBridge | BridgeLike,
-  options: { ownerId?: string } = {}
-): void {
-  server.registerTool(
+  options: { ownerId?: string; getStatusContext?: () => BrowserStatusContext } = {}
+): number {
+  let registeredToolCount = 0;
+  const registerTool = (name: string, config: Record<string, unknown>, cb: (args: any) => Promise<any>) => {
+    registeredToolCount += 1;
+    server.registerTool(name, config, cb);
+  };
+
+  registerTool(
     'browser_status',
     {
       title: 'Browser bridge status',
-      description: 'Check whether the MCP adapter can reach the local broker and whether the Chrome extension answers ping.',
+      description:
+        'Check whether the MCP adapter can reach the local broker and whether the Chrome extension answers ping. Read nextAction for onboarding coaching.',
       inputSchema: {}
     },
-    async () => browserStatus(bridge)
+    async () => browserStatus(bridge, options.getStatusContext?.() ?? {})
   );
 
-  server.registerTool(
+  registerTool(
     'name_session',
     {
       title: 'Name browser session',
@@ -245,7 +430,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'name_session', args)
   );
 
-  server.registerTool(
+  registerTool(
     'list_tabs',
     {
       title: 'List Chrome tabs',
@@ -255,7 +440,7 @@ export function registerBrowserTools(
     async () => forward(bridge, 'list_tabs')
   );
 
-  server.registerTool(
+  registerTool(
     'claim_tab',
     {
       title: 'Claim Chrome tab',
@@ -289,7 +474,7 @@ export function registerBrowserTools(
     }
   );
 
-  server.registerTool(
+  registerTool(
     'release_tab',
     {
       title: 'Release claimed tab',
@@ -302,7 +487,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'release_tab', args)
   );
 
-  server.registerTool(
+  registerTool(
     'finalize_tabs',
     {
       title: 'Finalize claimed tabs',
@@ -324,7 +509,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'finalize_tabs', args)
   );
 
-  server.registerTool(
+  registerTool(
     'snapshot',
     {
       title: 'Snapshot active page',
@@ -348,7 +533,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'snapshot', args)
   );
 
-  server.registerTool(
+  registerTool(
     'visible_snapshot',
     {
       title: 'Visible page snapshot',
@@ -361,7 +546,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'visible_snapshot', args)
   );
 
-  server.registerTool(
+  registerTool(
     'navigate',
     {
       title: 'Navigate Chrome tab',
@@ -377,7 +562,7 @@ export function registerBrowserTools(
     async (args) => forwardActThenObserve(bridge, 'navigate', args)
   );
 
-  server.registerTool(
+  registerTool(
     'click',
     {
       title: 'Click page element',
@@ -391,7 +576,7 @@ export function registerBrowserTools(
     async (args) => forwardActThenObserve(bridge, 'click', args)
   );
 
-  server.registerTool(
+  registerTool(
     'type',
     {
       title: 'Type into page element',
@@ -407,7 +592,7 @@ export function registerBrowserTools(
     async (args) => forwardActThenObserve(bridge, 'type', args)
   );
 
-  server.registerTool(
+  registerTool(
     'scroll',
     {
       title: 'Scroll page',
@@ -425,7 +610,7 @@ export function registerBrowserTools(
     async (args) => forwardActThenObserve(bridge, 'scroll', args)
   );
 
-  server.registerTool(
+  registerTool(
     'query_elements',
     {
       title: 'Query page elements',
@@ -442,7 +627,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'query_elements', args)
   );
 
-  server.registerTool(
+  registerTool(
     'extract_elements',
     {
       title: 'Extract page elements',
@@ -461,7 +646,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'extract_elements', args)
   );
 
-  server.registerTool(
+  registerTool(
     'extract_feed_posts',
     {
       title: 'Extract feed posts',
@@ -476,7 +661,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'extract_feed_posts', args)
   );
 
-  server.registerTool(
+  registerTool(
     'screenshot',
     {
       title: 'Capture visible screenshot',
@@ -489,7 +674,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'screenshot', args)
   );
 
-  server.registerTool(
+  registerTool(
     'keypress',
     {
       title: 'Press page keys',
@@ -503,7 +688,7 @@ export function registerBrowserTools(
     async (args) => forwardActThenObserve(bridge, 'keypress', args)
   );
 
-  server.registerTool(
+  registerTool(
     'click_at',
     {
       title: 'Click viewport coordinates',
@@ -518,7 +703,7 @@ export function registerBrowserTools(
     async (args) => forwardActThenObserve(bridge, 'click_at', args)
   );
 
-  server.registerTool(
+  registerTool(
     'wait_for',
     {
       title: 'Wait for page condition',
@@ -560,7 +745,7 @@ export function registerBrowserTools(
     }
   );
 
-  server.registerTool(
+  registerTool(
     'page_status',
     {
       title: 'Page status',
@@ -572,7 +757,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'page_status', args)
   );
 
-  server.registerTool(
+  registerTool(
     'console_logs',
     {
       title: 'Console logs',
@@ -586,7 +771,7 @@ export function registerBrowserTools(
     async (args) => forward(bridge, 'console_logs', args)
   );
 
-  server.registerTool(
+  registerTool(
     'collect_scroll',
     {
       title: 'Collect while scrolling',
@@ -611,4 +796,6 @@ export function registerBrowserTools(
     },
     async (args) => forwardActThenObserve(bridge, 'collect_scroll', args)
   );
+
+  return registeredToolCount;
 }

@@ -48,23 +48,48 @@ function isTriviallyWeakToken(token: string): boolean {
   return new Set(token).size < MIN_TOKEN_UNIQUE_CHARS;
 }
 
-export function getToken(): string {
+export type TokenIssue = 'missing' | 'invalid';
+
+export interface ResolvedToken {
+  token?: string;
+  issue?: TokenIssue;
+}
+
+function tokenValidationError(token: string): string | undefined {
+  const insecureDefaultToken = ['dev', 'token', 'change', 'me'].join('-');
+  if (token === insecureDefaultToken) {
+    return 'Refusing insecure default CHROME_BROWSER_CONTROL_TOKEN. Generate a unique high-entropy token.';
+  }
+  if (!TOKEN_PATTERN.test(token)) {
+    return 'CHROME_BROWSER_CONTROL_TOKEN must be at least 32 URL-safe random characters.';
+  }
+  if (isTriviallyWeakToken(token)) {
+    return 'CHROME_BROWSER_CONTROL_TOKEN must contain enough character variety.';
+  }
+  return undefined;
+}
+
+export function resolveToken(): ResolvedToken {
   loadLocalEnvIfPresent();
   const token = process.env.CHROME_BROWSER_CONTROL_TOKEN?.trim();
   if (!token) {
+    return { issue: 'missing' };
+  }
+  if (tokenValidationError(token)) {
+    return { issue: 'invalid' };
+  }
+  return { token };
+}
+
+export function getToken(): string {
+  const resolved = resolveToken();
+  if (resolved.issue === 'missing') {
     throw new Error('CHROME_BROWSER_CONTROL_TOKEN is required. Generate a high-entropy token and set it for both broker and MCP adapter.');
   }
-  const insecureDefaultToken = ['dev', 'token', 'change', 'me'].join('-');
-  if (token === insecureDefaultToken) {
-    throw new Error('Refusing insecure default CHROME_BROWSER_CONTROL_TOKEN. Generate a unique high-entropy token.');
+  if (resolved.issue === 'invalid') {
+    throw new Error(tokenValidationError(process.env.CHROME_BROWSER_CONTROL_TOKEN!.trim())!);
   }
-  if (!TOKEN_PATTERN.test(token)) {
-    throw new Error('CHROME_BROWSER_CONTROL_TOKEN must be at least 32 URL-safe random characters.');
-  }
-  if (isTriviallyWeakToken(token)) {
-    throw new Error('CHROME_BROWSER_CONTROL_TOKEN must contain enough character variety.');
-  }
-  return token;
+  return resolved.token!;
 }
 
 export function getBrokerHost(): string {

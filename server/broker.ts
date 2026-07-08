@@ -37,6 +37,7 @@ export class ChromeBroker extends EventEmitter {
   private server?: WebSocketServer;
   private extensionSocket?: WebSocket;
   private mcpClients = new Set<WebSocket>();
+  private mcpClientMeta = new Map<WebSocket, { adapterProtocolVersion?: number; registeredToolCount?: number }>();
   private pending = new Map<string, PendingRequest>();
   private commandQueue: Promise<void> = Promise.resolve();
 
@@ -122,7 +123,7 @@ export class ChromeBroker extends EventEmitter {
           }
           this.attachExtension(socket, hello);
         } else {
-          this.attachMcpClient(socket);
+          this.attachMcpClient(socket, hello);
         }
         socket.send(JSON.stringify({ kind: 'auth_ack', ok: true }));
       } catch (error) {
@@ -139,6 +140,7 @@ export class ChromeBroker extends EventEmitter {
   private attachExtension(socket: WebSocket, hello: ClientHello): void {
     this.replaceExtensionSocket(socket);
     this.emit('extensionConnected', hello);
+    this.broadcastAdapterStatus();
 
     socket.on('message', (message) => this.handleExtensionMessage(message));
     socket.on('close', () => {
@@ -150,16 +152,41 @@ export class ChromeBroker extends EventEmitter {
     });
   }
 
-  private attachMcpClient(socket: WebSocket): void {
+  private attachMcpClient(socket: WebSocket, hello: ClientHello): void {
     this.mcpClients.add(socket);
+    this.mcpClientMeta.set(socket, {
+      adapterProtocolVersion: hello.adapterProtocolVersion,
+      registeredToolCount: hello.registeredToolCount
+    });
+    this.broadcastAdapterStatus();
     this.emit('mcpClientConnected');
 
     socket.on('message', (message) => this.handleMcpClientMessage(socket, message));
     socket.on('close', () => {
       this.mcpClients.delete(socket);
+      this.mcpClientMeta.delete(socket);
+      this.broadcastAdapterStatus();
       this.rejectPendingForClient(socket, new Error('MCP client disconnected'));
       this.emit('mcpClientDisconnected');
     });
+  }
+
+  private broadcastAdapterStatus(): void {
+    if (!this.extensionConnected || !this.extensionSocket) return;
+
+    const entries = [...this.mcpClientMeta.values()];
+    const last = entries[entries.length - 1];
+    const payload = {
+      kind: 'adapter_status' as const,
+      adapterProtocolVersion: this.mcpClients.size === 0 ? 0 : (last?.adapterProtocolVersion ?? 0),
+      registeredToolCount: this.mcpClients.size === 0 ? 0 : (last?.registeredToolCount ?? 0),
+      mcpClientCount: this.mcpClients.size,
+      updatedAt: Date.now()
+    };
+
+    if (this.extensionSocket.readyState === WebSocket.OPEN) {
+      this.extensionSocket.send(JSON.stringify(payload));
+    }
   }
 
   private replaceExtensionSocket(socket: WebSocket): void {

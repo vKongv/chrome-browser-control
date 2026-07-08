@@ -10,12 +10,16 @@
       button { margin-top: 12px; width: 100%; }
       .secondary { margin-top: 6px; }
       #status { font-family: monospace; }
+      .meta { font-family: monospace; font-size: 12px; margin: 4px 0; }
       #setupSnippet { min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
     </style>
   </head>
   <body>
     <h1>Chrome Browser Control</h1>
     <p>Status: <span id="status">unknown</span></p>
+    <p class="meta">Extension protocol: <span id="extensionProtocol">—</span></p>
+    <p class="meta">Adapter protocol: <span id="adapterProtocol">—</span></p>
+    <p class="meta">Registered MCP tools: <span id="registeredToolCount">0</span></p>
     <label for="bridgeUrl">Bridge URL</label>
     <input id="bridgeUrl" value="ws://127.0.0.1:8765" />
     <label for="token">Pairing token</label>
@@ -26,6 +30,7 @@
     <label for="setupSnippet">MCP config helper</label>
     <textarea id="setupSnippet" readonly placeholder="Save settings, then copy a config snippet."></textarea>
     <button id="copyJson" class="secondary">Copy JSON config template</button>
+    <button id="copyCursor" class="secondary">Copy Cursor config</button>
     <button id="copyYaml" class="secondary">Copy YAML config template</button>
     <script src="security.js"></script>
     <script src="popup.js"></script>

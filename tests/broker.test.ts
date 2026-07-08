@@ -257,4 +257,105 @@ describe('ChromeBroker', () => {
 
     await expect(client.call('list_tabs')).rejects.toThrow('No Chrome extension connected to broker');
   });
+
+  it('pushes adapter_status to the extension when an MCP client connects', async () => {
+    const broker = await makeBroker();
+    const extension = await connectExtension(brokerUrl(broker), 'secret');
+    const adapterStatuses: Array<Record<string, unknown>> = [];
+
+    extension.on('message', (raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.kind === 'adapter_status') adapterStatuses.push(message);
+    });
+
+    const client = new BrokerClient({
+      url: brokerUrl(broker),
+      token: 'secret',
+      requestTimeoutMs: 500,
+      helloTimeoutMs: 200
+    });
+    client.setHelloMetadata({ adapterProtocolVersion: 1, registeredToolCount: 22 });
+    await client.connect();
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(adapterStatuses.at(-1)).toMatchObject({
+      kind: 'adapter_status',
+      adapterProtocolVersion: 1,
+      registeredToolCount: 22,
+      mcpClientCount: 1
+    });
+
+    await client.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(adapterStatuses.at(-1)).toMatchObject({
+      kind: 'adapter_status',
+      registeredToolCount: 0,
+      mcpClientCount: 0
+    });
+
+    extension.close();
+  });
+
+  it('includes hello metadata on the first adapter_status after connect', async () => {
+    const broker = await makeBroker();
+    const extension = await connectExtension(brokerUrl(broker), 'secret');
+
+    const firstAdapterStatus = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timed out waiting for first adapter_status')), 1000);
+      extension.on('message', (raw) => {
+        const message = JSON.parse(raw.toString());
+        if (message.kind !== 'adapter_status') return;
+        clearTimeout(timeout);
+        resolve(message);
+      });
+    });
+
+    const client = new BrokerClient({
+      url: brokerUrl(broker),
+      token: 'secret',
+      requestTimeoutMs: 500,
+      helloTimeoutMs: 200
+    });
+    // Startup order contract: setHelloMetadata before first connect so popup tool count is non-zero.
+    client.setHelloMetadata({ adapterProtocolVersion: 1, registeredToolCount: 22 });
+    await client.connect();
+
+    await expect(firstAdapterStatus).resolves.toMatchObject({
+      kind: 'adapter_status',
+      adapterProtocolVersion: 1,
+      registeredToolCount: 22,
+      mcpClientCount: 1
+    });
+
+    await client.disconnect();
+    extension.close();
+  });
+
+  it('pushes zero registeredToolCount on first connect when hello metadata is missing', async () => {
+    const broker = await makeBroker();
+    const extension = await connectExtension(brokerUrl(broker), 'secret');
+
+    const firstAdapterStatus = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timed out waiting for first adapter_status')), 1000);
+      extension.on('message', (raw) => {
+        const message = JSON.parse(raw.toString());
+        if (message.kind !== 'adapter_status') return;
+        clearTimeout(timeout);
+        resolve(message);
+      });
+    });
+
+    const client = await makeMcpClient(broker);
+
+    await expect(firstAdapterStatus).resolves.toMatchObject({
+      kind: 'adapter_status',
+      registeredToolCount: 0,
+      mcpClientCount: 1
+    });
+
+    await client.disconnect();
+    extension.close();
+  });
 });
