@@ -1421,6 +1421,8 @@ describe('extension background origin enforcement', () => {
       })
     ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-a', owner: 'Agent A' });
 
+    await background.handleBridgeRequest('name_session', { name: 'Caller B' });
+
     try {
       await background.handleBridgeRequest('claim_tab', {
         tabId: 2,
@@ -1437,6 +1439,7 @@ describe('extension background origin enforcement', () => {
         tabId: 2,
         holder: { ownerId: 'owner-a', owner: 'Agent A', sessionName: 'Audit A' }
       });
+      expect(payload.holder.sessionName).not.toBe('Caller B');
     }
   });
 
@@ -1469,6 +1472,68 @@ describe('extension background origin enforcement', () => {
     await expect(
       background.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-b', ttlMs: 1000 })
     ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
+  });
+
+  it('does not let advisory release revoke another owner exclusive lease', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ]
+    });
+
+    await background.handleBridgeRequest('name_session', { name: 'Holder A' });
+    await background.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      owner: 'Agent A',
+      ttlMs: 60_000
+    });
+
+    await background.handleBridgeRequest('name_session', { name: 'Caller B' });
+    await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('release_tab', { tabId: 2 })).resolves.toMatchObject({
+      released: true,
+      tabId: 2
+    });
+
+    await expect(background.handleBridgeRequest('list_tabs')).resolves.toEqual([
+      expect.objectContaining({
+        id: 2,
+        exclusiveLease: expect.objectContaining({ ownerId: 'owner-a' })
+      })
+    ]);
+
+    try {
+      await background.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-c',
+        ttlMs: 60_000
+      });
+      throw new Error('expected conflict');
+    } catch (error) {
+      const payload = JSON.parse((error as Error).message);
+      expect(payload).toMatchObject({
+        code: 'TAB_EXCLUSIVE_CLAIM_CONFLICT',
+        tabId: 2,
+        holder: { ownerId: 'owner-a', owner: 'Agent A', sessionName: 'Holder A' }
+      });
+      expect(payload.holder.sessionName).not.toBe('Caller B');
+    }
   });
 
   it('navigates with active:false without activating the tab', async () => {

@@ -79,6 +79,13 @@ function clearLeaseForTab(tabId) {
   tabLeases.delete(tabId);
 }
 
+function clearLeaseIfHeldByClaim(claim) {
+  if (!claim?.tabId || !claim.exclusive || !claim.ownerId) return;
+  const lease = getLeaseForTab(claim.tabId);
+  if (!lease || lease.ownerId !== claim.ownerId) return;
+  clearLeaseForTab(claim.tabId);
+}
+
 function exclusiveLeaseConflictError(tabId, lease) {
   const payload = {
     code: 'TAB_EXCLUSIVE_CLAIM_CONFLICT',
@@ -86,7 +93,7 @@ function exclusiveLeaseConflictError(tabId, lease) {
     holder: {
       ownerId: lease.ownerId,
       owner: lease.ownerLabel || undefined,
-      sessionName: sessionName || undefined,
+      sessionName: lease.sessionName || undefined,
       expiresAt: lease.expiresAt
     }
   };
@@ -591,6 +598,7 @@ async function handleBridgeRequest(action, params = {}) {
         tabLeases.set(tab.id, {
           ownerId: claim.ownerId,
           ownerLabel: claim.ownerLabel,
+          sessionName: sessionName || undefined,
           expiresAt
         });
       }
@@ -604,7 +612,7 @@ async function handleBridgeRequest(action, params = {}) {
       }
       const claim = claimedTabs.get(sessionTabId);
       claimedTabs.delete(sessionTabId);
-      if (claim?.tabId) clearLeaseForTab(claim.tabId);
+      clearLeaseIfHeldByClaim(claim);
       if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
       return { released: true, sessionTabId, tabId: claim?.tabId };
     }
@@ -623,7 +631,7 @@ async function handleBridgeRequest(action, params = {}) {
       for (const sessionTabId of [...claimedTabs.keys()]) {
         if (keepIds.has(sessionTabId)) continue;
         const claim = claimedTabs.get(sessionTabId);
-        if (claim?.tabId) clearLeaseForTab(claim.tabId);
+        clearLeaseIfHeldByClaim(claim);
         claimedTabs.delete(sessionTabId);
         released += 1;
       }
