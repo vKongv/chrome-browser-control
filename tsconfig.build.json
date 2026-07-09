@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["server/**/*.ts", "cli/**/*.ts"],
+  "exclude": ["tests/**", "**/*.test.ts", "vitest.config.ts"]
+}

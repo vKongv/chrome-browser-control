@@ -374,7 +374,7 @@ describe('registerBrowserTools', () => {
     expect(status.nextAction ?? '').not.toContain('not a Chrome Browser Control broker');
   });
 
-  it('does not coach port-not-broker for handshake timeout lifecycle errors', async () => {
+  it('coaches handshake timeout without treating it as port-not-broker', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
     bridge.connected = false;
@@ -384,6 +384,7 @@ describe('registerBrowserTools', () => {
         ensureBroker: async () => ({
           reachable: true,
           authOk: false,
+          handshakeTimedOut: true,
           error: 'Broker on port 8765 did not respond to handshake in time'
         })
       })
@@ -394,7 +395,8 @@ describe('registerBrowserTools', () => {
 
     expect(bridge.connectCalls).toBe(0);
     expect(status.broker.reachable).toBe(true);
-    expect(status.nextAction ?? '').not.toContain('not a Chrome Browser Control broker');
+    expect(status.nextAction).toContain('pairing handshake');
+    expect(status.nextAction).not.toContain('not a Chrome Browser Control broker');
   });
 
   it('reports browser_status when the adapter is not connected to the broker', async () => {
@@ -434,7 +436,7 @@ describe('registerBrowserTools', () => {
 
   it('coaches token and auth failures through nextAction', async () => {
     expect(buildNextAction({ ready: false, tokenMissing: true, brokerReachable: false, adapterConnected: false, extensionConnected: false })).toContain(
-      'npm run setup'
+      'cbctl setup'
     );
     expect(
       buildNextAction({
@@ -466,6 +468,16 @@ describe('registerBrowserTools', () => {
         portNotBroker: true
       })
     ).toContain('not a Chrome Browser Control broker');
+    expect(
+      buildNextAction({
+        ready: false,
+        brokerReachable: true,
+        adapterConnected: false,
+        extensionConnected: false,
+        brokerPort: 8765,
+        handshakeTimedOut: true
+      })
+    ).toContain('pairing handshake');
   });
 
   it('reports port-not-broker coaching from ensureBroker lifecycle', async () => {
@@ -503,7 +515,7 @@ describe('registerBrowserTools', () => {
     const status = JSON.parse(result.content[0].text);
 
     expect(status.ready).toBe(false);
-    expect(status.nextAction).toContain('npm run setup');
+    expect(status.nextAction).toContain('cbctl setup');
     expect(bridge.calls).toEqual([]);
   });
 

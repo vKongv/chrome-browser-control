@@ -1,36 +1,48 @@
 # Local Setup Example
 
-Use this as a template for local configuration. For the full onboarding flow (clone → setup → load extension → MCP config → verify), see [Install and Setup](README.md#install-and-setup) in the README.
+Use this as a template for local configuration. For the full onboarding flow, see [Install and Setup](README.md#install-and-setup) in the README.
 
 Keep real tokens and personal paths in your private shell history or ignored local notes.
 
 ## Paths
 
+Preferred (installable CLI):
+
 ```bash
-cd /path/to/chrome-browser-control
-npm install
-npm run setup
+npm install -g chrome-browser-control
+cbctl setup
+cbctl start
 ```
 
-`npm run setup` generates `.env.local`, prints the extension path, and prints copy-paste MCP configs for YAML plus Claude/Codex/Cursor-style JSON hosts.
+`setup` writes `~/.chrome-browser-control/config.env`, copies the extension to `~/.chrome-browser-control/extension`, and prints copy-paste MCP configs.
 
 Load the unpacked Chrome extension from:
 
 ```text
-/path/to/chrome-browser-control/extension
+~/.chrome-browser-control/extension
 ```
 
-After changing extension source files, reload the unpacked extension from `chrome://extensions` before testing. The `browser_status` tool reports `protocolVersion` and `features` from the loaded extension, which helps confirm Chrome is not still running an older background service worker. After manifest permission changes, reload the unpacked extension, open the popup, click "Save and reconnect", and grant any new optional permission prompt.
+From a git checkout (contributors):
+
+```bash
+cd /path/to/chrome-browser-control
+npm install
+npm run build
+node dist/cli/main.js setup
+# optional: npm run broker / npm run mcp against TypeScript sources + repo .env.local
+```
+
+After changing extension source files, re-run setup (or copy again) if you use the installed path, then reload the unpacked extension from `chrome://extensions` before testing. The `browser_status` tool reports `protocolVersion` and `features` from the loaded extension, which helps confirm Chrome is not still running an older background service worker. After manifest permission changes, reload the unpacked extension, open the popup, click "Save and reconnect", and grant any new optional permission prompt.
 
 ## Token
 
-Generate a high-entropy URL-safe token:
+`cbctl setup` generates a high-entropy URL-safe token in `~/.chrome-browser-control/config.env`. To generate one manually:
 
 ```bash
 node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
 ```
 
-Use the generated value for both the broker and extension popup. Do not commit it.
+Use the same value for the broker, MCP host env, and extension popup. Do not commit it.
 
 ## Allowed Origins
 
@@ -47,33 +59,50 @@ Wildcard mode is convenient for local development, but any MCP client with the p
 
 ## Broker
 
+Normal use (shared detached broker):
+
 ```bash
-CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run broker
+cbctl start
+cbctl status
+cbctl stop
 ```
 
-Optional extension ID pinning:
+Foreground / contributor checkout:
 
 ```bash
-CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' \
-CHROME_BROWSER_CONTROL_EXTENSION_ID='<chrome-extension-id>' \
-npm run broker
+cbctl broker
+# or: CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run broker
+```
+
+Optional extension ID pinning via env or user config:
+
+```bash
+CHROME_BROWSER_CONTROL_EXTENSION_ID='<chrome-extension-id>' cbctl start
 ```
 
 ## MCP Adapter
 
-Configure your MCP host to run:
+MCP is attach-only by default: start the broker first, then point your host at:
 
-```bash
-CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run mcp
+```text
+command: chrome-browser-control
+args: ["mcp"]
 ```
 
-Print host-specific config snippets with absolute paths:
+Recovery / opt-in spawn if no broker is reachable:
 
 ```bash
-npm run --silent mcp-config -- --host yaml
-npm run --silent mcp-config -- --host claude
-npm run --silent mcp-config -- --host codex
-npm run --silent mcp-config -- --host cursor
+cbctl mcp --autoload
+# or: CHROME_BROWSER_CONTROL_AUTOLOAD=1
+```
+
+Print host-specific config snippets:
+
+```bash
+cbctl mcp-config --host yaml
+cbctl mcp-config --host claude
+cbctl mcp-config --host codex
+cbctl mcp-config --host cursor
 ```
 
 Use an MCP config path appropriate for your tool and keep it outside the repository.
@@ -107,5 +136,6 @@ For multi-step tasks, call `claim_tab` with an allowed tab id and pass the retur
 ```bash
 npm test
 npm run build
+cbctl doctor
 npm run benchmark:compact-snapshots
 ```

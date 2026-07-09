@@ -1,11 +1,24 @@
+import { pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { BrokerClient } from './broker-client.js';
-import { ensureBroker, getBrokerOwnership } from './broker-lifecycle.js';
-import { assertSafeHost, getBrokerHost, getBrokerPort, getBrokerUrl, resolveToken } from './env.js';
+import { ensureBroker, getBrokerOwnership, stopSpawnedBrokerIfOwned } from './broker-lifecycle.js';
+import {
+  assertSafeHost,
+  getBrokerHost,
+  getBrokerPort,
+  getBrokerUrl,
+  isAutoloadEnabled,
+  resolveToken
+} from './env.js';
 import { ADAPTER_PROTOCOL_VERSION, registerBrowserTools } from './tools.js';
 
-export async function main(): Promise<void> {
+export interface McpMainOptions {
+  autoload?: boolean;
+}
+
+export async function main(options: McpMainOptions = {}): Promise<void> {
+  const autoloadEnabled = isAutoloadEnabled(options.autoload);
   const { token, issue: tokenIssue } = resolveToken();
   const host = getBrokerHost();
   const port = getBrokerPort();
@@ -13,7 +26,7 @@ export async function main(): Promise<void> {
   assertSafeHost(host);
 
   const brokerClient = new BrokerClient({ url, token: token ?? '' });
-  const lifecycleOptions = { url, token: token ?? '', host, port };
+  const lifecycleOptions = { url, token: token ?? '', host, port, autoloadEnabled };
   const ensureBrokerReady = () => ensureBroker(lifecycleOptions);
 
   const connectBridge = async () => {
@@ -49,7 +62,7 @@ export async function main(): Promise<void> {
   };
 
   // Register tools and set hello metadata before the first broker connect so the
-  // initial adapter_status push (and popup tool count) is non-zero.
+  // initial adapter_status / browser_status registeredToolCount is non-zero.
   const registeredToolCount = registerBrowserTools(server, bridge, {
     ownerId,
     getStatusContext: () => ({
@@ -79,24 +92,40 @@ export async function main(): Promise<void> {
       console.error(
         `[chrome-browser-control] Could not connect to Chrome broker at ws://${host}:${port}: ${(error as Error).message}`
       );
-      console.error('[chrome-browser-control] MCP tools will retry broker autoload on browser_status until the bridge is ready.');
+      if (autoloadEnabled) {
+        console.error('[chrome-browser-control] MCP tools will retry broker autoload on browser_status until the bridge is ready.');
+      } else {
+        console.error('[chrome-browser-control] Run cbctl start, then retry browser_status.');
+      }
     }
   }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  const shutdown = async () => {
-    await brokerClient.disconnect();
-    await server.close();
-    process.exit(0);
-  };
+  // Stay alive until signal shutdown. CLI wrappers call process.exit after main()
+  // resolves; returning here would tear down the stdio MCP server immediately.
+  await new Promise<never>((_resolve) => {
+    const shutdown = async () => {
+      stopSpawnedBrokerIfOwned();
+      await brokerClient.disconnect();
+      await server.close();
+      process.exit(0);
+    };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    // Stdio MCP hosts often close stdin without SIGTERM; ensure spawned brokers still die.
+    process.on('exit', () => {
+      stopSpawnedBrokerIfOwned();
+    });
+  });
 }
 
-main().catch((error) => {
-  console.error('[chrome-browser-control] fatal:', error);
-  process.exit(1);
-});
+const entryPath = process.argv[1];
+if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
+  main().catch((error) => {
+    console.error('[chrome-browser-control] fatal:', error);
+    process.exit(1);
+  });
+}

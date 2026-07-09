@@ -182,7 +182,8 @@ Per repo norms before calling work done:
 ```bash
 npm test
 npm run build
-npm run doctor
+cbctl doctor
+# or: node dist/cli/main.js doctor
 npm run benchmark:compact-snapshots
 ```
 

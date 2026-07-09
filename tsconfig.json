@@ -11,5 +11,5 @@
     "outDir": "dist",
     "types": ["node", "vitest"]
   },
-  "include": ["server/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["server/**/*.ts", "cli/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }

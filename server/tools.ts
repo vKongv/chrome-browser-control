@@ -192,6 +192,7 @@ function statusPayload(
     extensionConnected: boolean;
     authFailed?: boolean;
     autoloadTimedOut?: boolean;
+    handshakeTimedOut?: boolean;
     portNotBroker?: boolean;
   }
 ) {
@@ -206,6 +207,7 @@ function statusPayload(
     authFailed: coaching.authFailed,
     brokerPort: context.brokerPort,
     autoloadTimedOut: coaching.autoloadTimedOut,
+    handshakeTimedOut: coaching.handshakeTimedOut,
     portNotBroker: coaching.portNotBroker
   });
 
@@ -298,6 +300,7 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
                 extensionConnected: false,
                 authFailed,
                 autoloadTimedOut,
+                handshakeTimedOut: lifecycle.handshakeTimedOut === true,
                 portNotBroker: lifecycle.portNotBroker === true
               }
             )

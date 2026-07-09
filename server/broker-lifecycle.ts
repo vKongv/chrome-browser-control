@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { getCompiledBrokerMainPath } from './paths.js';
 
 export type BrokerOwnership = 'adopted' | 'spawned' | 'external';
 
@@ -15,6 +15,7 @@ export interface EnsureBrokerOptions {
   host: string;
   port: number;
   spawnTimeoutMs?: number;
+  autoloadEnabled?: boolean;
 }
 
 export interface EnsureBrokerResult {
@@ -23,6 +24,7 @@ export interface EnsureBrokerResult {
   authOk: boolean;
   authFailed?: boolean;
   autoloadTimedOut?: boolean;
+  handshakeTimedOut?: boolean;
   portNotBroker?: boolean;
   error?: string;
 }
@@ -31,18 +33,6 @@ let inFlightEnsure: Promise<EnsureBrokerResult> | undefined;
 let cachedSuccess: EnsureBrokerResult | undefined;
 let ownership: BrokerOwnership | undefined;
 let spawnedChild: ChildProcess | undefined;
-
-function repoRoot(): string {
-  return dirname(dirname(fileURLToPath(import.meta.url)));
-}
-
-function brokerEntryPath(): string {
-  return join(repoRoot(), 'server', 'broker-main.ts');
-}
-
-function tsxPath(): string {
-  return join(repoRoot(), 'node_modules', '.bin', 'tsx');
-}
 
 export function getBrokerOwnership(): BrokerOwnership | undefined {
   return ownership;
@@ -76,9 +66,9 @@ async function probePortOpen(host: string, port: number): Promise<boolean> {
   });
 }
 
-type BrokerProbeResult = 'ok' | 'auth_failed' | 'not_broker' | 'handshake_timeout' | 'unreachable';
+export type BrokerProbeResult = 'ok' | 'auth_failed' | 'not_broker' | 'handshake_timeout' | 'unreachable';
 
-async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): Promise<BrokerProbeResult> {
+export async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): Promise<BrokerProbeResult> {
   return await new Promise((resolve) => {
     const socket = new WebSocket(url);
     let settled = false;
@@ -154,9 +144,14 @@ function clearSpawnedBrokerState(): void {
   spawnedChild = undefined;
   if (child?.pid) {
     try {
-      child.kill('SIGTERM');
+      // Detached broker is its own process-group leader; signal the group so it dies with MCP exit.
+      process.kill(-child.pid, 'SIGTERM');
     } catch {
-      // Process may already have exited.
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // Process may already have exited.
+      }
     }
   }
   if (ownership === 'spawned') {
@@ -167,8 +162,21 @@ function clearSpawnedBrokerState(): void {
   }
 }
 
+/** Kill MCP-spawned broker on adapter shutdown; leave adopted/CLI-started brokers alone. */
+export function stopSpawnedBrokerIfOwned(): void {
+  if (ownership !== 'spawned') return;
+  console.error('[chrome-browser-control] stopping MCP-spawned broker on adapter shutdown');
+  clearSpawnedBrokerState();
+}
+
 function spawnDetachedBroker(host: string, port: number, token: string): ChildProcess {
-  const child = spawn(tsxPath(), [brokerEntryPath()], {
+  const brokerMain = getCompiledBrokerMainPath();
+  if (!existsSync(brokerMain)) {
+    throw new Error(
+      `Compiled broker entry missing at ${brokerMain}. Run npm run build before mcp --autoload (or use cbctl start).`
+    );
+  }
+  const child = spawn(process.execPath, [brokerMain], {
     detached: true,
     stdio: 'ignore',
     env: {
@@ -205,6 +213,7 @@ async function waitForBrokerReady(
 async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBrokerResult> {
   const { url, token, host, port } = options;
   const spawnTimeoutMs = options.spawnTimeoutMs ?? BROKER_AUTOLOAD_TIMEOUT_MS;
+  const autoloadEnabled = options.autoloadEnabled ?? false;
 
   const portOpen = await probePortOpen(host, port);
 
@@ -227,6 +236,7 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
       return {
         reachable: true,
         authOk: false,
+        handshakeTimedOut: true,
         error: `Broker on port ${port} did not respond to handshake in time`
       };
     }
@@ -238,8 +248,24 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
     };
   }
 
+  if (!autoloadEnabled) {
+    return {
+      reachable: false,
+      authOk: false,
+      error: `Broker is not reachable on port ${port}. Run cbctl start or use mcp --autoload.`
+    };
+  }
+
   if (!spawnedChild) {
-    spawnedChild = spawnDetachedBroker(host, port, token);
+    try {
+      spawnedChild = spawnDetachedBroker(host, port, token);
+    } catch (error) {
+      return {
+        reachable: false,
+        authOk: false,
+        error: (error as Error).message
+      };
+    }
     ownership = 'spawned';
     console.error(`[chrome-browser-control] broker spawned ${url}`);
   }

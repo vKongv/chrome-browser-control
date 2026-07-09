@@ -10,7 +10,7 @@ Chrome Browser Control is a local-only browser automation bridge. It does not co
 
 ## Data handling
 
-- **Pairing token:** Generated and stored locally (`.env.local` and extension storage). Never sent to third parties.
+- **Pairing token:** Generated and stored locally (`~/.chrome-browser-control/config.env`, optional repo `.env.local` for contributors, and extension storage). Never sent to third parties.
 - **Page content:** Read only when your MCP host invokes browser tools on tabs whose origins you allow in the extension popup. Content stays on your machine between the extension, broker, and MCP adapter.
 - **Screenshots:** Captured only when your MCP host invokes `screenshot` on an allowed tab. Screenshots are visible-viewport data URLs and stay local to the extension, broker, and MCP adapter. Chrome requires `<all_urls>` or `activeTab` for screenshot capture; this project requests optional `<all_urls>` as a host permission only for wildcard screenshot support, and the extension still applies allowed-origin checks before capture.
 - **Console logs:** Captured only after the content script is injected into an allowed page and only returned when `console_logs` is called. Old browser console history is not collected.
