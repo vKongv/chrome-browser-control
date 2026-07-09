@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { BridgeAction } from '../server/protocol.js';
 import { ADAPTER_PROTOCOL_VERSION, registerBrowserTools, ToolRegistrar } from '../server/tools.js';
 import { buildNextAction } from '../server/status-coaching.js';
@@ -39,7 +40,7 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     const count = registerBrowserTools(server, bridge);
 
-    expect(count).toBe(22);
+    expect(count).toBe(23);
     expect([...server.tools.keys()].sort()).toEqual([
       'browser_status',
       'claim_tab',
@@ -55,6 +56,7 @@ describe('registerBrowserTools', () => {
       'name_session',
       'navigate',
       'page_status',
+      'perform_actions',
       'query_elements',
       'release_tab',
       'screenshot',
@@ -126,7 +128,7 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     registerBrowserTools(server, bridge);
 
-    for (const tool of ['navigate', 'click', 'type', 'scroll', 'keypress', 'click_at', 'collect_scroll']) {
+    for (const tool of ['navigate', 'click', 'type', 'scroll', 'keypress', 'click_at', 'collect_scroll', 'perform_actions']) {
       const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
       expect(inputSchema.after).toBeTruthy();
     }
@@ -216,6 +218,69 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([]);
   });
 
+  it('forwards perform_actions in a single bridge call with terminal after', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('perform_actions')?.({
+      tabId: 3,
+      actions: [
+        { action: 'click', ref: 'h1' },
+        { action: 'type', ref: 'h2', text: 'hello' },
+        { action: 'scroll', deltaY: 200 }
+      ],
+      after: { snapshot: true }
+    });
+
+    expect(bridge.calls).toEqual([
+      {
+        action: 'perform_actions',
+        params: {
+          tabId: 3,
+          actions: [
+            { action: 'click', ref: 'h1' },
+            { action: 'type', ref: 'h2', text: 'hello' },
+            { action: 'scroll', deltaY: 200 }
+          ],
+          after: { snapshot: true }
+        }
+      }
+    ]);
+  });
+
+  it('rejects invalid perform_actions input before calling the bridge', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+    const inputSchema = server.configs.get('perform_actions')?.inputSchema as z.ZodRawShape;
+    const schema = z.object(inputSchema);
+
+    expect(() => schema.parse({ actions: [] })).toThrow();
+
+    expect(() =>
+      schema.parse({
+        actions: Array.from({ length: 11 }, () => ({ action: 'click', ref: 'h1' }))
+      })
+    ).toThrow();
+
+    expect(() => schema.parse({ actions: [{ action: 'navigate', url: 'https://example.com' }] })).toThrow();
+
+    expect(() => schema.parse({ actions: [{ action: 'click', ref: 'h1', after: { snapshot: true } }] })).toThrow();
+
+    expect(() => schema.parse({ actions: [{ action: 'click', ref: 'h1', tabId: 1 }] })).toThrow();
+
+    const invalidAfter = await server.tools.get('perform_actions')?.({
+      actions: [{ action: 'click', ref: 'h1' }],
+      after: { waitFor: { timeoutMs: 1000 } }
+    });
+    expect(invalidAfter).toMatchObject({
+      isError: true,
+      content: [{ text: 'after.waitFor requires at least one wait condition' }]
+    });
+    expect(bridge.calls).toEqual([]);
+  });
+
   it('rejects invalid after.snapshot before calling the bridge', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
@@ -279,7 +344,7 @@ describe('registerBrowserTools', () => {
     registerBrowserTools(server, bridge, {
       getStatusContext: () => ({
         adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
-        registeredToolCount: 22,
+        registeredToolCount: 23,
         brokerOwnership: 'adopted'
       })
     });
@@ -290,7 +355,7 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([{ action: 'ping', params: {} }]);
     expect(status).toMatchObject({
       ready: true,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 22 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 23 },
       broker: { reachable: true, ownership: 'adopted' },
       extension: {
         connected: true,
@@ -331,7 +396,7 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     bridge.error = new Error('No Chrome extension connected to broker');
     registerBrowserTools(server, bridge, {
-      getStatusContext: () => ({ registeredToolCount: 22, brokerPort: 8765 })
+      getStatusContext: () => ({ registeredToolCount: 23, brokerPort: 8765 })
     });
 
     const result = await server.tools.get('browser_status')?.({});
@@ -339,7 +404,7 @@ describe('registerBrowserTools', () => {
 
     expect(status).toMatchObject({
       ready: false,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 22 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 23 },
       broker: { reachable: true },
       extension: { connected: false },
       error: 'No Chrome extension connected to broker'

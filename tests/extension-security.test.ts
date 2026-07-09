@@ -44,6 +44,7 @@ function loadBackgroundHarness({
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
+  let tabGetCount = 0;
   const sentMessages: Array<{ tabId: number; message: Record<string, unknown> }> = [];
   const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
@@ -104,6 +105,7 @@ function loadBackgroundHarness({
         return result;
       },
       get: async (tabId: number) => {
+        tabGetCount += 1;
         const tab = tabs.find((candidate) => candidate.id === tabId);
         if (!tab) throw new Error(`No tab with id: ${tabId}`);
         const loadsRemaining = Number(tab._navigateLoadsRemaining ?? -1);
@@ -191,6 +193,10 @@ function loadBackgroundHarness({
     sentMessages,
     captures,
     tabs,
+    tabGetCount: () => tabGetCount,
+    resetTabGetCount() {
+      tabGetCount = 0;
+    },
     advanceTime(ms: number) {
       now += ms;
     },
@@ -672,6 +678,255 @@ describe('extension background origin enforcement', () => {
         ok: false,
         error: 'snapshot failed'
       }
+    });
+  });
+
+  it('runs perform_actions sequentially and applies terminal after only on full success', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [
+          { action: 'click', ref: 'h1' },
+          { action: 'type', ref: 'h2', text: 'hello' },
+          { action: 'scroll', deltaY: 200 }
+        ],
+        after: { snapshot: true, pageStatus: true }
+      })
+    ).resolves.toEqual({
+      ok: true,
+      completedCount: 3,
+      steps: [
+        { index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } },
+        { index: 1, action: 'type', ok: true, result: { action: 'type', params: { ref: 'h2', text: 'hello' } } },
+        { index: 2, action: 'scroll', ok: true, result: { action: 'scroll', params: { deltaY: 200 } } }
+      ],
+      after: {
+        snapshot: { action: 'snapshot', params: {} },
+        pageStatus: { action: 'page_status', params: {} }
+      }
+    });
+    expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'type', params: { ref: 'h2', text: 'hello' } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'scroll', params: { deltaY: 200 } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'snapshot', params: {} } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'page_status', params: {} } }
+    ]);
+  });
+
+  it('fail-fast perform_actions skips terminal after and returns partial step results', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'type') throw new Error('type failed');
+        return { action: message.action, params: message.params };
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [
+          { action: 'click', ref: 'h1' },
+          { action: 'type', ref: 'h2', text: 'hello' },
+          { action: 'scroll', deltaY: 200 }
+        ],
+        after: { snapshot: true }
+      })
+    ).resolves.toEqual({
+      ok: false,
+      completedCount: 1,
+      failedIndex: 1,
+      steps: [
+        { index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } },
+        { index: 1, action: 'type', ok: false, error: 'type failed' }
+      ]
+    });
+    expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'type', params: { ref: 'h2', text: 'hello' } } }
+    ]);
+  });
+
+  it('waits for tab load only before the first perform_actions step', async () => {
+    const tabBase = {
+      id: 1,
+      active: true,
+      highlighted: true,
+      title: 'Example Domain',
+      url: 'https://example.com/',
+      windowId: 1
+    };
+    const completeBackground = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [{ ...tabBase, status: 'complete' }],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+    completeBackground.resetTabGetCount();
+    await completeBackground.handleBridgeRequest('perform_actions', {
+      tabId: 1,
+      actions: [
+        { action: 'click', ref: 'h1' },
+        { action: 'click', ref: 'h2' }
+      ]
+    });
+    const completeTabGets = completeBackground.tabGetCount();
+
+    const loadingBackground = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          ...tabBase,
+          status: 'loading',
+          _navigateLoadsRemaining: 2,
+          _navigateFinal: { title: 'Example Domain', url: 'https://example.com/', status: 'complete' }
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+    loadingBackground.resetTabGetCount();
+
+    await expect(
+      loadingBackground.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [
+          { action: 'click', ref: 'h1' },
+          { action: 'click', ref: 'h2' }
+        ]
+      })
+    ).resolves.toMatchObject({ ok: true, completedCount: 2 });
+
+    expect(loadingBackground.tabGetCount()).toBeGreaterThan(completeTabGets);
+  });
+
+  it('rejects invalid perform_actions after before running any step', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ]
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [{ action: 'click', ref: 'h1' }],
+        after: { waitFor: { timeoutMs: 1000 } }
+      })
+    ).rejects.toThrow('after.waitFor requires at least one wait condition');
+    expect(background.sentMessages).toEqual([]);
+  });
+
+  it('surfaces password-like type failures and allows force on perform_actions steps', async () => {
+    const passwordError =
+      'Ref pwd appears to be a password/2FA field. Re-run with force=true only if explicitly approved.';
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'type' && message.params?.ref === 'pwd' && !message.params?.force) {
+          throw new Error(passwordError);
+        }
+        return { action: message.action, params: message.params };
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [
+          { action: 'click', ref: 'h1' },
+          { action: 'type', ref: 'pwd', text: 'secret' }
+        ]
+      })
+    ).resolves.toEqual({
+      ok: false,
+      completedCount: 1,
+      failedIndex: 1,
+      steps: [
+        { index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } },
+        { index: 1, action: 'type', ok: false, error: passwordError }
+      ]
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [{ action: 'type', ref: 'pwd', text: 'secret', force: true }]
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      completedCount: 1,
+      steps: [{ index: 0, action: 'type', ok: true, result: { action: 'type', params: { ref: 'pwd', text: 'secret', force: true } } }]
     });
   });
 
