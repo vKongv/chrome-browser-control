@@ -1,5 +1,9 @@
 # Chrome Browser Control
 
+[![npm version](https://img.shields.io/npm/v/chrome-browser-control.svg)](https://www.npmjs.com/package/chrome-browser-control)
+[![Node.js](https://img.shields.io/node/v/chrome-browser-control.svg)](https://www.npmjs.com/package/chrome-browser-control)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 Local Chrome-profile control for stdio MCP hosts.
 
 This project exposes browser-control MCP tools through a Manifest V3 Chrome extension connected to a loopback WebSocket broker. Configure your MCP host to launch the stdio adapter with the same pairing token you enter in the extension.
