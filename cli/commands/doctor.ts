@@ -1,7 +1,12 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { extensionCopyLooksValid } from '../copy-extension.js';
-import { getCompiledBrokerMainPath, getCompiledMcpMainPath, getUserConfigPath } from '../../server/paths.js';
+import {
+  getCompiledBrokerMainPath,
+  getCompiledMcpMainPath,
+  getPackageRoot,
+  getUserConfigPath,
+  readPackageVersion
+} from '../../server/paths.js';
 import { readEnvFile, DEFAULT_TOKEN_ENV } from '../../server/env-file.js';
 import { formatBrokerWsUrl } from '../../server/env.js';
 import { brokerAlreadyRunning, isPortOpen, readBrokerConfig } from '../broker-process.js';
@@ -9,6 +14,14 @@ import type { ParsedArgs } from '../parse-args.js';
 
 export async function runDoctor(_args: ParsedArgs): Promise<number> {
   const checks: Array<{ name: string; ok: boolean; detail?: string }> = [];
+
+  try {
+    checks.push({ name: 'CLI version', ok: true, detail: readPackageVersion() });
+    checks.push({ name: 'Package root', ok: true, detail: getPackageRoot() });
+  } catch (error) {
+    checks.push({ name: 'CLI version', ok: false, detail: (error as Error).message });
+  }
+
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   checks.push({ name: 'Node.js >= 18', ok: nodeMajor >= 18, detail: process.version });
 

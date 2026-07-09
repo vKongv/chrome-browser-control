@@ -13,6 +13,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
       flags.help = true;
       continue;
     }
+    if (arg === '--version' || arg === '-V') {
+      flags.version = true;
+      continue;
+    }
     if (!arg.startsWith('--')) {
       positional.push(arg);
       continue;

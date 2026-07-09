@@ -4,14 +4,22 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mcpAutoloadOption, runMcp } from '../cli/commands/mcp.js';
+import { runDoctor } from '../cli/commands/doctor.js';
 import { runSetup } from '../cli/commands/setup.js';
 import { runStart } from '../cli/commands/start.js';
+import { flagBoolean, parseArgs } from '../cli/parse-args.js';
 import * as brokerProcess from '../cli/broker-process.js';
 import { isAutoloadEnabled } from '../server/env.js';
 import { DEFAULT_PORT_ENV, DEFAULT_TOKEN_ENV, writeEnvFile } from '../server/env-file.js';
 import * as mcpConfig from '../server/mcp-config.js';
 import * as serverIndex from '../server/index.js';
-import { getInstalledExtensionPath, getUserConfigDir, getUserConfigPath } from '../server/paths.js';
+import {
+  getInstalledExtensionPath,
+  getPackageRoot,
+  getUserConfigDir,
+  getUserConfigPath,
+  readPackageVersion
+} from '../server/paths.js';
 import { buildNextAction } from '../server/status-coaching.js';
 
 const originalHome = process.env.HOME;
@@ -34,6 +42,39 @@ afterEach(() => {
   } else {
     process.env.CHROME_BROWSER_CONTROL_AUTOLOAD = originalAutoload;
   }
+});
+
+describe('cli version identity', () => {
+  it('parseArgs treats --version and -V as version flags', () => {
+    expect(flagBoolean(parseArgs(['--version']).flags, 'version')).toBe(true);
+    expect(flagBoolean(parseArgs(['-V']).flags, 'version')).toBe(true);
+    expect(parseArgs(['--version']).positional).toEqual([]);
+    expect(parseArgs(['-V', 'doctor']).positional).toEqual(['doctor']);
+  });
+
+  it('readPackageVersion returns package.json semver', () => {
+    const expected = JSON.parse(readFileSync(join(getPackageRoot(), 'package.json'), 'utf8')).version as string;
+    expect(readPackageVersion()).toBe(expected);
+    expect(readPackageVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('doctor reports CLI version and package root without failing those checks', async () => {
+    tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-doctor-'));
+    process.env.HOME = tempHome;
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await runDoctor({ positional: ['doctor'], flags: {} });
+    const version = readPackageVersion();
+    const root = getPackageRoot();
+    expect(logs.some((line) => line.includes('CLI version') && line.includes(version))).toBe(true);
+    expect(logs.some((line) => line.includes('Package root') && line.includes(root))).toBe(true);
+    expect(logs.find((line) => line.includes('CLI version'))).toMatch(/^✅/);
+    expect(logs.find((line) => line.includes('Package root'))).toMatch(/^✅/);
+  });
 });
 
 describe('cli setup', () => {
