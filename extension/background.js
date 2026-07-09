@@ -404,6 +404,11 @@ function validateAfterRequest(after) {
   }
 }
 
+function afterHasObservations(after) {
+  if (after === undefined || !after || typeof after !== 'object' || Array.isArray(after)) return false;
+  return after.waitFor !== undefined || after.snapshot !== undefined || after.pageStatus === true;
+}
+
 function budgetAfterWaitForParams(waitFor, startedAt = Date.now()) {
   const elapsedMs = Math.max(0, Date.now() - startedAt);
   const remainingMs = BRIDGE_REQUEST_SOFT_BUDGET_MS - elapsedMs - AFTER_OBSERVATION_BUFFER_MS;
@@ -534,7 +539,7 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
     }
   }
   const batchSummary = { ok: true, completedCount: actions.length, steps };
-  if (after !== undefined) {
+  if (afterHasObservations(after)) {
     const remainingMs = remainingSoftBudgetMs(startedAt);
     if (remainingMs < PERFORM_ACTIONS_MIN_STEP_RESERVE_MS) {
       return {
