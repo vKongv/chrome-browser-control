@@ -534,6 +534,18 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
     }
   }
   const batchSummary = { ok: true, completedCount: actions.length, steps };
+  if (after !== undefined) {
+    const remainingMs = remainingSoftBudgetMs(startedAt);
+    if (remainingMs < PERFORM_ACTIONS_MIN_STEP_RESERVE_MS) {
+      return {
+        ok: false,
+        completedCount: actions.length,
+        failedIndex: actions.length,
+        steps,
+        error: `Action batch skipped after because the request time budget is nearly exhausted (${remainingMs}ms remaining)`
+      };
+    }
+  }
   return await withAfterResult(batchSummary, tabId, after, allowedOrigins, { startedAt });
 }
 
