@@ -3,6 +3,30 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Local MCP server and Chrome MV3 extension for controlling the current Chrome profile from any stdio MCP host.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vkongv/chrome-browser-control.git"
+  },
+  "homepage": "https://github.com/vkongv/chrome-browser-control#readme",
+  "bugs": {
+    "url": "https://github.com/vkongv/chrome-browser-control/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "chrome",
+    "browser",
+    "browser-control",
+    "model-context-protocol",
+    "extension",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "cbctl": "./dist/cli/main.js",
     "chrome-browser-control": "./dist/cli/main.js"
