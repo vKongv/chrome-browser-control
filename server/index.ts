@@ -103,18 +103,22 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  const shutdown = async () => {
-    stopSpawnedBrokerIfOwned();
-    await brokerClient.disconnect();
-    await server.close();
-    process.exit(0);
-  };
+  // Stay alive until signal shutdown. CLI wrappers call process.exit after main()
+  // resolves; returning here would tear down the stdio MCP server immediately.
+  await new Promise<never>((_resolve) => {
+    const shutdown = async () => {
+      stopSpawnedBrokerIfOwned();
+      await brokerClient.disconnect();
+      await server.close();
+      process.exit(0);
+    };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-  // Stdio MCP hosts often close stdin without SIGTERM; ensure spawned brokers still die.
-  process.on('exit', () => {
-    stopSpawnedBrokerIfOwned();
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    // Stdio MCP hosts often close stdin without SIGTERM; ensure spawned brokers still die.
+    process.on('exit', () => {
+      stopSpawnedBrokerIfOwned();
+    });
   });
 }
 

@@ -2,10 +2,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mcpAutoloadOption } from '../cli/commands/mcp.js';
+import { mcpAutoloadOption, runMcp } from '../cli/commands/mcp.js';
 import { runSetup } from '../cli/commands/setup.js';
 import { isAutoloadEnabled } from '../server/env.js';
 import * as mcpConfig from '../server/mcp-config.js';
+import * as serverIndex from '../server/index.js';
 import { getInstalledExtensionPath, getUserConfigPath } from '../server/paths.js';
 import { buildNextAction } from '../server/status-coaching.js';
 
@@ -91,6 +92,26 @@ describe('cli setup', () => {
         brokerPort: 8765
       })
     ).toContain('chrome-browser-control start');
+  });
+});
+
+describe('cli mcp keep-alive', () => {
+  it('does not resolve while server main is still serving', async () => {
+    let settleMain!: () => void;
+    const pendingMain = new Promise<void>((resolve) => {
+      settleMain = resolve;
+    });
+    vi.spyOn(serverIndex, 'main').mockImplementation(() => pendingMain);
+
+    const resultPromise = runMcp({ positional: ['mcp'], flags: {} });
+    const raced = await Promise.race([
+      resultPromise.then(() => 'resolved' as const),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 50))
+    ]);
+    expect(raced).toBe('pending');
+
+    settleMain();
+    await expect(resultPromise).resolves.toBe(0);
   });
 });
 

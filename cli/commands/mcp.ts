@@ -42,6 +42,8 @@ export async function runMcp(args: ParsedArgs): Promise<number> {
     process.env.CHROME_BROWSER_CONTROL_AUTOLOAD = '1';
   }
   const { main } = await import('../../server/index.js');
+  // main() must not resolve while the stdio MCP server is serving; otherwise
+  // cli/main.ts process.exit(0) kills createClient before the host connects.
   await main(autoload === undefined ? {} : { autoload });
   return 0;
 }
