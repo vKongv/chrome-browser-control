@@ -13,8 +13,9 @@ Use this file to resume work without relying on chat history.
 - `extension/` — Chrome MV3 extension, popup, content script, security helpers (source; setup copies to `~/.chrome-browser-control/extension`).
 - `tests/` — Vitest coverage for broker, bridge, protocol, tools, content-core, env, CLI.
 - `benchmarks/compact-snapshot.mjs` — compact-vs-full snapshot size benchmark.
-- `skills/chrome-browser-control/` — distributable skills.sh agent skill for agents using the MCP tools at runtime.
+- `skills/chrome-browser-control/` — distributable skills.sh agent skill for agents using the MCP tools at runtime. **Not** included in the npm `files` tarball; install from this repo or skills.sh separately.
 - `docs/` — durable, **tracked** notes agents must be able to find via git / `@docs`.
+- `docs/publish-checklist.md` — maintainer manual npm publish checklist (no CI auto-publish).
 - `docs/scratchpad/` — local-only WIP (gitignored). Do not put cross-session handoffs or agent feedback here; they will not ship and often will not surface in search/`@`.
 - `docs/agent-feedback-from-fb-batch-2026-07-08.md` — field feedback from a ~100-page Facebook audit (scoped snapshots, feed/post extractor, exclusive claims). Prioritize before new agent work on observation/concurrency.
 
@@ -45,7 +46,8 @@ Use this file to resume work without relying on chat history.
 - MCP host snippets prefer `command: cbctl` and `args: ["mcp"]` (not `tsx` / `server/index.ts`); long name still works.
 - Contributors can still use `npm run broker`, `npm run mcp`, and repo `.env.local` against a checkout.
 - Call `browser_status` first on a new session; read `nextAction` for onboarding coaching and `adapter.registeredToolCount` to detect stale MCP host tool catalogs.
-- Runtime agents should use the `chrome-browser-control` skill when available; it contains the operating playbook for claiming tabs, collecting bounded page state, waiting after actions, screenshots, feed scrolling, side-effect confirmation, and cleanup.
+- Runtime agents should use the `chrome-browser-control` skill when available; it contains the operating playbook for claiming tabs, collecting bounded page state, waiting after actions, screenshots, feed scrolling, side-effect confirmation, and cleanup. The skill is **not** part of `npm install -g chrome-browser-control` — copy or install it from `skills/chrome-browser-control/` in this repo (or skills.sh).
+- Public npm releases are manual; maintainers use `docs/publish-checklist.md`. Do not add publish-on-push workflows or long-lived `NPM_TOKEN` secrets for the default path.
 
 ## Local setup
 

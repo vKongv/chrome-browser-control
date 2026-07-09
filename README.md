@@ -31,6 +31,10 @@ cbctl doctor
 
 `setup` writes `~/.chrome-browser-control/config.env` (pairing token + port), copies the unpacked extension to `~/.chrome-browser-control/extension`, and prints MCP host snippets. Do not commit that directory.
 
+### Agent skill (separate from npm)
+
+The runtime agent skill under `skills/chrome-browser-control/` is **not** shipped inside the npm package. After installing the CLI, obtain the skill from this repository (or skills.sh) if your agent host uses skills.
+
 CLI commands (`cbctl` or `chrome-browser-control`):
 
 | Command | Purpose |
@@ -274,3 +278,7 @@ After editing files under `extension/`, reload the unpacked extension on `chrome
 - CDP fallback is not supported by the MCP adapter because it bypasses extension pairing.
 
 Never bind the broker to a non-loopback interface or commit tokens, local config files, logs, or personal setup notes.
+
+## Maintainer publish
+
+First public npm releases are **manual**. Maintainers follow [`docs/publish-checklist.md`](docs/publish-checklist.md). Do not add auto-publish-on-push or long-lived npm tokens in CI for the default release path.
