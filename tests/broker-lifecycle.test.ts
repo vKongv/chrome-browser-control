@@ -85,7 +85,7 @@ describe('ensureBroker', () => {
     });
 
     expect(result).toMatchObject({ reachable: false, authOk: false });
-    expect(result.error).toContain('chrome-browser-control start');
+    expect(result.error).toContain('cbctl start');
     expect(spawnMock).not.toHaveBeenCalled();
   });
 

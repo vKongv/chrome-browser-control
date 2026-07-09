@@ -21,26 +21,28 @@ npm install -g chrome-browser-control
 npx -y chrome-browser-control setup
 ```
 
+The CLI installs as `cbctl` (preferred short name) and also as `chrome-browser-control`.
+
 ```bash
-chrome-browser-control setup
-chrome-browser-control start
-chrome-browser-control doctor
+cbctl setup
+cbctl start
+cbctl doctor
 ```
 
 `setup` writes `~/.chrome-browser-control/config.env` (pairing token + port), copies the unpacked extension to `~/.chrome-browser-control/extension`, and prints MCP host snippets. Do not commit that directory.
 
-CLI commands:
+CLI commands (`cbctl` or `chrome-browser-control`):
 
 | Command | Purpose |
 | --- | --- |
-| `chrome-browser-control setup` | Create user config and install the extension copy |
-| `chrome-browser-control start` | Start the shared loopback broker |
-| `chrome-browser-control stop` | Stop the broker |
-| `chrome-browser-control status` | Show broker / config status |
-| `chrome-browser-control doctor` | Local setup checker |
-| `chrome-browser-control mcp` | Stdio MCP adapter (attach-only by default) |
-| `chrome-browser-control mcp-config` | Print host-specific MCP snippets |
-| `chrome-browser-control broker` | Run the broker in the foreground (dev) |
+| `cbctl setup` | Create user config and install the extension copy |
+| `cbctl start` | Start the shared loopback broker |
+| `cbctl stop` | Stop the broker |
+| `cbctl status` | Show broker / config status |
+| `cbctl doctor` | Local setup checker |
+| `cbctl mcp` | Stdio MCP adapter (attach-only by default) |
+| `cbctl mcp-config` | Print host-specific MCP snippets |
+| `cbctl broker` | Run the broker in the foreground (dev) |
 
 From a git checkout (contributors):
 
@@ -60,12 +62,12 @@ Repo-local `npm run setup` / `npm run broker` / `npm run mcp` remain available f
 - `CHROME_BROWSER_CONTROL_PORT` — WebSocket broker port (default `8765`).
 - `CHROME_BROWSER_CONTROL_HOST` — Loopback host for the broker (default `127.0.0.1`).
 - `CHROME_BROWSER_CONTROL_EXTENSION_ID` — Optional. Pins the broker to one installed extension ID.
-- `CHROME_BROWSER_CONTROL_AUTOLOAD` — Optional. Set to `1` so `mcp` may spawn a broker if none is reachable (recovery). Prefer `chrome-browser-control start` for normal use.
+- `CHROME_BROWSER_CONTROL_AUTOLOAD` — Optional. Set to `1` so `mcp` may spawn a broker if none is reachable (recovery). Prefer `cbctl start` for normal use.
 - `CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV` — Optional. Set to `1` to skip loading repo `.env.local`.
 
 User config lives under `~/.chrome-browser-control/` and is loaded before any repo `.env.local`. Process env always wins.
 
-MCP attach-only default: `chrome-browser-control mcp` connects to an already-running broker. Start the broker with `chrome-browser-control start` first. For recovery, use `chrome-browser-control mcp --autoload` or `CHROME_BROWSER_CONTROL_AUTOLOAD=1`.
+MCP attach-only default: `cbctl mcp` connects to an already-running broker. Start the broker with `cbctl start` first. For recovery, use `cbctl mcp --autoload` or `CHROME_BROWSER_CONTROL_AUTOLOAD=1`.
 
 ## Load The Extension
 
@@ -86,23 +88,23 @@ Using `*` is convenient for local development, but it exposes every normal web p
 
 ## MCP Host Configuration
 
-Paste a snippet from `chrome-browser-control setup` (or `mcp-config`) into Cursor, Claude Desktop, Codex, or another stdio MCP host. To print host-specific config again later:
+Paste a snippet from `cbctl setup` (or `mcp-config`) into Cursor, Claude Desktop, Codex, or another stdio MCP host. To print host-specific config again later:
 
 ```bash
-chrome-browser-control mcp-config --host cursor
-chrome-browser-control mcp-config --host claude
-chrome-browser-control mcp-config --host codex
-chrome-browser-control mcp-config --host yaml
+cbctl mcp-config --host cursor
+cbctl mcp-config --host claude
+cbctl mcp-config --host codex
+cbctl mcp-config --host yaml
 ```
 
-The MCP server key is `chrome_browser_control`. The adapter command is the installable CLI with `args: ["mcp"]` — not `tsx` against `server/index.ts`.
+The MCP server key is `chrome_browser_control`. The adapter command is the installable CLI (`cbctl` preferred) with `args: ["mcp"]` — not `tsx` against `server/index.ts`.
 
 YAML-style example:
 
 ```yaml
 mcp_servers:
   chrome_browser_control:
-    command: "chrome-browser-control"
+    command: "cbctl"
     args: ["mcp"]
     env:
       CHROME_BROWSER_CONTROL_TOKEN: "<generated-token>"
@@ -117,7 +119,7 @@ JSON-style example:
 {
   "mcpServers": {
     "chrome_browser_control": {
-      "command": "chrome-browser-control",
+      "command": "cbctl",
       "args": ["mcp"],
       "env": {
         "CHROME_BROWSER_CONTROL_TOKEN": "<generated-token>",
@@ -134,8 +136,8 @@ If your MCP host uses a config file, keep it private and outside the repository.
 
 ## Verify
 
-1. Start the broker: `chrome-browser-control start`
-2. Run the setup checker: `chrome-browser-control doctor`
+1. Start the broker: `cbctl start`
+2. Run the setup checker: `cbctl doctor`
 3. Confirm from your MCP host by calling the `browser_status` tool. When ready, `extension.status` and `ping.status` should reflect a live bridge connection, and `extension.allowedOrigins` should show your configured scope.
 
 ## Tools

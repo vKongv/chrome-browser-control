@@ -68,7 +68,7 @@ describe('cli setup', () => {
     tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-setup-'));
     process.env.HOME = tempHome;
     vi.spyOn(mcpConfig, 'resolveCliCommand').mockReturnValue({
-      command: '/usr/local/bin/chrome-browser-control',
+      command: '/usr/local/bin/cbctl',
       args: ['mcp'],
       npxFallback: { command: 'npx', args: ['-y', 'chrome-browser-control', 'mcp'] }
     });
@@ -91,7 +91,7 @@ describe('cli setup', () => {
         extensionConnected: false,
         brokerPort: 8765
       })
-    ).toContain('chrome-browser-control start');
+    ).toContain('cbctl start');
   });
 });
 

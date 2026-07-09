@@ -8,7 +8,7 @@ export async function runMcpConfig(args: ParsedArgs): Promise<number> {
   const host = String(args.flags.host ?? 'json');
   const configPath = getUserConfigPath();
   if (!existsSync(configPath)) {
-    console.error('Missing user config. Run chrome-browser-control setup first.');
+    console.error('Missing user config. Run cbctl setup first.');
     return 1;
   }
   const env = readEnvFile(configPath);

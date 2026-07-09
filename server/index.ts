@@ -95,7 +95,7 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
       if (autoloadEnabled) {
         console.error('[chrome-browser-control] MCP tools will retry broker autoload on browser_status until the bridge is ready.');
       } else {
-        console.error('[chrome-browser-control] Run chrome-browser-control start, then retry browser_status.');
+        console.error('[chrome-browser-control] Run cbctl start, then retry browser_status.');
       }
     }
   }

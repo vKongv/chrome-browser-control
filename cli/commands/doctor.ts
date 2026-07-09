@@ -15,7 +15,7 @@ export async function runDoctor(_args: ParsedArgs): Promise<number> {
   const mcpMain = getCompiledMcpMainPath();
   checks.push({ name: 'Compiled broker entry', ok: existsSync(brokerMain), detail: brokerMain });
   checks.push({ name: 'Compiled MCP entry', ok: existsSync(mcpMain), detail: mcpMain });
-  checks.push({ name: 'Extension copy', ok: extensionCopyLooksValid(), detail: 'Run chrome-browser-control setup' });
+  checks.push({ name: 'Extension copy', ok: extensionCopyLooksValid(), detail: 'Run cbctl setup' });
 
   const configPath = getUserConfigPath();
   const hasConfig = existsSync(configPath);
@@ -36,7 +36,7 @@ export async function runDoctor(_args: ParsedArgs): Promise<number> {
       checks.push({
         name: 'Broker running',
         ok: running,
-        detail: running ? `ws://${config.host}:${config.port}` : 'Run chrome-browser-control start'
+        detail: running ? `ws://${config.host}:${config.port}` : 'Run cbctl start'
       });
       checks.push({ name: 'Broker port open', ok: open, detail: String(config.port) });
     } catch (error) {
@@ -51,7 +51,7 @@ export async function runDoctor(_args: ParsedArgs): Promise<number> {
   }
 
   if (failures) {
-    console.error(`\n${failures} check(s) failed. Run chrome-browser-control setup and start, then reload/configure the extension.`);
+    console.error(`\n${failures} check(s) failed. Run cbctl setup and start, then reload/configure the extension.`);
     return 1;
   }
 

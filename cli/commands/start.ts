@@ -33,6 +33,6 @@ export async function runStart(_args: ParsedArgs): Promise<number> {
   }
 
   console.log(`Started broker on ws://${config.host}:${config.port} (pid ${child.pid})`);
-  console.log('Connect MCP hosts with chrome-browser-control mcp.');
+  console.log('Connect MCP hosts with cbctl mcp.');
   return 0;
 }

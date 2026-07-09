@@ -22,11 +22,17 @@ export interface RenderConfigOptions {
   port?: string;
 }
 
+const CLI_BIN_NAMES =
+  process.platform === 'win32'
+    ? (['cbctl.cmd', 'chrome-browser-control.cmd'] as const)
+    : (['cbctl', 'chrome-browser-control'] as const);
+
 export function resolveCliCommand(): { command: string; args: string[]; npxFallback: { command: string; args: string[] } } {
-  const binName = process.platform === 'win32' ? 'chrome-browser-control.cmd' : 'chrome-browser-control';
   const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
   const pathEntries = (process.env[pathKey] ?? '').split(process.platform === 'win32' ? ';' : ':');
-  const globalBin = pathEntries.map((entry) => join(entry, binName)).find((candidate) => existsSync(candidate));
+  const globalBin = CLI_BIN_NAMES.map((binName) =>
+    pathEntries.map((entry) => join(entry, binName)).find((candidate) => existsSync(candidate))
+  ).find((candidate): candidate is string => Boolean(candidate));
 
   const command = globalBin ?? 'npx';
   const args = globalBin ? ['mcp'] : ['-y', 'chrome-browser-control', 'mcp'];

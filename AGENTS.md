@@ -8,7 +8,7 @@ Use this file to resume work without relying on chat history.
 
 ## Key paths
 
-- `cli/` — installable `chrome-browser-control` bin (`setup`, `start`, `stop`, `status`, `doctor`, `mcp`, `mcp-config`, `broker`).
+- `cli/` — installable CLI bins `cbctl` and `chrome-browser-control` (`setup`, `start`, `stop`, `status`, `doctor`, `mcp`, `mcp-config`, `broker`).
 - `server/` — MCP adapter, broker client, broker, protocol, tools, environment handling, MCP config render helpers.
 - `extension/` — Chrome MV3 extension, popup, content script, security helpers (source; setup copies to `~/.chrome-browser-control/extension`).
 - `tests/` — Vitest coverage for broker, bridge, protocol, tools, content-core, env, CLI, setup scripts.
@@ -42,10 +42,10 @@ Use this file to resume work without relying on chat history.
 - Use MCP server key `chrome_browser_control` only; remove legacy `chrome_browser` host entries to avoid stale tool schemas.
 - Snapshot refs are per-document in-memory handles and are stable across DOM reorder in the same document.
 - Stale/disconnected/expired refs are pruned and should fail cleanly.
-- Installable CLI is the supported user path: `chrome-browser-control setup|start|stop|status|doctor|mcp|mcp-config`.
+- Installable CLI is the supported user path: `cbctl setup|start|stop|status|doctor|mcp|mcp-config` (alias: `chrome-browser-control`).
 - User config and installed extension live under `~/.chrome-browser-control/` (`config.env`, `extension/`).
-- MCP default is attach-only: start the broker with `chrome-browser-control start`, then run `mcp`. Opt into spawn with `mcp --autoload` or `CHROME_BROWSER_CONTROL_AUTOLOAD=1`.
-- MCP host snippets use `command: chrome-browser-control` and `args: ["mcp"]` (not `tsx` / `server/index.ts`).
+- MCP default is attach-only: start the broker with `cbctl start`, then run `mcp`. Opt into spawn with `mcp --autoload` or `CHROME_BROWSER_CONTROL_AUTOLOAD=1`.
+- MCP host snippets prefer `command: cbctl` and `args: ["mcp"]` (not `tsx` / `server/index.ts`); long name still works.
 - Contributors can still use `npm run broker`, `npm run mcp`, and repo `.env.local` against a checkout.
 - Call `browser_status` first on a new session; read `nextAction` for onboarding coaching and `adapter.registeredToolCount` to detect stale MCP host tool catalogs.
 - Runtime agents should use the `chrome-browser-control` skill when available; it contains the operating playbook for claiming tabs, collecting bounded page state, waiting after actions, screenshots, feed scrolling, side-effect confirmation, and cleanup.
@@ -56,9 +56,9 @@ Users:
 
 ```bash
 npm install -g chrome-browser-control
-chrome-browser-control setup
-chrome-browser-control start
-chrome-browser-control doctor
+cbctl setup
+cbctl start
+cbctl doctor
 ```
 
 Contributors (checkout):
@@ -87,7 +87,7 @@ Run before reporting success:
 ```bash
 npm test
 npm run build
-chrome-browser-control doctor
+cbctl doctor
 # or: npm run doctor
 npm run benchmark:compact-snapshots
 ```
@@ -97,10 +97,10 @@ Expected benchmark target: compact snapshots should remain at least 50% smaller 
 ## MCP config generation
 
 ```bash
-chrome-browser-control mcp-config --host yaml
-chrome-browser-control mcp-config --host claude
-chrome-browser-control mcp-config --host cursor
-chrome-browser-control mcp-config --host codex
+cbctl mcp-config --host yaml
+cbctl mcp-config --host claude
+cbctl mcp-config --host cursor
+cbctl mcp-config --host codex
 ```
 
 Host formats:
@@ -108,7 +108,7 @@ Host formats:
 - YAML: `mcp_servers` with key `chrome_browser_control`.
 - Claude/Cursor: JSON `mcpServers`.
 - Codex: TOML `[mcp_servers.chrome_browser_control]`.
-- Command/args: `chrome-browser-control` + `["mcp"]` (NPX fallback: `npx` + `["-y", "chrome-browser-control", "mcp"]`).
+- Command/args: `cbctl` + `["mcp"]` (NPX fallback: `npx` + `["-y", "chrome-browser-control", "mcp"]`).
 
 ## Security rules
 

@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Local MCP server and Chrome MV3 extension for controlling the current Chrome profile from any stdio MCP host.",
   "bin": {
+    "cbctl": "./dist/cli/main.js",
     "chrome-browser-control": "./dist/cli/main.js"
   },
   "files": [

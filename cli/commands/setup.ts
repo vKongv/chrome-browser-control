@@ -50,7 +50,7 @@ export async function runSetup(args: ParsedArgs): Promise<number> {
   console.log('2. Open the extension popup and paste this pairing token:');
   console.log(`   ${token}`);
   console.log('3. Add allowed origins, for example: https://example.com or * for all http/https web pages.');
-  console.log('4. Start the shared broker: chrome-browser-control start');
+  console.log('4. Start the shared broker: cbctl start');
   console.log('5. Add one of these MCP config snippets to your agent.');
   console.log('');
   console.log('YAML config:');
@@ -67,7 +67,7 @@ export async function runSetup(args: ParsedArgs): Promise<number> {
     console.log(renderConfig('json', { command: 'npx', args: ['-y', 'chrome-browser-control', 'mcp'], token, port }));
   }
   console.log('');
-  console.log('Then run: chrome-browser-control doctor');
+  console.log('Then run: cbctl doctor');
 
   if (startAfter) {
     const { runStart } = await import('./start.js');

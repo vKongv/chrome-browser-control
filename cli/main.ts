@@ -8,17 +8,17 @@ import { runDoctor } from './commands/doctor.js';
 import { runBroker, runMcp } from './commands/mcp.js';
 import { runMcpConfig } from './commands/mcp-config.js';
 
-const HELP = `chrome-browser-control — local Chrome browser control MCP
+const HELP = `cbctl — local Chrome browser control MCP
 
 Usage:
-  chrome-browser-control setup [--force-token] [--start]
-  chrome-browser-control start
-  chrome-browser-control stop
-  chrome-browser-control status
-  chrome-browser-control doctor
-  chrome-browser-control mcp [--autoload]
-  chrome-browser-control broker
-  chrome-browser-control mcp-config [--host json|yaml|codex|cursor]
+  cbctl setup [--force-token] [--start]
+  cbctl start
+  cbctl stop
+  cbctl status
+  cbctl doctor
+  cbctl mcp [--autoload]
+  cbctl broker
+  cbctl mcp-config [--host json|yaml|codex|cursor]
 
 Commands:
   setup       Create user config and copy extension to ~/.chrome-browser-control/
@@ -29,6 +29,8 @@ Commands:
   mcp         Run the MCP stdio adapter (attach-only by default)
   broker      Run the broker in the foreground (debug)
   mcp-config  Print MCP host config snippets
+
+Also installed as chrome-browser-control (same binary).
 `;
 
 async function main(): Promise<number> {
@@ -66,6 +68,6 @@ async function main(): Promise<number> {
 main()
   .then((code) => process.exit(code))
   .catch((error) => {
-    console.error('[chrome-browser-control] fatal:', error);
+    console.error('[cbctl] fatal:', error);
     process.exit(1);
   });

@@ -434,7 +434,7 @@ describe('registerBrowserTools', () => {
 
   it('coaches token and auth failures through nextAction', async () => {
     expect(buildNextAction({ ready: false, tokenMissing: true, brokerReachable: false, adapterConnected: false, extensionConnected: false })).toContain(
-      'chrome-browser-control setup'
+      'cbctl setup'
     );
     expect(
       buildNextAction({
@@ -503,7 +503,7 @@ describe('registerBrowserTools', () => {
     const status = JSON.parse(result.content[0].text);
 
     expect(status.ready).toBe(false);
-    expect(status.nextAction).toContain('chrome-browser-control setup');
+    expect(status.nextAction).toContain('cbctl setup');
     expect(bridge.calls).toEqual([]);
   });
 

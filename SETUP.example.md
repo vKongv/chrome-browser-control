@@ -10,8 +10,8 @@ Preferred (installable CLI):
 
 ```bash
 npm install -g chrome-browser-control
-chrome-browser-control setup
-chrome-browser-control start
+cbctl setup
+cbctl start
 ```
 
 `setup` writes `~/.chrome-browser-control/config.env`, copies the extension to `~/.chrome-browser-control/extension`, and prints copy-paste MCP configs.
@@ -36,7 +36,7 @@ After changing extension source files, re-run setup (or copy again) if you use t
 
 ## Token
 
-`chrome-browser-control setup` generates a high-entropy URL-safe token in `~/.chrome-browser-control/config.env`. To generate one manually:
+`cbctl setup` generates a high-entropy URL-safe token in `~/.chrome-browser-control/config.env`. To generate one manually:
 
 ```bash
 node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
@@ -62,22 +62,22 @@ Wildcard mode is convenient for local development, but any MCP client with the p
 Normal use (shared detached broker):
 
 ```bash
-chrome-browser-control start
-chrome-browser-control status
-chrome-browser-control stop
+cbctl start
+cbctl status
+cbctl stop
 ```
 
 Foreground / contributor checkout:
 
 ```bash
-chrome-browser-control broker
+cbctl broker
 # or: CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run broker
 ```
 
 Optional extension ID pinning via env or user config:
 
 ```bash
-CHROME_BROWSER_CONTROL_EXTENSION_ID='<chrome-extension-id>' chrome-browser-control start
+CHROME_BROWSER_CONTROL_EXTENSION_ID='<chrome-extension-id>' cbctl start
 ```
 
 ## MCP Adapter
@@ -92,17 +92,17 @@ args: ["mcp"]
 Recovery / opt-in spawn if no broker is reachable:
 
 ```bash
-chrome-browser-control mcp --autoload
+cbctl mcp --autoload
 # or: CHROME_BROWSER_CONTROL_AUTOLOAD=1
 ```
 
 Print host-specific config snippets:
 
 ```bash
-chrome-browser-control mcp-config --host yaml
-chrome-browser-control mcp-config --host claude
-chrome-browser-control mcp-config --host codex
-chrome-browser-control mcp-config --host cursor
+cbctl mcp-config --host yaml
+cbctl mcp-config --host claude
+cbctl mcp-config --host codex
+cbctl mcp-config --host cursor
 ```
 
 Use an MCP config path appropriate for your tool and keep it outside the repository.
@@ -136,6 +136,6 @@ For multi-step tasks, call `claim_tab` with an allowed tab id and pass the retur
 ```bash
 npm test
 npm run build
-chrome-browser-control doctor
+cbctl doctor
 npm run benchmark:compact-snapshots
 ```

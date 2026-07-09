@@ -172,7 +172,7 @@ function spawnDetachedBroker(host: string, port: number, token: string): ChildPr
   const brokerMain = getCompiledBrokerMainPath();
   if (!existsSync(brokerMain)) {
     throw new Error(
-      `Compiled broker entry missing at ${brokerMain}. Run npm run build before mcp --autoload (or use chrome-browser-control start).`
+      `Compiled broker entry missing at ${brokerMain}. Run npm run build before mcp --autoload (or use cbctl start).`
     );
   }
   const child = spawn(process.execPath, [brokerMain], {
@@ -250,7 +250,7 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
     return {
       reachable: false,
       authOk: false,
-      error: `Broker is not reachable on port ${port}. Run chrome-browser-control start or use mcp --autoload.`
+      error: `Broker is not reachable on port ${port}. Run cbctl start or use mcp --autoload.`
     };
   }
 

@@ -52,8 +52,8 @@ export async function runStatus(_args: ParsedArgs): Promise<number> {
 
   console.log('Chrome Browser Control status');
   console.log('=============================');
-  console.log(`${hasConfig ? '✅' : '❌'} User config ${hasConfig ? getUserConfigPath() : 'missing — run chrome-browser-control setup'}`);
-  console.log(`${hasExtension ? '✅' : '❌'} Extension copy ${hasExtension ? 'present' : 'missing — run chrome-browser-control setup'}`);
+  console.log(`${hasConfig ? '✅' : '❌'} User config ${hasConfig ? getUserConfigPath() : 'missing — run cbctl setup'}`);
+  console.log(`${hasExtension ? '✅' : '❌'} Extension copy ${hasExtension ? 'present' : 'missing — run cbctl setup'}`);
   if (tokenIssue) {
     console.log(`❌ Token ${tokenIssue}`);
   } else if (hasConfig) {

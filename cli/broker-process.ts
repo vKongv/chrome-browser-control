@@ -20,7 +20,7 @@ export interface BrokerConfig {
 export function readBrokerConfig(): BrokerConfig {
   const configPath = getUserConfigPath();
   if (!existsSync(configPath)) {
-    throw new Error(`Missing user config at ${configPath}. Run chrome-browser-control setup first.`);
+    throw new Error(`Missing user config at ${configPath}. Run cbctl setup first.`);
   }
   const env = readEnvFile(configPath);
   const host = env.CHROME_BROWSER_CONTROL_HOST ?? '127.0.0.1';
