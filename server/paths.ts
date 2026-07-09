@@ -48,6 +48,12 @@ export function getPackageRoot(moduleUrl = import.meta.url): string {
   throw new Error('Could not find chrome-browser-control package root');
 }
 
+/** Semver from package.json at the resolved package root. */
+export function readPackageVersion(moduleUrl = import.meta.url): string {
+  const packageJsonPath = join(getPackageRoot(moduleUrl), 'package.json');
+  return JSON.parse(readFileSync(packageJsonPath, 'utf8')).version as string;
+}
+
 export function getPackagedExtensionPath(moduleUrl = import.meta.url): string {
   return join(getPackageRoot(moduleUrl), 'extension');
 }

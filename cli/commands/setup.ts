@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { copyExtensionToUserDir } from '../copy-extension.js';
 import { flagBoolean, type ParsedArgs } from '../parse-args.js';
@@ -11,12 +11,7 @@ import {
   writeEnvFile
 } from '../../server/env-file.js';
 import { renderConfig, resolveCliCommand } from '../../server/mcp-config.js';
-import { getInstalledExtensionPath, getPackageRoot, getUserConfigDir, getUserConfigPath } from '../../server/paths.js';
-
-function packageVersion(): string {
-  const packageJson = join(getPackageRoot(), 'package.json');
-  return JSON.parse(readFileSync(packageJson, 'utf8')).version as string;
-}
+import { getInstalledExtensionPath, getUserConfigDir, getUserConfigPath, readPackageVersion } from '../../server/paths.js';
 
 export async function runSetup(args: ParsedArgs): Promise<number> {
   const forceToken = flagBoolean(args.flags, 'force-token');
@@ -35,7 +30,7 @@ export async function runSetup(args: ParsedArgs): Promise<number> {
     [DEFAULT_PORT_ENV]: port
   });
 
-  const extension = copyExtensionToUserDir(packageVersion());
+  const extension = copyExtensionToUserDir(readPackageVersion());
   const cli = resolveCliCommand();
 
   console.log('Chrome Browser Control setup');
