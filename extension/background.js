@@ -681,7 +681,8 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
     }
     deviceScaleFactor = Number(viewport.deviceScaleFactor) > 0 ? Number(viewport.deviceScaleFactor) : 1;
     cropBounds = intersectCropBounds(sourceBounds, viewport, params.padding);
-    if (cropBounds.width <= 0 || cropBounds.height <= 0) {
+    const cropFinite = [cropBounds.x, cropBounds.y, cropBounds.width, cropBounds.height].every(Number.isFinite);
+    if (!cropFinite || cropBounds.width <= 0 || cropBounds.height <= 0) {
       throw new Error('screenshot crop is outside the visible viewport (empty intersection after padding)');
     }
   }
