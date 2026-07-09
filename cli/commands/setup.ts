@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { copyExtensionToUserDir } from '../copy-extension.js';
-import { startBrokerProcess } from '../broker-process.js';
 import { flagBoolean, type ParsedArgs } from '../parse-args.js';
 import {
   DEFAULT_HOST_ENV,

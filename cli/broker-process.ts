@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import {
@@ -81,26 +81,31 @@ export function startBrokerProcess(config: BrokerConfig, options: StartBrokerOpt
   const logPath = options.logFile ?? getBrokerLogPath();
   const logFd = openSync(logPath, 'a');
 
-  const child = spawn(process.execPath, [brokerMain], {
-    detached: options.detached ?? true,
-    stdio: ['ignore', logFd, logFd],
-    env: {
-      ...process.env,
-      CHROME_BROWSER_CONTROL_HOST: config.host,
-      CHROME_BROWSER_CONTROL_PORT: String(config.port),
-      CHROME_BROWSER_CONTROL_TOKEN: config.token
+  try {
+    const child = spawn(process.execPath, [brokerMain], {
+      detached: options.detached ?? true,
+      stdio: ['ignore', logFd, logFd],
+      env: {
+        ...process.env,
+        CHROME_BROWSER_CONTROL_HOST: config.host,
+        CHROME_BROWSER_CONTROL_PORT: String(config.port),
+        CHROME_BROWSER_CONTROL_TOKEN: config.token
+      }
+    });
+
+    if (options.detached ?? true) {
+      child.unref();
     }
-  });
 
-  if (options.detached ?? true) {
-    child.unref();
+    if (child.pid) {
+      writeFileSync(getBrokerPidPath(), `${child.pid}\n`);
+    }
+
+    return child;
+  } finally {
+    // spawn duplicates the fd for the child; close the parent's copy.
+    closeSync(logFd);
   }
-
-  if (child.pid) {
-    writeFileSync(getBrokerPidPath(), `${child.pid}\n`);
-  }
-
-  return child;
 }
 
 export async function stopBrokerProcess(): Promise<'stopped' | 'not_running'> {
