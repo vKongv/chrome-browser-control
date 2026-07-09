@@ -29,7 +29,9 @@ export async function runSetup(args: ParsedArgs): Promise<number> {
   const token = forceToken || !existing[DEFAULT_TOKEN_ENV] ? generateToken() : existing[DEFAULT_TOKEN_ENV];
   const port = existing[DEFAULT_PORT_ENV] || DEFAULT_PORT;
 
+  // Preserve unknown keys (e.g. CHROME_BROWSER_CONTROL_EXTENSION_ID) across setup refreshes.
   writeEnvFile(configPath, {
+    ...existing,
     [DEFAULT_TOKEN_ENV]: token,
     [DEFAULT_PORT_ENV]: port,
     ...(existing[DEFAULT_HOST_ENV] ? { [DEFAULT_HOST_ENV]: existing[DEFAULT_HOST_ENV] } : {})

@@ -1,13 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mcpAutoloadOption, runMcp } from '../cli/commands/mcp.js';
 import { runSetup } from '../cli/commands/setup.js';
 import { isAutoloadEnabled } from '../server/env.js';
+import { DEFAULT_PORT_ENV, DEFAULT_TOKEN_ENV, writeEnvFile } from '../server/env-file.js';
 import * as mcpConfig from '../server/mcp-config.js';
 import * as serverIndex from '../server/index.js';
-import { getInstalledExtensionPath, getUserConfigPath } from '../server/paths.js';
+import { getInstalledExtensionPath, getUserConfigDir, getUserConfigPath } from '../server/paths.js';
 import { buildNextAction } from '../server/status-coaching.js';
 
 const originalHome = process.env.HOME;
@@ -45,6 +46,25 @@ describe('cli setup', () => {
     const config = readFileSync(getUserConfigPath(), 'utf8');
     expect(config).toContain('CHROME_BROWSER_CONTROL_TOKEN=');
     expect(config.length).toBeGreaterThan(40);
+  });
+
+  it('preserves custom config.env keys when setup is re-run', async () => {
+    tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-setup-'));
+    process.env.HOME = tempHome;
+    mkdirSync(getUserConfigDir(), { recursive: true });
+    writeEnvFile(getUserConfigPath(), {
+      [DEFAULT_TOKEN_ENV]: 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-',
+      [DEFAULT_PORT_ENV]: '8765',
+      CHROME_BROWSER_CONTROL_EXTENSION_ID: 'abcdefghijklmnopqrstuvwxyzabcdef',
+      CHROME_BROWSER_CONTROL_CUSTOM: 'keep-me'
+    });
+
+    const code = await runSetup({ positional: ['setup'], flags: {} });
+    expect(code).toBe(0);
+    const config = readFileSync(getUserConfigPath(), 'utf8');
+    expect(config).toContain('CHROME_BROWSER_CONTROL_EXTENSION_ID=abcdefghijklmnopqrstuvwxyzabcdef');
+    expect(config).toContain('CHROME_BROWSER_CONTROL_CUSTOM=keep-me');
+    expect(config).toContain('CHROME_BROWSER_CONTROL_TOKEN=abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-');
   });
 
   it('does not print NPX fallback when resolveCliCommand already returns npx', async () => {
