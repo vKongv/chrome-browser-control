@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { copyExtensionToUserDir } from '../copy-extension.js';
 import { flagBoolean, type ParsedArgs } from '../parse-args.js';
 import {
-  DEFAULT_HOST_ENV,
   DEFAULT_PORT,
   DEFAULT_PORT_ENV,
   DEFAULT_TOKEN_ENV,
@@ -33,8 +32,7 @@ export async function runSetup(args: ParsedArgs): Promise<number> {
   writeEnvFile(configPath, {
     ...existing,
     [DEFAULT_TOKEN_ENV]: token,
-    [DEFAULT_PORT_ENV]: port,
-    ...(existing[DEFAULT_HOST_ENV] ? { [DEFAULT_HOST_ENV]: existing[DEFAULT_HOST_ENV] } : {})
+    [DEFAULT_PORT_ENV]: port
   });
 
   const extension = copyExtensionToUserDir(packageVersion());
