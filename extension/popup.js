@@ -2,9 +2,6 @@ const bridgeUrl = document.getElementById('bridgeUrl');
 const token = document.getElementById('token');
 const allowedOrigins = document.getElementById('allowedOrigins');
 const statusEl = document.getElementById('status');
-const extensionProtocolEl = document.getElementById('extensionProtocol');
-const adapterProtocolEl = document.getElementById('adapterProtocol');
-const registeredToolCountEl = document.getElementById('registeredToolCount');
 const save = document.getElementById('save');
 const setupSnippet = document.getElementById('setupSnippet');
 const copyJson = document.getElementById('copyJson');
@@ -25,19 +22,6 @@ function showStatus(nextStatus) {
   statusEl.textContent = nextStatus;
 }
 
-function renderAdapterStatus(adapterStatus) {
-  const adapterProtocol =
-    adapterStatus && typeof adapterStatus.adapterProtocolVersion === 'number' && adapterStatus.adapterProtocolVersion > 0
-      ? String(adapterStatus.adapterProtocolVersion)
-      : '—';
-  const toolCount =
-    adapterStatus && typeof adapterStatus.registeredToolCount === 'number'
-      ? String(adapterStatus.registeredToolCount)
-      : '0';
-  adapterProtocolEl.textContent = adapterProtocol;
-  registeredToolCountEl.textContent = toolCount;
-}
-
 function cursorConfigTemplate(currentToken = '<generated-token>', port = currentBridgePort()) {
   return jsonConfigTemplate(currentToken, port);
 }
@@ -55,8 +39,8 @@ function jsonConfigTemplate(currentToken = '<generated-token>', port = currentBr
     {
       mcpServers: {
         chrome_browser_control: {
-          command: '/absolute/path/to/chrome-browser-control/node_modules/.bin/tsx',
-          args: ['/absolute/path/to/chrome-browser-control/server/index.ts'],
+          command: 'chrome-browser-control',
+          args: ['mcp'],
           env: {
             CHROME_BROWSER_CONTROL_TOKEN: currentToken,
             CHROME_BROWSER_CONTROL_PORT: port
@@ -75,8 +59,8 @@ function yamlConfigTemplate(currentToken = '<generated-token>', port = currentBr
   return [
     'mcp_servers:',
     '  chrome_browser_control:',
-    '    command: "/absolute/path/to/chrome-browser-control/node_modules/.bin/tsx"',
-    '    args: ["/absolute/path/to/chrome-browser-control/server/index.ts"]',
+    '    command: "chrome-browser-control"',
+    '    args: ["mcp"]',
     '    env:',
     `      CHROME_BROWSER_CONTROL_TOKEN: ${JSON.stringify(currentToken)}`,
     `      CHROME_BROWSER_CONTROL_PORT: ${JSON.stringify(port)}`,
@@ -114,19 +98,15 @@ async function refresh() {
     bridgeUrl: DEFAULT_BRIDGE_URL,
     token: '',
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
-    status: 'unknown',
-    adapterStatus: null
+    status: 'unknown'
   });
   bridgeUrl.value = settings.bridgeUrl;
   token.value = settings.token;
   allowedOrigins.value = formatAllowedOriginPatternsForDisplay(settings.allowedOrigins).join('\n');
   setupSnippet.value = jsonConfigTemplate(settings.token || '<generated-token>');
   showStatus(settings.status);
-  extensionProtocolEl.textContent = '5';
-  renderAdapterStatus(settings.adapterStatus);
   const response = await queryLiveStatus();
   if (response?.ok) showStatus(response.status);
-  if (response?.adapterStatus !== undefined) renderAdapterStatus(response.adapterStatus);
 }
 
 async function waitForSettledStatus(timeoutMs = 15000) {
@@ -143,7 +123,6 @@ async function waitForSettledStatus(timeoutMs = 15000) {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.status) showStatus(changes.status.newValue);
-  if (changes.adapterStatus) renderAdapterStatus(changes.adapterStatus.newValue);
 });
 
 copyJson.addEventListener('click', () => copySnippet('json'));
