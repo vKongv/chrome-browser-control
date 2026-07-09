@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertSafeHost, getBrokerHost, getBrokerPort, getBrokerUrl, getToken, resolveToken } from '../server/env.js';
+import {
+  assertSafeHost,
+  formatBrokerWsUrl,
+  getBrokerHost,
+  getBrokerPort,
+  getBrokerUrl,
+  getToken,
+  resolveToken
+} from '../server/env.js';
 
 const originalToken = process.env.CHROME_BROWSER_CONTROL_TOKEN;
 const originalHost = process.env.CHROME_BROWSER_CONTROL_HOST;
@@ -80,6 +88,12 @@ describe('env helpers', () => {
 
     process.env.CHROME_BROWSER_CONTROL_HOST = '::1';
     expect(getBrokerUrl()).toBe('ws://[::1]:8765');
+  });
+
+  it('brackets IPv6 hosts in formatBrokerWsUrl', () => {
+    expect(formatBrokerWsUrl('::1', 8765)).toBe('ws://[::1]:8765');
+    expect(formatBrokerWsUrl('[::1]', 8765)).toBe('ws://[::1]:8765');
+    expect(formatBrokerWsUrl('127.0.0.1', 8765)).toBe('ws://127.0.0.1:8765');
   });
 
   it('rejects non-loopback broker hosts', () => {

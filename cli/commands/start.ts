@@ -8,12 +8,14 @@ import {
   stopBrokerProcess,
   waitForBrokerPort
 } from '../broker-process.js';
+import { formatBrokerWsUrl } from '../../server/env.js';
 import type { ParsedArgs } from '../parse-args.js';
 
 export async function runStart(_args: ParsedArgs): Promise<number> {
   const config = readBrokerConfig();
+  const brokerUrl = formatBrokerWsUrl(config.host, config.port);
   if (await brokerAlreadyRunning(config)) {
-    console.log(`Broker already running on ws://${config.host}:${config.port}`);
+    console.log(`Broker already running on ${brokerUrl}`);
     return 0;
   }
 
@@ -42,12 +44,12 @@ export async function runStart(_args: ParsedArgs): Promise<number> {
     }
     clearPidFile();
     console.error(
-      `Broker failed to listen on ws://${config.host}:${config.port}. Check ~/.chrome-browser-control/broker.log and that the port is free.`
+      `Broker failed to listen on ${brokerUrl}. Check ~/.chrome-browser-control/broker.log and that the port is free.`
     );
     return 1;
   }
 
-  console.log(`Started broker on ws://${config.host}:${config.port} (pid ${child.pid})`);
+  console.log(`Started broker on ${brokerUrl} (pid ${child.pid})`);
   console.log('Connect MCP hosts with cbctl mcp.');
   return 0;
 }

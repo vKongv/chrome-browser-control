@@ -11,6 +11,7 @@ export interface NextActionInputs {
   authFailed?: boolean;
   brokerPort?: number;
   autoloadTimedOut?: boolean;
+  handshakeTimedOut?: boolean;
   portNotBroker?: boolean;
 }
 
@@ -31,6 +32,11 @@ export function buildNextAction(inputs: NextActionInputs): string | undefined {
   if (inputs.portNotBroker) {
     const port = inputs.brokerPort ?? 8765;
     return `Port ${port} is open but is not a Chrome Browser Control broker. Stop the other service on that port or change CHROME_BROWSER_CONTROL_PORT in your MCP host env and extension popup.`;
+  }
+
+  if (inputs.handshakeTimedOut) {
+    const port = inputs.brokerPort ?? 8765;
+    return `Broker on port ${port} did not complete the pairing handshake in time. Retry browser_status, or run cbctl stop && cbctl start and confirm the token matches your MCP host and extension popup.`;
   }
 
   if (!inputs.brokerReachable) {

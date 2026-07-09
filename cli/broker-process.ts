@@ -9,7 +9,7 @@ import {
   getUserConfigPath
 } from '../server/paths.js';
 import { readEnvFile } from '../server/env-file.js';
-import { assertSafeHost } from '../server/env.js';
+import { assertSafeHost, formatBrokerWsUrl } from '../server/env.js';
 import { probeBrokerAuth } from '../server/broker-lifecycle.js';
 
 export interface BrokerConfig {
@@ -137,7 +137,7 @@ export async function brokerAlreadyRunning(config: BrokerConfig): Promise<boolea
   }
   // Require a successful broker handshake so a foreign listener (or dying process)
   // on the configured port is not treated as a healthy Chrome Browser Control broker.
-  const auth = await probeBrokerAuth(`ws://${config.host}:${config.port}`, config.token);
+  const auth = await probeBrokerAuth(formatBrokerWsUrl(config.host, config.port), config.token);
   return auth === 'ok';
 }
 

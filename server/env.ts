@@ -111,10 +111,13 @@ export function getBrokerPort(): number {
   return envNumber('CHROME_BROWSER_CONTROL_PORT', 8765);
 }
 
-export function getBrokerUrl(): string {
-  const host = getBrokerHost();
+export function formatBrokerWsUrl(host: string, port: number): string {
   const formattedHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  return `ws://${formattedHost}:${getBrokerPort()}`;
+  return `ws://${formattedHost}:${port}`;
+}
+
+export function getBrokerUrl(): string {
+  return formatBrokerWsUrl(getBrokerHost(), getBrokerPort());
 }
 
 export function isAutoloadEnabled(explicit?: boolean): boolean {

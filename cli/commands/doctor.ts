@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { extensionCopyLooksValid } from '../copy-extension.js';
 import { getCompiledBrokerMainPath, getCompiledMcpMainPath, getUserConfigPath } from '../../server/paths.js';
 import { readEnvFile, DEFAULT_TOKEN_ENV } from '../../server/env-file.js';
+import { formatBrokerWsUrl } from '../../server/env.js';
 import { brokerAlreadyRunning, isPortOpen, readBrokerConfig } from '../broker-process.js';
 import type { ParsedArgs } from '../parse-args.js';
 
@@ -36,7 +37,7 @@ export async function runDoctor(_args: ParsedArgs): Promise<number> {
       checks.push({
         name: 'Broker running',
         ok: running,
-        detail: running ? `ws://${config.host}:${config.port}` : 'Run cbctl start'
+        detail: running ? formatBrokerWsUrl(config.host, config.port) : 'Run cbctl start'
       });
       checks.push({ name: 'Broker port open', ok: open, detail: String(config.port) });
     } catch (error) {

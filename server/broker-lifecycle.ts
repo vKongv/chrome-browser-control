@@ -24,6 +24,7 @@ export interface EnsureBrokerResult {
   authOk: boolean;
   authFailed?: boolean;
   autoloadTimedOut?: boolean;
+  handshakeTimedOut?: boolean;
   portNotBroker?: boolean;
   error?: string;
 }
@@ -235,6 +236,7 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
       return {
         reachable: true,
         authOk: false,
+        handshakeTimedOut: true,
         error: `Broker on port ${port} did not respond to handshake in time`
       };
     }

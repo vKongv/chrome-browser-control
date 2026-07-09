@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureBroker } from '../../server/broker-lifecycle.js';
-import { resolveToken } from '../../server/env.js';
+import { formatBrokerWsUrl, resolveToken } from '../../server/env.js';
 import { extensionCopyLooksValid } from '../copy-extension.js';
 import {
   brokerAlreadyRunning,
@@ -37,7 +37,7 @@ export async function runStatus(_args: ParsedArgs): Promise<number> {
         tokenIssue = resolved.issue;
       } else {
         const lifecycle = await ensureBroker({
-          url: `ws://${host}:${port}`,
+          url: formatBrokerWsUrl(host, port),
           token: resolved.token!,
           host,
           port,
@@ -50,6 +50,7 @@ export async function runStatus(_args: ParsedArgs): Promise<number> {
     }
   }
 
+  const brokerUrl = formatBrokerWsUrl(host, port);
   console.log('Chrome Browser Control status');
   console.log('=============================');
   console.log(`${hasConfig ? '✅' : '❌'} User config ${hasConfig ? getUserConfigPath() : 'missing — run cbctl setup'}`);
@@ -59,7 +60,7 @@ export async function runStatus(_args: ParsedArgs): Promise<number> {
   } else if (hasConfig) {
     console.log('✅ Token configured');
   }
-  console.log(`${brokerRunning ? '✅' : '❌'} Broker ${brokerRunning ? `running${pid ? ` (pid ${pid})` : ''}` : 'stopped'} on ws://${host}:${port}`);
+  console.log(`${brokerRunning ? '✅' : '❌'} Broker ${brokerRunning ? `running${pid ? ` (pid ${pid})` : ''}` : 'stopped'} on ${brokerUrl}`);
   console.log(`${portOpen ? '✅' : '❌'} Port ${port} ${portOpen ? 'open' : 'closed'}`);
   if (hasConfig && portOpen) {
     console.log(`${authOk ? '✅' : '❌'} Broker auth ${authOk ? 'ok' : 'failed or unreachable'}`);
