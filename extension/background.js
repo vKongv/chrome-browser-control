@@ -409,6 +409,13 @@ function afterHasObservations(after) {
   return after.waitFor !== undefined || after.snapshot !== undefined || after.pageStatus === true;
 }
 
+function afterSoftBudgetReserveMs(after) {
+  if (!afterHasObservations(after)) return 0;
+  // waitFor uses budgetAfterWaitForParams, which needs AFTER_OBSERVATION_BUFFER_MS headroom.
+  if (after.waitFor !== undefined) return AFTER_OBSERVATION_BUFFER_MS + 1;
+  return PERFORM_ACTIONS_MIN_STEP_RESERVE_MS;
+}
+
 function budgetAfterWaitForParams(waitFor, startedAt = Date.now()) {
   const elapsedMs = Math.max(0, Date.now() - startedAt);
   const remainingMs = BRIDGE_REQUEST_SOFT_BUDGET_MS - elapsedMs - AFTER_OBSERVATION_BUFFER_MS;
@@ -539,9 +546,10 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
     }
   }
   const batchSummary = { ok: true, completedCount: actions.length, steps };
-  if (afterHasObservations(after)) {
+  const afterReserveMs = afterSoftBudgetReserveMs(after);
+  if (afterReserveMs > 0) {
     const remainingMs = remainingSoftBudgetMs(startedAt);
-    if (remainingMs < PERFORM_ACTIONS_MIN_STEP_RESERVE_MS) {
+    if (remainingMs < afterReserveMs) {
       return {
         ok: false,
         completedCount: actions.length,

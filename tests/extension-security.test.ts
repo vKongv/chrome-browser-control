@@ -976,6 +976,52 @@ describe('extension background origin enforcement', () => {
     ]);
   });
 
+  it('fail-fast perform_actions when soft budget cannot cover after.waitFor buffer', async () => {
+    let advanceTime: (ms: number) => void = () => undefined;
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'click') {
+          advanceTime(52_000);
+        }
+        return { action: message.action, params: message.params };
+      }
+    });
+    advanceTime = background.advanceTime;
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [{ action: 'click', ref: 'h1' }],
+        after: { waitFor: { text: 'Done', timeoutMs: 1000 } }
+      })
+    ).resolves.toEqual({
+      ok: false,
+      completedCount: 1,
+      failedIndex: 1,
+      steps: [{ index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } }],
+      error: 'Action batch skipped after because the request time budget is nearly exhausted (3000ms remaining)'
+    });
+    expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } }
+    ]);
+  });
+
   it('does not soft-budget-fail perform_actions for empty after near exhaustion', async () => {
     let advanceTime: (ms: number) => void = () => undefined;
     const background = loadBackgroundHarness({
