@@ -84,6 +84,13 @@ export function buildVisibleSnapshotFromDocument(documentRef?: Document, options
   omittedElements: number;
 };
 export function findByRef(ref: string, documentRef?: Document): Element | null;
+export function boundsForRef(
+  ref: string,
+  documentRef?: Document
+): {
+  bounds: { x: number; y: number; width: number; height: number };
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+};
 export function performClick(params: { ref: string }, documentRef?: Document): { clicked: string };
 export function performType(
   params: { ref: string; text: string; force?: boolean },
@@ -156,6 +163,8 @@ export function collectScroll(
     deltaY?: number;
     delayMs?: number;
     maxItems?: number;
+    scroll?: { x?: number; y?: number; deltaX?: number; deltaY?: number };
+    until?: { noNewItemsForSteps?: number; stopBeforeDatetime?: string };
     extract: { selector: string; includeText?: boolean; includeLinks?: boolean; includeTimes?: boolean; visible?: boolean; limitPerStep?: number };
     dedupeBy?: 'text' | 'href' | 'statusHref' | 'none';
   },
@@ -169,6 +178,7 @@ export function collectScroll(
   omitted: number;
   truncatedCount: number;
   maxItems: number;
+  stoppedReason: 'maxItems' | 'noNewItems' | 'dateCutoff' | 'stepsExhausted' | 'budget';
 }>;
 export const __testing: {
   configureRefStore(options?: { ttlMs?: number; max?: number }): void;

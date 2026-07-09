@@ -63,15 +63,19 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 - Page overview: `snapshot` or `visible_snapshot`.
 - Landing verification: `navigate` result fields `requestedUrl`, `finalUrl`, `redirected`.
 - Specific element lookup: `query_elements`.
-- Structured content extraction: `extract_elements` or `extract_feed_posts` for feed/post heuristics.
-- Infinite scroll or feeds: `collect_scroll`.
+- Structured content extraction: prefer `extract_elements`, `extract_feed_posts`, or DOM tables over screenshots when the data is in the DOM.
+- Infinite scroll or feeds: `collect_scroll` (use `until` / nested `scroll` when useful); use `extract_feed_posts` first when post heuristics fit.
 - Multi-step form/focus chains on one tab: `perform_actions` (not `click_at`).
 - Post-action synchronization: `wait_for`.
 - Debugging: `page_status`, then `console_logs`.
-- Visual proof: `screenshot`.
+- Visual proof: `screenshot` (optionally cropped) when the user asks for pixels or DOM tools are insufficient.
 - Long document text: `snapshot` with a higher `textLimit`.
 
 Avoid large snapshots when a query or selector extraction will do. Prefer bounded outputs with explicit limits and omitted counts.
+
+## Observation Limits
+
+DOM tools (`snapshot`, `visible_snapshot`, `query_elements`, `extract_elements`, `extract_feed_posts`) only see the accessibility/DOM tree. They cannot read pixels drawn on `<canvas>`, chart bitmaps, or most SVG text that is not exposed as DOM text. Do not expect those tools to OCR charts or canvas labels — prefer underlying tables, data attributes, or ask the user for a screenshot when visual proof is required.
 
 ## Act Then Observe
 
@@ -104,18 +108,28 @@ Use `extract_feed_posts` first when you need author, text, times, or live flags 
 Use `collect_scroll` for lazy-loaded feeds instead of manually scrolling one step at a time.
 
 Set:
-- `steps` to the minimum useful count.
-- `delayMs` when the site needs time to render new items.
+- `steps` to the minimum useful count (hard ceiling when `until` is set; max 20).
+- `delayMs` when the site needs time to render new items (capped at 1000ms).
 - `extract.selector` to the repeated item container.
 - `extract.includeText`, `extract.includeLinks`, or `extract.includeTimes` only as needed.
 - `dedupeBy` to `text`, `href`, or `statusHref` when repeated items are likely.
 - `maxItems` for token control.
+- `scroll: { x, y, deltaY }` to scroll a nested overflow container under viewport coordinates (same behavior as the `scroll` tool). When `scroll` is set it overrides top-level `deltaY`.
+- `until.noNewItemsForSteps` to stop after N consecutive steps add zero new items after dedupe.
+- `until.stopBeforeDatetime` (ISO-8601 only) to stop when an item's `time.datetime` is strictly older than the cutoff. Requires `extract.includeTimes: true`. Items without `time.datetime` do not trigger the cutoff — many sites omit `<time datetime>`, so report honest gaps instead of guessing relative strings.
 
-Summarize from collected items, and report when output was truncated or omitted.
+Read `stoppedReason`: `maxItems`, `noNewItems`, `dateCutoff`, or `stepsExhausted`. Summarize from collected items, and report when output was truncated or omitted.
 
 ## Screenshots
 
-Use `screenshot` only for visual verification or user-requested visual evidence.
+Use `screenshot` only for visual verification or user-requested visual evidence. Prefer DOM extraction for structured data.
+
+Optional crop:
+- Pass `ref` (snapshot ref) or `bounds` (viewport CSS pixels) — not both.
+- Optional `padding` expands the crop rect before intersecting the visible viewport.
+- Empty/out-of-viewport crops fail before capture.
+- Cropped responses include `cropped: true`, `cropBounds`, and `deviceScaleFactor` (and echo `ref` when used). Uncropped responses omit those fields.
+- Crops are still sourced from the visible viewport capture; off-screen content is not included.
 
 Important constraints:
 - Captures are visible viewport only.
@@ -124,6 +138,12 @@ Important constraints:
 - Wildcard origin mode (`*`) requires the optional `<all_urls>` host permission grant in the extension popup.
 - If screenshot fails with a permission message, ask the user to reload the extension after manifest changes, save/reconnect in the popup, and grant the optional permission.
 - If screenshot fails with image readback while the page is hidden, ask the user to foreground Chrome and rerun.
+
+## Long-Running Work
+
+- Size or renew `claim_tab` TTL when running long `collect_scroll` loops (high `steps` / `maxItems` / `delayMs`).
+- Refresh snapshot refs before `perform_actions` batches; stale refs fail mid-batch.
+- Prefer exclusive claims when parallel agents share a profile.
 
 ## Safety
 

@@ -56,6 +56,9 @@
         case 'collect_scroll':
           result = core.collectScroll(message.params || {}, document, window);
           break;
+        case 'ref_bounds':
+          result = core.boundsForRef(message.params?.ref, document);
+          break;
         default:
           throw new Error(`Unsupported content action: ${message.action}`);
       }
