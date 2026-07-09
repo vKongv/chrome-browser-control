@@ -152,7 +152,15 @@ export async function waitForBrokerPort(
       return false;
     }
     if (await isPortOpen(config.host, config.port)) {
-      return true;
+      const remaining = Math.max(250, deadline - Date.now());
+      const auth = await probeBrokerAuth(
+        formatBrokerWsUrl(config.host, config.port),
+        config.token,
+        Math.min(2_000, remaining)
+      );
+      if (auth === 'ok') {
+        return true;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }

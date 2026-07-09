@@ -44,7 +44,7 @@ export async function runStart(_args: ParsedArgs): Promise<number> {
     }
     clearPidFile();
     console.error(
-      `Broker failed to listen on ${brokerUrl}. Check ~/.chrome-browser-control/broker.log and that the port is free.`
+      `Broker failed to become ready on ${brokerUrl}. Check ~/.chrome-browser-control/broker.log and that the port is free.`
     );
     return 1;
   }

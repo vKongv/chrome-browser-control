@@ -255,9 +255,10 @@ describe('cli broker process helpers', () => {
     }
   });
 
-  it('waitForBrokerPort succeeds once the port accepts connections', async () => {
+  it('waitForBrokerPort succeeds once the port accepts connections and auth probes ok', async () => {
     const { createServer } = await import('node:net');
     const brokerProcess = await import('../cli/broker-process.js');
+    const lifecycle = await import('../server/broker-lifecycle.js');
 
     const listener = createServer();
     await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
@@ -266,7 +267,27 @@ describe('cli broker process helpers', () => {
     const port = address.port;
 
     try {
+      vi.spyOn(lifecycle, 'probeBrokerAuth').mockResolvedValue('ok');
       expect(await brokerProcess.waitForBrokerPort({ host: '127.0.0.1', port, token: 't' }, 2_000)).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it('waitForBrokerPort keeps waiting when the port is open but auth is not ok', async () => {
+    const { createServer } = await import('node:net');
+    const brokerProcess = await import('../cli/broker-process.js');
+    const lifecycle = await import('../server/broker-lifecycle.js');
+
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const port = address.port;
+
+    try {
+      vi.spyOn(lifecycle, 'probeBrokerAuth').mockResolvedValue('not_broker');
+      expect(await brokerProcess.waitForBrokerPort({ host: '127.0.0.1', port, token: 't' }, 400)).toBe(false);
     } finally {
       await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
     }
