@@ -10,6 +10,7 @@ import {
 } from '../server/paths.js';
 import { readEnvFile } from '../server/env-file.js';
 import { assertSafeHost } from '../server/env.js';
+import { probeBrokerAuth } from '../server/broker-lifecycle.js';
 
 export interface BrokerConfig {
   host: string;
@@ -131,8 +132,13 @@ export async function brokerAlreadyRunning(config: BrokerConfig): Promise<boolea
   if (pid && !isProcessAlive(pid)) {
     clearPidFile();
   }
-  // A live PID alone is not enough — require the configured port to be accepting connections.
-  return await isPortOpen(config.host, config.port);
+  if (!(await isPortOpen(config.host, config.port))) {
+    return false;
+  }
+  // Require a successful broker handshake so a foreign listener (or dying process)
+  // on the configured port is not treated as a healthy Chrome Browser Control broker.
+  const auth = await probeBrokerAuth(`ws://${config.host}:${config.port}`, config.token);
+  return auth === 'ok';
 }
 
 export async function waitForBrokerPort(

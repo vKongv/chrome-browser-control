@@ -1,6 +1,7 @@
 import {
   brokerAlreadyRunning,
   clearPidFile,
+  isPortOpen,
   isProcessAlive,
   readBrokerConfig,
   startBrokerProcess,
@@ -20,6 +21,13 @@ export async function runStart(_args: ParsedArgs): Promise<number> {
   // on the old endpoint. Stop it before rewriting broker.pid.
   if ((await stopBrokerProcess()) === 'stopped') {
     console.log('Stopped previous broker (configured endpoint was not listening).');
+  }
+
+  if (await isPortOpen(config.host, config.port)) {
+    console.error(
+      `Port ${config.port} on ${config.host} is open but is not a Chrome Browser Control broker with the configured token. Free the port or fix config.env, then retry.`
+    );
+    return 1;
   }
 
   const child = startBrokerProcess(config, { detached: true });

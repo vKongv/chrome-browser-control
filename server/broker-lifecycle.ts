@@ -65,9 +65,9 @@ async function probePortOpen(host: string, port: number): Promise<boolean> {
   });
 }
 
-type BrokerProbeResult = 'ok' | 'auth_failed' | 'not_broker' | 'handshake_timeout' | 'unreachable';
+export type BrokerProbeResult = 'ok' | 'auth_failed' | 'not_broker' | 'handshake_timeout' | 'unreachable';
 
-async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): Promise<BrokerProbeResult> {
+export async function probeBrokerAuth(url: string, token: string, timeoutMs = 5_000): Promise<BrokerProbeResult> {
   return await new Promise((resolve) => {
     const socket = new WebSocket(url);
     let settled = false;

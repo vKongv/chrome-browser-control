@@ -177,6 +177,7 @@ describe('cli start', () => {
     const child = Object.assign(new EventEmitter(), { pid: 4242, unref: () => undefined });
     const stopSpy = vi.spyOn(brokerProcess, 'stopBrokerProcess').mockResolvedValue('stopped');
     vi.spyOn(brokerProcess, 'brokerAlreadyRunning').mockResolvedValue(false);
+    vi.spyOn(brokerProcess, 'isPortOpen').mockResolvedValue(false);
     vi.spyOn(brokerProcess, 'startBrokerProcess').mockReturnValue(child as never);
     vi.spyOn(brokerProcess, 'waitForBrokerPort').mockResolvedValue(true);
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -184,6 +185,26 @@ describe('cli start', () => {
     const code = await runStart({ positional: ['start'], flags: {} });
     expect(code).toBe(0);
     expect(stopSpy).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to spawn when the port is open but not a valid broker', async () => {
+    tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-start-'));
+    process.env.HOME = tempHome;
+    mkdirSync(getUserConfigDir(), { recursive: true });
+    writeEnvFile(getUserConfigPath(), {
+      [DEFAULT_TOKEN_ENV]: 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-',
+      [DEFAULT_PORT_ENV]: '8765'
+    });
+
+    vi.spyOn(brokerProcess, 'brokerAlreadyRunning').mockResolvedValue(false);
+    vi.spyOn(brokerProcess, 'stopBrokerProcess').mockResolvedValue('not_running');
+    vi.spyOn(brokerProcess, 'isPortOpen').mockResolvedValue(true);
+    const startSpy = vi.spyOn(brokerProcess, 'startBrokerProcess');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const code = await runStart({ positional: ['start'], flags: {} });
+    expect(code).toBe(1);
+    expect(startSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -207,6 +228,31 @@ describe('cli broker process helpers', () => {
 
     writeFileSync(paths.getBrokerPidPath(), `${process.pid}\n`);
     expect(await brokerProcess.brokerAlreadyRunning({ host: '127.0.0.1', port, token: 't' })).toBe(false);
+  });
+
+  it('treats an open port without broker auth as not running', async () => {
+    const { createServer } = await import('node:net');
+    const { mkdirSync } = await import('node:fs');
+    const brokerProcess = await import('../cli/broker-process.js');
+    const lifecycle = await import('../server/broker-lifecycle.js');
+    const paths = await import('../server/paths.js');
+
+    tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-broker-'));
+    process.env.HOME = tempHome;
+    mkdirSync(paths.getUserConfigDir(), { recursive: true });
+
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const port = address.port;
+
+    try {
+      vi.spyOn(lifecycle, 'probeBrokerAuth').mockResolvedValue('not_broker');
+      expect(await brokerProcess.brokerAlreadyRunning({ host: '127.0.0.1', port, token: 't' })).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   it('waitForBrokerPort succeeds once the port accepts connections', async () => {
