@@ -2,8 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { mcpAutoloadOption, runMcp } from '../cli/commands/mcp.js';
 import { runSetup } from '../cli/commands/setup.js';
+import { runStart } from '../cli/commands/start.js';
+import * as brokerProcess from '../cli/broker-process.js';
 import { isAutoloadEnabled } from '../server/env.js';
 import { DEFAULT_PORT_ENV, DEFAULT_TOKEN_ENV, writeEnvFile } from '../server/env-file.js';
 import * as mcpConfig from '../server/mcp-config.js';
@@ -158,6 +161,29 @@ describe('cli mcp autoload wiring', () => {
   it('keeps autoload off without flag or env', () => {
     delete process.env.CHROME_BROWSER_CONTROL_AUTOLOAD;
     expect(isAutoloadEnabled(mcpAutoloadOption({}))).toBe(false);
+  });
+});
+
+describe('cli start', () => {
+  it('stops a previous CLI broker before spawning when the configured port is closed', async () => {
+    tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-start-'));
+    process.env.HOME = tempHome;
+    mkdirSync(getUserConfigDir(), { recursive: true });
+    writeEnvFile(getUserConfigPath(), {
+      [DEFAULT_TOKEN_ENV]: 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-',
+      [DEFAULT_PORT_ENV]: '8765'
+    });
+
+    const child = Object.assign(new EventEmitter(), { pid: 4242, unref: () => undefined });
+    const stopSpy = vi.spyOn(brokerProcess, 'stopBrokerProcess').mockResolvedValue('stopped');
+    vi.spyOn(brokerProcess, 'brokerAlreadyRunning').mockResolvedValue(false);
+    vi.spyOn(brokerProcess, 'startBrokerProcess').mockReturnValue(child as never);
+    vi.spyOn(brokerProcess, 'waitForBrokerPort').mockResolvedValue(true);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const code = await runStart({ positional: ['start'], flags: {} });
+    expect(code).toBe(0);
+    expect(stopSpy).toHaveBeenCalledOnce();
   });
 });
 

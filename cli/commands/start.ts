@@ -4,6 +4,7 @@ import {
   isProcessAlive,
   readBrokerConfig,
   startBrokerProcess,
+  stopBrokerProcess,
   waitForBrokerPort
 } from '../broker-process.js';
 import type { ParsedArgs } from '../parse-args.js';
@@ -13,6 +14,12 @@ export async function runStart(_args: ParsedArgs): Promise<number> {
   if (await brokerAlreadyRunning(config)) {
     console.log(`Broker already running on ws://${config.host}:${config.port}`);
     return 0;
+  }
+
+  // Config host/port may have changed; a prior CLI-started broker can still be alive
+  // on the old endpoint. Stop it before rewriting broker.pid.
+  if ((await stopBrokerProcess()) === 'stopped') {
+    console.log('Stopped previous broker (configured endpoint was not listening).');
   }
 
   const child = startBrokerProcess(config, { detached: true });
