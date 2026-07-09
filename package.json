@@ -21,9 +21,6 @@
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
-    "setup": "node scripts/setup.mjs",
-    "doctor": "node scripts/doctor.mjs",
-    "mcp-config": "node scripts/mcp-config.mjs",
     "benchmark:snapshots": "node benchmarks/compact-snapshot.mjs",
     "benchmark:compact-snapshots": "node benchmarks/compact-snapshot.mjs"
   },

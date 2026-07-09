@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertSafeHost,
   formatBrokerWsUrl,
@@ -6,6 +9,7 @@ import {
   getBrokerPort,
   getBrokerUrl,
   getToken,
+  resetEnvLoadForTests,
   resolveToken
 } from '../server/env.js';
 
@@ -13,9 +17,18 @@ const originalToken = process.env.CHROME_BROWSER_CONTROL_TOKEN;
 const originalHost = process.env.CHROME_BROWSER_CONTROL_HOST;
 const originalPort = process.env.CHROME_BROWSER_CONTROL_PORT;
 const originalDisableLocalEnv = process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV;
-process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV = '1';
+const originalHome = process.env.HOME;
+let tempHome = '';
+
+beforeEach(() => {
+  tempHome = mkdtempSync(join(tmpdir(), 'cbc-env-test-'));
+  process.env.HOME = tempHome;
+  process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV = '1';
+  resetEnvLoadForTests();
+});
 
 afterEach(() => {
+  resetEnvLoadForTests();
   if (originalToken === undefined) {
     delete process.env.CHROME_BROWSER_CONTROL_TOKEN;
   } else {
@@ -32,9 +45,18 @@ afterEach(() => {
     process.env.CHROME_BROWSER_CONTROL_PORT = originalPort;
   }
   if (originalDisableLocalEnv === undefined) {
-    process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV = '1';
+    delete process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV;
   } else {
     process.env.CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV = originalDisableLocalEnv;
+  }
+  if (originalHome === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = originalHome;
+  }
+  if (tempHome) {
+    rmSync(tempHome, { recursive: true, force: true });
+    tempHome = '';
   }
 });
 

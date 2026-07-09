@@ -54,7 +54,7 @@ npm run build
 node dist/cli/main.js setup
 ```
 
-Repo-local `npm run setup` / `npm run broker` / `npm run mcp` remain available for development against TypeScript sources.
+Repo-local `npm run broker` / `npm run mcp` remain available for development against TypeScript sources (with optional repo `.env.local`).
 
 ### Environment Variables
 
@@ -239,7 +239,8 @@ Claims are advisory MCP routing state only. They do not stop the user from chang
 ```bash
 npm test
 npm run build
-npm run doctor
+cbctl doctor
+# or: node dist/cli/main.js doctor
 npm run benchmark:compact-snapshots
 npm audit
 ```
@@ -260,7 +261,6 @@ After editing files under `extension/`, reload the unpacked extension on `chrome
 - Console logs are captured only after content script injection and are bounded.
 - Resource summaries are counts from the Performance API only; request headers, response bodies, cookies, storage, history, bookmarks, and downloads are intentionally not exposed.
 - Browser history, bookmark, download, and cookie tools are intentionally not exposed.
-- `server/cdp.ts` remains only as an unused development reference and is not wired into the MCP adapter.
 
 ## Security
 

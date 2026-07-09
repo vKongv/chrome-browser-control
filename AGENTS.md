@@ -11,11 +11,8 @@ Use this file to resume work without relying on chat history.
 - `cli/` — installable CLI bins `cbctl` and `chrome-browser-control` (`setup`, `start`, `stop`, `status`, `doctor`, `mcp`, `mcp-config`, `broker`).
 - `server/` — MCP adapter, broker client, broker, protocol, tools, environment handling, MCP config render helpers.
 - `extension/` — Chrome MV3 extension, popup, content script, security helpers (source; setup copies to `~/.chrome-browser-control/extension`).
-- `tests/` — Vitest coverage for broker, bridge, protocol, tools, content-core, env, CLI, setup scripts.
+- `tests/` — Vitest coverage for broker, bridge, protocol, tools, content-core, env, CLI.
 - `benchmarks/compact-snapshot.mjs` — compact-vs-full snapshot size benchmark.
-- `scripts/setup.mjs` — repo-local first-time setup helper (dev; prefer CLI `setup` for users).
-- `scripts/mcp-config.mjs` — repo-local host-specific MCP config renderer (dev).
-- `scripts/doctor.mjs` — repo-local setup checker (dev; prefer CLI `doctor`).
 - `skills/chrome-browser-control/` — distributable skills.sh agent skill for agents using the MCP tools at runtime.
 - `docs/` — durable, **tracked** notes agents must be able to find via git / `@docs`.
 - `docs/scratchpad/` — local-only WIP (gitignored). Do not put cross-session handoffs or agent feedback here; they will not ship and often will not surface in search/`@`.
@@ -67,7 +64,7 @@ Contributors (checkout):
 npm install
 npm run build
 node dist/cli/main.js setup
-# or: npm run setup / npm run doctor (repo-local scripts)
+# optional: npm run broker / npm run mcp against TypeScript sources + repo .env.local
 ```
 
 Load the unpacked extension from:
@@ -88,7 +85,7 @@ Run before reporting success:
 npm test
 npm run build
 cbctl doctor
-# or: npm run doctor
+# or: node dist/cli/main.js doctor
 npm run benchmark:compact-snapshots
 ```
 

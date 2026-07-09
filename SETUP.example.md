@@ -29,7 +29,7 @@ cd /path/to/chrome-browser-control
 npm install
 npm run build
 node dist/cli/main.js setup
-# repo-local alternatives: npm run setup / npm run doctor / npm run broker
+# optional: npm run broker / npm run mcp against TypeScript sources + repo .env.local
 ```
 
 After changing extension source files, re-run setup (or copy again) if you use the installed path, then reload the unpacked extension from `chrome://extensions` before testing. The `browser_status` tool reports `protocolVersion` and `features` from the loaded extension, which helps confirm Chrome is not still running an older background service worker. After manifest permission changes, reload the unpacked extension, open the popup, click "Save and reconnect", and grant any new optional permission prompt.

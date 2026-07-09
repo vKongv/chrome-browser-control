@@ -60,7 +60,8 @@ describe('install-mode MCP config rendering', () => {
     tempBin = mkdtempSync(join(tmpdir(), 'cbc-cli-bins-'));
     writeFileSync(join(tempBin, 'cbctl'), '#!/bin/sh\n');
     writeFileSync(join(tempBin, 'chrome-browser-control'), '#!/bin/sh\n');
-    process.env.PATH = `${tempBin}:${originalPath ?? ''}`;
+    // Isolate from any globally installed cbctl on the real PATH.
+    process.env.PATH = tempBin;
     const resolved = resolveCliCommand();
     expect(resolved.command).toBe(join(tempBin, 'cbctl'));
     expect(resolved.args).toEqual(['mcp']);
@@ -69,7 +70,7 @@ describe('install-mode MCP config rendering', () => {
   it('falls back to chrome-browser-control when cbctl is absent', () => {
     tempBin = mkdtempSync(join(tmpdir(), 'cbc-cli-bins-'));
     writeFileSync(join(tempBin, 'chrome-browser-control'), '#!/bin/sh\n');
-    process.env.PATH = `${tempBin}:${originalPath ?? ''}`;
+    process.env.PATH = tempBin;
     const resolved = resolveCliCommand();
     expect(resolved.command).toBe(join(tempBin, 'chrome-browser-control'));
     expect(resolved.args).toEqual(['mcp']);
