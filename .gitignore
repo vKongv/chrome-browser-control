@@ -4,7 +4,10 @@ dist/
 .env.*
 .DS_Store
 coverage/
-.cursor/
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/npm-release/
+!.cursor/skills/npm-release/**
 *.log
 SETUP_LOCAL.md
 docs/scratchpad/
