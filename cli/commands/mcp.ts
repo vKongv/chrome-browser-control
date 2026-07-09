@@ -31,12 +31,17 @@ export async function runBroker(_args: ParsedArgs): Promise<number> {
   });
 }
 
+/** Pass `true` only when `--autoload` is set; otherwise leave undefined so env can enable. */
+export function mcpAutoloadOption(flags: ParsedArgs['flags']): boolean | undefined {
+  return flagBoolean(flags, 'autoload') ? true : undefined;
+}
+
 export async function runMcp(args: ParsedArgs): Promise<number> {
-  const autoload = flagBoolean(args.flags, 'autoload');
+  const autoload = mcpAutoloadOption(args.flags);
   if (autoload) {
     process.env.CHROME_BROWSER_CONTROL_AUTOLOAD = '1';
   }
   const { main } = await import('../../server/index.js');
-  await main({ autoload });
+  await main(autoload === undefined ? {} : { autoload });
   return 0;
 }

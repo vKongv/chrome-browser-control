@@ -142,9 +142,14 @@ function clearSpawnedBrokerState(): void {
   spawnedChild = undefined;
   if (child?.pid) {
     try {
-      child.kill('SIGTERM');
+      // Detached broker is its own process-group leader; signal the group so it dies with MCP exit.
+      process.kill(-child.pid, 'SIGTERM');
     } catch {
-      // Process may already have exited.
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // Process may already have exited.
+      }
     }
   }
   if (ownership === 'spawned') {
@@ -153,6 +158,13 @@ function clearSpawnedBrokerState(): void {
   if (cachedSuccess?.ownership === 'spawned') {
     cachedSuccess = undefined;
   }
+}
+
+/** Kill MCP-spawned broker on adapter shutdown; leave adopted/CLI-started brokers alone. */
+export function stopSpawnedBrokerIfOwned(): void {
+  if (ownership !== 'spawned') return;
+  console.error('[chrome-browser-control] stopping MCP-spawned broker on adapter shutdown');
+  clearSpawnedBrokerState();
 }
 
 function spawnDetachedBroker(host: string, port: number, token: string): ChildProcess {

@@ -2,7 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { BrokerClient } from './broker-client.js';
-import { ensureBroker, getBrokerOwnership } from './broker-lifecycle.js';
+import { ensureBroker, getBrokerOwnership, stopSpawnedBrokerIfOwned } from './broker-lifecycle.js';
 import {
   assertSafeHost,
   getBrokerHost,
@@ -104,6 +104,7 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
   await server.connect(transport);
 
   const shutdown = async () => {
+    stopSpawnedBrokerIfOwned();
     await brokerClient.disconnect();
     await server.close();
     process.exit(0);
@@ -111,6 +112,10 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  // Stdio MCP hosts often close stdin without SIGTERM; ensure spawned brokers still die.
+  process.on('exit', () => {
+    stopSpawnedBrokerIfOwned();
+  });
 }
 
 const entryPath = process.argv[1];

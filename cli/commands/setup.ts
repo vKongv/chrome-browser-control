@@ -62,7 +62,7 @@ export async function runSetup(args: ParsedArgs): Promise<number> {
   console.log('');
   console.log('Codex TOML config:');
   console.log(renderConfig('codex', { command: cli.command, args: cli.args, token, port }));
-  if (!cli.command.endsWith('chrome-browser-control') && !cli.command.endsWith('chrome-browser-control.cmd')) {
+  if (cli.command !== 'npx') {
     console.log('');
     console.log('NPX fallback (slower cold start):');
     console.log(renderConfig('json', { command: 'npx', args: ['-y', 'chrome-browser-control', 'mcp'], token, port }));

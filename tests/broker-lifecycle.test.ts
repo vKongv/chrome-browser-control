@@ -4,7 +4,9 @@ import { ChromeBroker } from '../server/broker.js';
 import {
   BROKER_AUTOLOAD_TIMEOUT_MS,
   ensureBroker,
-  resetBrokerLifecycleForTests
+  getBrokerOwnership,
+  resetBrokerLifecycleForTests,
+  stopSpawnedBrokerIfOwned
 } from '../server/broker-lifecycle.js';
 
 const brokers: ChromeBroker[] = [];
@@ -165,5 +167,75 @@ describe('ensureBroker', () => {
     const second = await ensureBroker({ url, token, host, port, spawnTimeoutMs: 50, autoloadEnabled: true });
     expect(second).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('stopSpawnedBrokerIfOwned leaves adopted brokers alone', async () => {
+    const broker = await makeBroker();
+    const { host, port } = brokerHostPort(broker);
+    const url = brokerUrl(broker);
+    const kill = vi.fn();
+    spawnMock.mockReturnValue({ unref: vi.fn(), on: vi.fn(), pid: 7777, kill });
+
+    await ensureBroker({ url, token: 'secret-token-for-broker-lifecycle-tests', host, port });
+    expect(getBrokerOwnership()).toBe('adopted');
+
+    stopSpawnedBrokerIfOwned();
+
+    expect(getBrokerOwnership()).toBe('adopted');
+    expect(kill).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('stopSpawnedBrokerIfOwned kills a successfully spawned broker', async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const host = '127.0.0.1';
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+
+    const token = 'spawn-token-123456789012345678901234';
+    const url = `ws://${host}:${port}`;
+    const kill = vi.fn();
+    const processKill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (typeof pid === 'number' && pid < 0) {
+        kill(signal);
+        return true;
+      }
+      return true;
+    });
+
+    try {
+      spawnMock.mockImplementation(() => {
+        const child = { unref: vi.fn(), on: vi.fn(), pid: 8888, kill };
+        void (async () => {
+          const broker = new ChromeBroker({ host, port, token, requestTimeoutMs: 500, helloTimeoutMs: 200 });
+          brokers.push(broker);
+          await broker.start();
+        })();
+        return child;
+      });
+
+      const result = await ensureBroker({
+        url,
+        token,
+        host,
+        port,
+        spawnTimeoutMs: 5_000,
+        autoloadEnabled: true
+      });
+
+      expect(result).toMatchObject({ ownership: 'spawned', reachable: true, authOk: true });
+      expect(getBrokerOwnership()).toBe('spawned');
+
+      stopSpawnedBrokerIfOwned();
+
+      expect(kill).toHaveBeenCalledWith('SIGTERM');
+      expect(processKill).toHaveBeenCalledWith(-8888, 'SIGTERM');
+      expect(getBrokerOwnership()).toBeUndefined();
+    } finally {
+      processKill.mockRestore();
+    }
   });
 });
