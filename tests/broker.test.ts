@@ -318,7 +318,7 @@ describe('ChromeBroker', () => {
       requestTimeoutMs: 500,
       helloTimeoutMs: 200
     });
-    // Startup order contract: setHelloMetadata before first connect so popup tool count is non-zero.
+    // Startup order contract: setHelloMetadata before first connect so adapter registeredToolCount is non-zero.
     client.setHelloMetadata({ adapterProtocolVersion: 1, registeredToolCount: 22 });
     await client.connect();
 

@@ -62,7 +62,7 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
   };
 
   // Register tools and set hello metadata before the first broker connect so the
-  // initial adapter_status push (and popup tool count) is non-zero.
+  // initial adapter_status / browser_status registeredToolCount is non-zero.
   const registeredToolCount = registerBrowserTools(server, bridge, {
     ownerId,
     getStatusContext: () => ({

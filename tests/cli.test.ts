@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mcpAutoloadOption } from '../cli/commands/mcp.js';
 import { runSetup } from '../cli/commands/setup.js';
 import { isAutoloadEnabled } from '../server/env.js';
+import * as mcpConfig from '../server/mcp-config.js';
 import { getInstalledExtensionPath, getUserConfigPath } from '../server/paths.js';
 import { buildNextAction } from '../server/status-coaching.js';
 
@@ -13,6 +14,7 @@ const originalAutoload = process.env.CHROME_BROWSER_CONTROL_AUTOLOAD;
 let tempHome = '';
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (tempHome) {
     rmSync(tempHome, { recursive: true, force: true });
     tempHome = '';
@@ -44,21 +46,39 @@ describe('cli setup', () => {
     expect(config.length).toBeGreaterThan(40);
   });
 
-  it('does not print duplicate NPX fallback when command is already npx', async () => {
+  it('does not print NPX fallback when resolveCliCommand already returns npx', async () => {
     tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-setup-'));
     process.env.HOME = tempHome;
+    vi.spyOn(mcpConfig, 'resolveCliCommand').mockReturnValue({
+      command: 'npx',
+      args: ['-y', 'chrome-browser-control', 'mcp'],
+      npxFallback: { command: 'npx', args: ['-y', 'chrome-browser-control', 'mcp'] }
+    });
     const logs: string[] = [];
-    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
       logs.push(args.map(String).join(' '));
     });
 
-    try {
-      await runSetup({ positional: ['setup'], flags: {} });
-      const fallbackLines = logs.filter((line) => line.includes('NPX fallback'));
-      expect(fallbackLines).toHaveLength(0);
-    } finally {
-      logSpy.mockRestore();
-    }
+    await runSetup({ positional: ['setup'], flags: {} });
+    expect(logs.filter((line) => line.includes('NPX fallback'))).toHaveLength(0);
+  });
+
+  it('prints NPX fallback once when resolveCliCommand returns a global bin', async () => {
+    tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-setup-'));
+    process.env.HOME = tempHome;
+    vi.spyOn(mcpConfig, 'resolveCliCommand').mockReturnValue({
+      command: '/usr/local/bin/chrome-browser-control',
+      args: ['mcp'],
+      npxFallback: { command: 'npx', args: ['-y', 'chrome-browser-control', 'mcp'] }
+    });
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    });
+
+    await runSetup({ positional: ['setup'], flags: {} });
+    expect(logs.filter((line) => line.includes('NPX fallback'))).toHaveLength(1);
+    expect(logs.some((line) => line.includes('"command": "npx"'))).toBe(true);
   });
 
   it('coaches start via status strings', () => {
