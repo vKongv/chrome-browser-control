@@ -274,7 +274,7 @@ describe('ChromeBroker', () => {
       requestTimeoutMs: 500,
       helloTimeoutMs: 200
     });
-    client.setHelloMetadata({ adapterProtocolVersion: 1, registeredToolCount: 22 });
+    client.setHelloMetadata({ adapterProtocolVersion: 1, registeredToolCount: 23 });
     await client.connect();
 
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -282,7 +282,7 @@ describe('ChromeBroker', () => {
     expect(adapterStatuses.at(-1)).toMatchObject({
       kind: 'adapter_status',
       adapterProtocolVersion: 1,
-      registeredToolCount: 22,
+      registeredToolCount: 23,
       mcpClientCount: 1
     });
 
@@ -319,13 +319,13 @@ describe('ChromeBroker', () => {
       helloTimeoutMs: 200
     });
     // Startup order contract: setHelloMetadata before first connect so adapter registeredToolCount is non-zero.
-    client.setHelloMetadata({ adapterProtocolVersion: 1, registeredToolCount: 22 });
+    client.setHelloMetadata({ adapterProtocolVersion: 1, registeredToolCount: 23 });
     await client.connect();
 
     await expect(firstAdapterStatus).resolves.toMatchObject({
       kind: 'adapter_status',
       adapterProtocolVersion: 1,
-      registeredToolCount: 22,
+      registeredToolCount: 23,
       mcpClientCount: 1
     });
 

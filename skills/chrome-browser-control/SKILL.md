@@ -1,6 +1,6 @@
 ---
 name: chrome-browser-control
-description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when an agent needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, visible_snapshot, query_elements, extract_elements, extract_feed_posts, wait_for, page_status, console_logs, collect_scroll, and screenshot.
+description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when an agent needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, visible_snapshot, query_elements, extract_elements, extract_feed_posts, wait_for, page_status, console_logs, collect_scroll, perform_actions, and screenshot.
 ---
 
 # Chrome Browser Control
@@ -39,9 +39,11 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 
 4. Act from fresh state.
    - Click/type using refs from a recent snapshot or query result.
+   - Use `perform_actions` when you already know a short ordered sequence (up to 10 steps) of `click`, `type`, `scroll`, or `keypress` actions on the same tab; one terminal `after` applies to the whole batch on full success. Snapshot refs can go stale mid-batch — refresh before batching when the page may change between steps.
+   - Use single act tools when steps are uncertain, you need per-action `after`, or the flow includes `click_at`.
    - Use `click_at` only when viewport coordinates are the clearest target.
    - Use `keypress` for page-level keyboard events, not privileged browser shortcuts.
-   - When the next verification is predictable, pass `after` on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, or `collect_scroll` to run post-action observations in the same tool call.
+   - When the next verification is predictable, pass `after` on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, `collect_scroll`, or `perform_actions` to run post-action observations in the same tool call.
    - After navigation, reload, major DOM changes, or stale-ref errors, collect fresh state.
 
 5. Wait and verify after actions.
@@ -63,6 +65,7 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 - Specific element lookup: `query_elements`.
 - Structured content extraction: `extract_elements` or `extract_feed_posts` for feed/post heuristics.
 - Infinite scroll or feeds: `collect_scroll`.
+- Multi-step form/focus chains on one tab: `perform_actions` (not `click_at`).
 - Post-action synchronization: `wait_for`.
 - Debugging: `page_status`, then `console_logs`.
 - Visual proof: `screenshot`.
@@ -86,7 +89,9 @@ Use `after` to combine an action with its immediate verification:
 ```
 
 Rules:
-- Supported on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, and `collect_scroll`.
+- Supported on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, `collect_scroll`, and `perform_actions`.
+- For `perform_actions`, `after` is top-level only; skipped when any step fails. Partial failures return `failedIndex`, `completedCount`, and per-step `steps` — inspect them instead of assuming rollback.
+- Exclusive tab claims do not gate page actions; use exclusive leases for parallel-agent discipline, not as an action lock.
 - Observations run as `waitFor`, then `snapshot`, then `pageStatus`.
 - `waitFor` must include at least one wait condition (`text`, `selector`, `urlIncludes`, `selectorAbsent` + `selector`, `textInScope`, or `contentStableMs`); `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
 - `snapshot` can be `true` or options with `mode`, `textLimit`, and/or `limit`.

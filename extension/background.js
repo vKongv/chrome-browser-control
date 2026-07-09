@@ -49,6 +49,8 @@ const EXTENSION_PROTOCOL_MARKER = {
 const BRIDGE_REQUEST_SOFT_BUDGET_MS = 55_000;
 const AFTER_OBSERVATION_BUFFER_MS = 5_000;
 const MAX_AFTER_WAIT_TIMEOUT_MS = 20_000;
+const PERFORM_ACTIONS_MIN_STEP_RESERVE_MS = 1_000;
+const PERFORM_ACTION_STEP_ALLOWLIST = ['click', 'type', 'scroll', 'keypress'];
 const DEFAULT_EXCLUSIVE_LEASE_TTL_MS = 300_000;
 const MAX_EXCLUSIVE_LEASE_TTL_MS = 3_600_000;
 
@@ -402,6 +404,18 @@ function validateAfterRequest(after) {
   }
 }
 
+function afterHasObservations(after) {
+  if (after === undefined || !after || typeof after !== 'object' || Array.isArray(after)) return false;
+  return after.waitFor !== undefined || after.snapshot !== undefined || after.pageStatus === true;
+}
+
+function afterSoftBudgetReserveMs(after) {
+  if (!afterHasObservations(after)) return 0;
+  // waitFor uses budgetAfterWaitForParams, which needs AFTER_OBSERVATION_BUFFER_MS headroom.
+  if (after.waitFor !== undefined) return AFTER_OBSERVATION_BUFFER_MS + 1;
+  return PERFORM_ACTIONS_MIN_STEP_RESERVE_MS;
+}
+
 function budgetAfterWaitForParams(waitFor, startedAt = Date.now()) {
   const elapsedMs = Math.max(0, Date.now() - startedAt);
   const remainingMs = BRIDGE_REQUEST_SOFT_BUDGET_MS - elapsedMs - AFTER_OBSERVATION_BUFFER_MS;
@@ -465,6 +479,87 @@ async function runPageActionWithAfter(action, params, allowedOrigins) {
   const tabId = await resolvePageActionTabId(baseParams, allowedOrigins);
   const result = await sendToContent(tabId, action, baseParams, allowedOrigins);
   return await withAfterResult(result, tabId, after, allowedOrigins, { startedAt });
+}
+
+function validatePerformActionStep(step, index) {
+  if (!step || typeof step !== 'object' || Array.isArray(step)) {
+    throw new Error(`actions[${index}] must be an object`);
+  }
+  const action = step.action;
+  if (!PERFORM_ACTION_STEP_ALLOWLIST.includes(action)) {
+    throw new Error(`actions[${index}] has unsupported action: ${action || 'missing'}`);
+  }
+}
+
+function performActionStepParams(step) {
+  const { action: _action, ...stepParams } = step;
+  return stepParams;
+}
+
+function remainingSoftBudgetMs(startedAt) {
+  return BRIDGE_REQUEST_SOFT_BUDGET_MS - Math.max(0, Date.now() - startedAt);
+}
+
+async function runPerformActionsWithAfter(params, allowedOrigins) {
+  const startedAt = Date.now();
+  const { after, baseParams } = splitAfterParams(params);
+  validateAfterRequest(after);
+  const actions = baseParams.actions;
+  if (!Array.isArray(actions) || actions.length === 0) {
+    throw new Error('perform_actions requires a non-empty actions array');
+  }
+  if (actions.length > 10) {
+    throw new Error('perform_actions supports at most 10 actions');
+  }
+  for (let index = 0; index < actions.length; index += 1) {
+    validatePerformActionStep(actions[index], index);
+  }
+  const tabId = await resolvePageActionTabId(
+    { tabId: baseParams.tabId, sessionTabId: baseParams.sessionTabId },
+    allowedOrigins
+  );
+  const steps = [];
+  for (let index = 0; index < actions.length; index += 1) {
+    const step = actions[index];
+    const stepAction = step.action;
+    if (index > 0) {
+      const remainingMs = remainingSoftBudgetMs(startedAt);
+      if (remainingMs < PERFORM_ACTIONS_MIN_STEP_RESERVE_MS) {
+        const error = `Action batch stopped at step ${index} because the request time budget is nearly exhausted (${remainingMs}ms remaining)`;
+        steps.push({ index, action: stepAction, ok: false, error });
+        return { ok: false, completedCount: index, failedIndex: index, steps };
+      }
+    }
+    try {
+      const result = await sendToContent(tabId, stepAction, performActionStepParams(step), allowedOrigins, {
+        waitForLoad: index === 0
+      });
+      steps.push({ index, action: stepAction, ok: true, result });
+    } catch (error) {
+      steps.push({
+        index,
+        action: stepAction,
+        ok: false,
+        error: (error && error.message) || String(error)
+      });
+      return { ok: false, completedCount: index, failedIndex: index, steps };
+    }
+  }
+  const batchSummary = { ok: true, completedCount: actions.length, steps };
+  const afterReserveMs = afterSoftBudgetReserveMs(after);
+  if (afterReserveMs > 0) {
+    const remainingMs = remainingSoftBudgetMs(startedAt);
+    if (remainingMs < afterReserveMs) {
+      return {
+        ok: false,
+        completedCount: actions.length,
+        failedIndex: actions.length,
+        steps,
+        error: `Action batch skipped after because the request time budget is nearly exhausted (${remainingMs}ms remaining)`
+      };
+    }
+  }
+  return await withAfterResult(batchSummary, tabId, after, allowedOrigins, { startedAt });
 }
 
 async function hasExactHostPermission(origin) {
@@ -732,6 +827,8 @@ async function handleBridgeRequest(action, params = {}) {
       return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins);
     case 'collect_scroll':
       return await runPageActionWithAfter(action, params, settings.allowedOrigins);
+    case 'perform_actions':
+      return await runPerformActionsWithAfter(params, settings.allowedOrigins);
     default:
       throw new Error(`Unsupported bridge action: ${action}`);
   }

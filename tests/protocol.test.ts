@@ -83,7 +83,8 @@ describe('protocol validation', () => {
       'wait_for',
       'page_status',
       'console_logs',
-      'collect_scroll'
+      'collect_scroll',
+      'perform_actions'
     ]);
   });
 

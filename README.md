@@ -171,10 +171,13 @@ If your MCP host uses a config file, keep it private and outside the repository.
 - `page_status`: returns title, URL, ready/visibility state, viewport/scroll state, and resource counts by initiator type. It does not expose request headers or response bodies.
 - `console_logs`: returns bounded console logs captured after the content script was injected. It cannot see older page console history.
 - `collect_scroll`: scrolls a bounded number of steps, extracts selected elements each step, applies an aggregate item cap (`maxItems`, default 100), and optionally dedupes by text or href for lazy feeds. Results include omitted/truncated counts. Supports `after` observations.
+- `perform_actions`: runs up to 10 sequential page actions (`click`, `type`, `scroll`, `keypress`) in one broker round-trip. Fail-fast on the first step error; terminal `after` observations run only when every step succeeds. Coordinate clicks stay on single-tool `click_at`. Steps cannot carry `after`, `tabId`, or `sessionTabId`.
 
 ## Act Then Observe
 
-The action tools `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, and `collect_scroll` accept an optional `after` object. The extension removes `after` before sending the base action to the content script, then runs requested observations in this fixed order: `waitFor`, `snapshot`, `pageStatus`. The response is the base action result plus an `after` object with the observation results.
+The action tools `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, `collect_scroll`, and `perform_actions` accept an optional `after` object. The extension removes `after` before sending the base action to the content script, then runs requested observations in this fixed order: `waitFor`, `snapshot`, `pageStatus`. The response is the base action result plus an `after` object with the observation results.
+
+For `perform_actions`, `after` applies to the whole batch only: individual steps cannot include `after`, and terminal observations are skipped when any step fails. Partial batch failures return structured step results with `failedIndex` and `completedCount` while preserving bridge-level success so agents can inspect the payload.
 
 ```json
 {

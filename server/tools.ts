@@ -114,6 +114,42 @@ const AfterObservation = z
   .optional()
   .describe('Optional act-then-observe requests, run after the page action in waitFor, snapshot, pageStatus order.');
 
+const PerformActionClickStep = z
+  .object({
+    action: z.literal('click'),
+    ref: z.string().min(1)
+  })
+  .strict();
+const PerformActionTypeStep = z
+  .object({
+    action: z.literal('type'),
+    ref: z.string().min(1),
+    text: z.string(),
+    force: z.boolean().optional().default(false)
+  })
+  .strict();
+const PerformActionScrollStep = z
+  .object({
+    action: z.literal('scroll'),
+    deltaX: z.number().optional().default(0),
+    deltaY: z.number().optional().default(600),
+    x: z.number().optional(),
+    y: z.number().optional()
+  })
+  .strict();
+const PerformActionKeypressStep = z
+  .object({
+    action: z.literal('keypress'),
+    keys: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)])
+  })
+  .strict();
+const PerformActionStep = z.discriminatedUnion('action', [
+  PerformActionClickStep,
+  PerformActionTypeStep,
+  PerformActionScrollStep,
+  PerformActionKeypressStep
+]);
+
 function hasWaitCondition(args: Record<string, unknown> = {}): boolean {
   if (args.selectorAbsent === true && typeof args.selector === 'string' && args.selector.trim().length > 0) return true;
   if (typeof args.textInScope === 'string' && args.textInScope.trim().length > 0) return true;
@@ -798,6 +834,25 @@ export function registerBrowserTools(
       }
     },
     async (args) => forwardActThenObserve(bridge, 'collect_scroll', args)
+  );
+
+  registerTool(
+    'perform_actions',
+    {
+      title: 'Perform sequential page actions',
+      description:
+        'Run up to 10 sequential page actions (click, type, scroll, keypress) in one broker round-trip. Fail-fast on the first step error; terminal after observations run only when every step succeeds. Steps cannot carry after, tabId, or sessionTabId.',
+      inputSchema: {
+        actions: z
+          .array(PerformActionStep)
+          .min(1)
+          .max(10)
+          .describe('Ordered action steps. Each step is a flat object with action plus action-specific fields.'),
+        after: AfterObservation,
+        ...OptionalTarget
+      }
+    },
+    async (args) => forwardActThenObserve(bridge, 'perform_actions', args)
   );
 
   return registeredToolCount;

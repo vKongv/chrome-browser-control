@@ -22,7 +22,8 @@ export const BridgeActionSchema = z.enum([
   'wait_for',
   'page_status',
   'console_logs',
-  'collect_scroll'
+  'collect_scroll',
+  'perform_actions'
 ]);
 
 export type BridgeAction = z.infer<typeof BridgeActionSchema>;
