@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { WebSocket } from 'ws';
 import { getCompiledBrokerMainPath } from './paths.js';
@@ -169,6 +170,11 @@ export function stopSpawnedBrokerIfOwned(): void {
 
 function spawnDetachedBroker(host: string, port: number, token: string): ChildProcess {
   const brokerMain = getCompiledBrokerMainPath();
+  if (!existsSync(brokerMain)) {
+    throw new Error(
+      `Compiled broker entry missing at ${brokerMain}. Run npm run build before mcp --autoload (or use chrome-browser-control start).`
+    );
+  }
   const child = spawn(process.execPath, [brokerMain], {
     detached: true,
     stdio: 'ignore',
@@ -249,7 +255,15 @@ async function doEnsureBroker(options: EnsureBrokerOptions): Promise<EnsureBroke
   }
 
   if (!spawnedChild) {
-    spawnedChild = spawnDetachedBroker(host, port, token);
+    try {
+      spawnedChild = spawnDetachedBroker(host, port, token);
+    } catch (error) {
+      return {
+        reachable: false,
+        authOk: false,
+        error: (error as Error).message
+      };
+    }
     ownership = 'spawned';
     console.error(`[chrome-browser-control] broker spawned ${url}`);
   }

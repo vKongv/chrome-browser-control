@@ -123,7 +123,27 @@ export async function stopBrokerProcess(): Promise<'stopped' | 'not_running'> {
 
 export async function brokerAlreadyRunning(config: BrokerConfig): Promise<boolean> {
   const pid = readPidFile();
-  if (pid && isProcessAlive(pid)) return true;
-  if (pid) clearPidFile();
+  if (pid && !isProcessAlive(pid)) {
+    clearPidFile();
+  }
+  // A live PID alone is not enough — require the configured port to be accepting connections.
   return await isPortOpen(config.host, config.port);
+}
+
+export async function waitForBrokerPort(
+  config: BrokerConfig,
+  timeoutMs = 15_000,
+  child?: ChildProcess
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child?.pid && !isProcessAlive(child.pid)) {
+      return false;
+    }
+    if (await isPortOpen(config.host, config.port)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
 }

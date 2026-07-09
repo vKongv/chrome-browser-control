@@ -89,6 +89,38 @@ describe('ensureBroker', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('fails fast when autoload is enabled but the compiled broker entry is missing', async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const host = '127.0.0.1';
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+
+    const url = `ws://${host}:${port}`;
+    const paths = await import('../server/paths.js');
+    const pathSpy = vi.spyOn(paths, 'getCompiledBrokerMainPath').mockReturnValue('/tmp/cbc-missing-broker-main.js');
+
+    try {
+      const result = await ensureBroker({
+        url,
+        token: 'spawn-token-123456789012345678901234',
+        host,
+        port,
+        spawnTimeoutMs: 50,
+        autoloadEnabled: true
+      });
+
+      expect(result).toMatchObject({ reachable: false, authOk: false });
+      expect(result.error).toContain('Compiled broker entry missing');
+      expect(result.error).toContain('npm run build');
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      pathSpy.mockRestore();
+    }
+  });
+
   it('spawns exactly once per adapter process when autoload is enabled and the port is refused', async () => {
     const listener = createServer();
     await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -117,5 +117,59 @@ describe('cli mcp autoload wiring', () => {
   it('keeps autoload off without flag or env', () => {
     delete process.env.CHROME_BROWSER_CONTROL_AUTOLOAD;
     expect(isAutoloadEnabled(mcpAutoloadOption({}))).toBe(false);
+  });
+});
+
+describe('cli broker process helpers', () => {
+  it('treats a live PID without an open port as not running', async () => {
+    const { createServer } = await import('node:net');
+    const { mkdirSync } = await import('node:fs');
+    const brokerProcess = await import('../cli/broker-process.js');
+    const paths = await import('../server/paths.js');
+
+    tempHome = mkdtempSync(join(tmpdir(), 'cbc-cli-broker-'));
+    process.env.HOME = tempHome;
+    mkdirSync(paths.getUserConfigDir(), { recursive: true });
+
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+
+    writeFileSync(paths.getBrokerPidPath(), `${process.pid}\n`);
+    expect(await brokerProcess.brokerAlreadyRunning({ host: '127.0.0.1', port, token: 't' })).toBe(false);
+  });
+
+  it('waitForBrokerPort succeeds once the port accepts connections', async () => {
+    const { createServer } = await import('node:net');
+    const brokerProcess = await import('../cli/broker-process.js');
+
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const port = address.port;
+
+    try {
+      expect(await brokerProcess.waitForBrokerPort({ host: '127.0.0.1', port, token: 't' }, 2_000)).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it('waitForBrokerPort times out when the port never opens', async () => {
+    const { createServer } = await import('node:net');
+    const brokerProcess = await import('../cli/broker-process.js');
+
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', () => resolve()));
+    const address = listener.address();
+    if (!address || typeof address === 'string') throw new Error('expected TCP address');
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())));
+
+    expect(await brokerProcess.waitForBrokerPort({ host: '127.0.0.1', port, token: 't' }, 300)).toBe(false);
   });
 });
