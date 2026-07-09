@@ -31,14 +31,20 @@ Confirm `npm pack --dry-run` includes:
 - `LICENSE`, `README.md`, `package.json`
 - **No** `skills/`, `.env*`, `docs/scratchpad/`, or tests
 
-Optional local tarball smoke (temp prefix):
+Optional local tarball smoke (temp prefix), then doctor after setup:
 
 ```bash
 npm pack
 mkdir -p /tmp/cbc-pack-smoke && tar -xzf chrome-browser-control-*.tgz -C /tmp/cbc-pack-smoke
 head -1 /tmp/cbc-pack-smoke/package/dist/cli/main.js   # expect #!/usr/bin/env node
 node /tmp/cbc-pack-smoke/package/dist/cli/main.js --help
-# optional: npm install -g ./chrome-browser-control-*.tgz then cbctl --help / setup in a disposable HOME
+# Prefer packed/global install in a disposable HOME:
+#   npm install -g ./chrome-browser-control-*.tgz
+#   HOME=/tmp/cbc-doctor-home cbctl setup
+#   HOME=/tmp/cbc-doctor-home cbctl doctor
+# Checkout fallback (same checks against built dist):
+#   HOME=/tmp/cbc-doctor-home node dist/cli/main.js setup
+#   HOME=/tmp/cbc-doctor-home node dist/cli/main.js doctor
 ```
 
 Contributor path still works after the release prep (unchanged):
