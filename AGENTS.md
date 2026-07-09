@@ -8,13 +8,14 @@ Use this file to resume work without relying on chat history.
 
 ## Key paths
 
-- `server/` — MCP adapter, broker client, broker, protocol, tools, environment handling.
-- `extension/` — Chrome MV3 extension, popup, content script, security helpers.
-- `tests/` — Vitest coverage for broker, bridge, protocol, tools, content-core, env, setup scripts.
+- `cli/` — installable `chrome-browser-control` bin (`setup`, `start`, `stop`, `status`, `doctor`, `mcp`, `mcp-config`, `broker`).
+- `server/` — MCP adapter, broker client, broker, protocol, tools, environment handling, MCP config render helpers.
+- `extension/` — Chrome MV3 extension, popup, content script, security helpers (source; setup copies to `~/.chrome-browser-control/extension`).
+- `tests/` — Vitest coverage for broker, bridge, protocol, tools, content-core, env, CLI, setup scripts.
 - `benchmarks/compact-snapshot.mjs` — compact-vs-full snapshot size benchmark.
-- `scripts/setup.mjs` — first-time setup helper.
-- `scripts/mcp-config.mjs` — host-specific MCP config renderer.
-- `scripts/doctor.mjs` — local setup checker.
+- `scripts/setup.mjs` — repo-local first-time setup helper (dev; prefer CLI `setup` for users).
+- `scripts/mcp-config.mjs` — repo-local host-specific MCP config renderer (dev).
+- `scripts/doctor.mjs` — repo-local setup checker (dev; prefer CLI `doctor`).
 - `skills/chrome-browser-control/` — distributable skills.sh agent skill for agents using the MCP tools at runtime.
 - `docs/` — durable, **tracked** notes agents must be able to find via git / `@docs`.
 - `docs/scratchpad/` — local-only WIP (gitignored). Do not put cross-session handoffs or agent feedback here; they will not ship and often will not surface in search/`@`.
@@ -41,25 +42,43 @@ Use this file to resume work without relying on chat history.
 - Use MCP server key `chrome_browser_control` only; remove legacy `chrome_browser` host entries to avoid stale tool schemas.
 - Snapshot refs are per-document in-memory handles and are stable across DOM reorder in the same document.
 - Stale/disconnected/expired refs are pruned and should fail cleanly.
-- First-time setup UX is implemented with `npm run setup`, `npm run doctor`, and `npm run mcp-config`.
+- Installable CLI is the supported user path: `chrome-browser-control setup|start|stop|status|doctor|mcp|mcp-config`.
+- User config and installed extension live under `~/.chrome-browser-control/` (`config.env`, `extension/`).
+- MCP default is attach-only: start the broker with `chrome-browser-control start`, then run `mcp`. Opt into spawn with `mcp --autoload` or `CHROME_BROWSER_CONTROL_AUTOLOAD=1`.
+- MCP host snippets use `command: chrome-browser-control` and `args: ["mcp"]` (not `tsx` / `server/index.ts`).
+- Contributors can still use `npm run broker`, `npm run mcp`, and repo `.env.local` against a checkout.
 - Call `browser_status` first on a new session; read `nextAction` for onboarding coaching and `adapter.registeredToolCount` to detect stale MCP host tool catalogs.
 - Runtime agents should use the `chrome-browser-control` skill when available; it contains the operating playbook for claiming tabs, collecting bounded page state, waiting after actions, screenshots, feed scrolling, side-effect confirmation, and cleanup.
 
 ## Local setup
 
+Users:
+
+```bash
+npm install -g chrome-browser-control
+chrome-browser-control setup
+chrome-browser-control start
+chrome-browser-control doctor
+```
+
+Contributors (checkout):
+
 ```bash
 npm install
-npm run setup
-npm run doctor
+npm run build
+node dist/cli/main.js setup
+# or: npm run setup / npm run doctor (repo-local scripts)
 ```
 
 Load the unpacked extension from:
 
 ```text
-extension/
+~/.chrome-browser-control/extension
 ```
 
-After editing extension files, reload the unpacked extension in `chrome://extensions` before live browser checks. After editing MCP server files (`server/`, `tools.ts`), restart the MCP server in your host (Cursor: MCP settings → restart `chrome_browser_control`).
+(or `extension/` from the repo when iterating on extension sources).
+
+After editing extension files, reload the unpacked extension in `chrome://extensions` before live browser checks. After editing MCP server files (`server/`, `cli/`), rebuild (`npm run build`) and restart the MCP server in your host (Cursor: MCP settings → restart `chrome_browser_control`).
 
 ## Verification commands
 
@@ -68,7 +87,8 @@ Run before reporting success:
 ```bash
 npm test
 npm run build
-npm run doctor
+chrome-browser-control doctor
+# or: npm run doctor
 npm run benchmark:compact-snapshots
 ```
 
@@ -76,13 +96,11 @@ Expected benchmark target: compact snapshots should remain at least 50% smaller 
 
 ## MCP config generation
 
-Use silent npm output when copying snippets:
-
 ```bash
-npm run --silent mcp-config -- --host yaml
-npm run --silent mcp-config -- --host claude
-npm run --silent mcp-config -- --host cursor
-npm run --silent mcp-config -- --host codex
+chrome-browser-control mcp-config --host yaml
+chrome-browser-control mcp-config --host claude
+chrome-browser-control mcp-config --host cursor
+chrome-browser-control mcp-config --host codex
 ```
 
 Host formats:
@@ -90,6 +108,7 @@ Host formats:
 - YAML: `mcp_servers` with key `chrome_browser_control`.
 - Claude/Cursor: JSON `mcpServers`.
 - Codex: TOML `[mcp_servers.chrome_browser_control]`.
+- Command/args: `chrome-browser-control` + `["mcp"]` (NPX fallback: `npx` + `["-y", "chrome-browser-control", "mcp"]`).
 
 ## Security rules
 

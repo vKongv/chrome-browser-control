@@ -13,29 +13,46 @@ Repository: https://github.com/vkongv/chrome-browser-control
 
 ## Install and Setup
 
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/vkongv/chrome-browser-control.git
-   cd chrome-browser-control
-   ```
-
-2. Install dependencies and run setup:
-
-   ```bash
-   npm install
-   npm run setup
-   ```
-
-   `npm run setup` writes `.env.local` with `CHROME_BROWSER_CONTROL_TOKEN` and `CHROME_BROWSER_CONTROL_PORT`, prints the extension folder path, and shows copy-paste MCP config snippets. That file is gitignored — do not commit it.
-
-3. Continue with [Load The Extension](#load-the-extension), then add MCP config and verify the connection.
-
-To generate a pairing token manually instead of `npm run setup`:
+Preferred path: install the CLI, then run setup.
 
 ```bash
-node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
+npm install -g chrome-browser-control
+# or, without a global install:
+npx -y chrome-browser-control setup
 ```
+
+```bash
+chrome-browser-control setup
+chrome-browser-control start
+chrome-browser-control doctor
+```
+
+`setup` writes `~/.chrome-browser-control/config.env` (pairing token + port), copies the unpacked extension to `~/.chrome-browser-control/extension`, and prints MCP host snippets. Do not commit that directory.
+
+CLI commands:
+
+| Command | Purpose |
+| --- | --- |
+| `chrome-browser-control setup` | Create user config and install the extension copy |
+| `chrome-browser-control start` | Start the shared loopback broker |
+| `chrome-browser-control stop` | Stop the broker |
+| `chrome-browser-control status` | Show broker / config status |
+| `chrome-browser-control doctor` | Local setup checker |
+| `chrome-browser-control mcp` | Stdio MCP adapter (attach-only by default) |
+| `chrome-browser-control mcp-config` | Print host-specific MCP snippets |
+| `chrome-browser-control broker` | Run the broker in the foreground (dev) |
+
+From a git checkout (contributors):
+
+```bash
+git clone https://github.com/vkongv/chrome-browser-control.git
+cd chrome-browser-control
+npm install
+npm run build
+node dist/cli/main.js setup
+```
+
+Repo-local `npm run setup` / `npm run broker` / `npm run mcp` remain available for development against TypeScript sources.
 
 ### Environment Variables
 
@@ -43,16 +60,12 @@ node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
 - `CHROME_BROWSER_CONTROL_PORT` — WebSocket broker port (default `8765`).
 - `CHROME_BROWSER_CONTROL_HOST` — Loopback host for the broker (default `127.0.0.1`).
 - `CHROME_BROWSER_CONTROL_EXTENSION_ID` — Optional. Pins the broker to one installed extension ID.
-- `CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV` — Optional. Set to `1` to skip loading `.env.local`.
+- `CHROME_BROWSER_CONTROL_AUTOLOAD` — Optional. Set to `1` so `mcp` may spawn a broker if none is reachable (recovery). Prefer `chrome-browser-control start` for normal use.
+- `CHROME_BROWSER_CONTROL_DISABLE_LOCAL_ENV` — Optional. Set to `1` to skip loading repo `.env.local`.
 
-For manual operation outside an MCP host:
+User config lives under `~/.chrome-browser-control/` and is loaded before any repo `.env.local`. Process env always wins.
 
-```bash
-CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run broker
-CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run mcp
-```
-
-`npm start` is an alias for `npm run mcp`.
+MCP attach-only default: `chrome-browser-control mcp` connects to an already-running broker. Start the broker with `chrome-browser-control start` first. For recovery, use `chrome-browser-control mcp --autoload` or `CHROME_BROWSER_CONTROL_AUTOLOAD=1`.
 
 ## Load The Extension
 
@@ -60,7 +73,7 @@ CHROME_BROWSER_CONTROL_TOKEN='<generated-token>' npm run mcp
 2. Go to `chrome://extensions`.
 3. Enable Developer mode.
 4. Click "Load unpacked".
-5. Select `/path/to/chrome-browser-control/extension`.
+5. Select `~/.chrome-browser-control/extension` (printed by `setup`). Contributors editing sources may load `extension/` from the repo instead.
 6. Open the Chrome Browser Control extension popup.
 7. Keep the bridge URL at `ws://127.0.0.1:8765` unless you changed the local port.
 8. Paste the generated pairing token.
@@ -73,24 +86,24 @@ Using `*` is convenient for local development, but it exposes every normal web p
 
 ## MCP Host Configuration
 
-Paste a snippet from `npm run setup` into Cursor, Claude Desktop, Codex, or another stdio MCP host. To print host-specific config again later:
+Paste a snippet from `chrome-browser-control setup` (or `mcp-config`) into Cursor, Claude Desktop, Codex, or another stdio MCP host. To print host-specific config again later:
 
 ```bash
-npm run --silent mcp-config -- --host cursor
-npm run --silent mcp-config -- --host claude
-npm run --silent mcp-config -- --host codex
-npm run --silent mcp-config -- --host yaml
+chrome-browser-control mcp-config --host cursor
+chrome-browser-control mcp-config --host claude
+chrome-browser-control mcp-config --host codex
+chrome-browser-control mcp-config --host yaml
 ```
 
-Use absolute paths because many MCP hosts do not apply a per-server working directory. The exact key names vary by host, but Claude Desktop, Codex, Cursor, and similar MCP hosts generally need a command, args, and env block for a stdio MCP server. This project should work with any stdio MCP host; verify host-specific config syntax in that host's documentation.
+The MCP server key is `chrome_browser_control`. The adapter command is the installable CLI with `args: ["mcp"]` — not `tsx` against `server/index.ts`.
 
 YAML-style example:
 
 ```yaml
 mcp_servers:
   chrome_browser_control:
-    command: "/path/to/chrome-browser-control/node_modules/.bin/tsx"
-    args: ["/path/to/chrome-browser-control/server/index.ts"]
+    command: "chrome-browser-control"
+    args: ["mcp"]
     env:
       CHROME_BROWSER_CONTROL_TOKEN: "<generated-token>"
       CHROME_BROWSER_CONTROL_PORT: "8765"
@@ -104,8 +117,8 @@ JSON-style example:
 {
   "mcpServers": {
     "chrome_browser_control": {
-      "command": "/path/to/chrome-browser-control/node_modules/.bin/tsx",
-      "args": ["/path/to/chrome-browser-control/server/index.ts"],
+      "command": "chrome-browser-control",
+      "args": ["mcp"],
       "env": {
         "CHROME_BROWSER_CONTROL_TOKEN": "<generated-token>",
         "CHROME_BROWSER_CONTROL_PORT": "8765"
@@ -115,17 +128,15 @@ JSON-style example:
 }
 ```
 
+If the CLI is not on `PATH`, use the NPX fallback printed by setup: `npx` with `args: ["-y", "chrome-browser-control", "mcp"]`.
+
 If your MCP host uses a config file, keep it private and outside the repository.
 
 ## Verify
 
-Run the setup checker:
-
-```bash
-npm run doctor
-```
-
-Then confirm from your MCP host by calling the `browser_status` tool. When ready, `extension.status` and `ping.status` should reflect a live bridge connection, and `extension.allowedOrigins` should show your configured scope.
+1. Start the broker: `chrome-browser-control start`
+2. Run the setup checker: `chrome-browser-control doctor`
+3. Confirm from your MCP host by calling the `browser_status` tool. When ready, `extension.status` and `ping.status` should reflect a live bridge connection, and `extension.allowedOrigins` should show your configured scope.
 
 ## Tools
 
