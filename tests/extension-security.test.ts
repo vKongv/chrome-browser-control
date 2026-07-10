@@ -2203,6 +2203,50 @@ describe('extension background origin enforcement', () => {
     );
   });
 
+  it('activates inactive tabs before resolving screenshot crop bounds', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1,
+          _activateAfterGets: 2
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'ref_bounds') {
+          expect(background.tabs[0].active).toBe(true);
+          return {
+            bounds: { x: 20, y: 30, width: 50, height: 25 },
+            viewport: { width: 400, height: 300, deviceScaleFactor: 1 }
+          };
+        }
+        return {};
+      }
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1, ref: 'e12' })).resolves.toMatchObject({
+      cropped: true,
+      activated: true,
+      ref: 'e12',
+      cropBounds: { x: 20, y: 30, width: 50, height: 25 }
+    });
+    const refBoundsIndex = background.sentMessages.findIndex(
+      (entry: { message: { action?: string } }) => entry.message.action === 'ref_bounds'
+    );
+    expect(refBoundsIndex).toBeGreaterThanOrEqual(0);
+    expect(background.captures).toHaveLength(1);
+  });
+
   it('rejects empty crop intersection before captureVisibleTab', async () => {
     const background = loadBackgroundHarness({
       settings: {

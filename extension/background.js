@@ -652,6 +652,16 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
     throw new Error('screenshot accepts either ref or bounds, not both');
   }
   const wantsCrop = hasRef || hasBounds;
+
+  // Activate before crop resolution so viewport-relative bounds match captureVisibleTab.
+  const format = params.format === 'jpeg' ? 'jpeg' : 'png';
+  let activated = false;
+  if (!tab.active) {
+    await chrome.tabs.update(tabId, { active: true });
+    tab = await waitForTabActive(tabId);
+    activated = true;
+  }
+
   let cropBounds;
   let deviceScaleFactor = 1;
   let cropRef;
@@ -687,13 +697,6 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
     }
   }
 
-  const format = params.format === 'jpeg' ? 'jpeg' : 'png';
-  let activated = false;
-  if (!tab.active) {
-    await chrome.tabs.update(tabId, { active: true });
-    tab = await waitForTabActive(tabId);
-    activated = true;
-  }
   let dataUrl;
   try {
     dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format });
