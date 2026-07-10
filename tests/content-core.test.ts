@@ -2,6 +2,7 @@ import { Window as HappyWindow } from 'happy-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   __testing,
+  boundsForRef,
   buildSnapshotFromDocument,
   buildVisibleSnapshotFromDocument,
   collectScroll,
@@ -450,6 +451,7 @@ describe('extension content core', () => {
     expect(result.count).toBe(2);
     expect(result.dedupedCount).toBe(2);
     expect(result.stepsRun).toBe(2);
+    expect(result.stoppedReason).toBe('stepsExhausted');
     expect(scrolls).toBe(1);
   });
 
@@ -483,11 +485,128 @@ describe('extension content core', () => {
     expect(result.items).toHaveLength(3);
     expect(result.count).toBe(3);
     expect(result.maxItems).toBe(3);
-    expect(result.truncatedCount).toBe(9);
-    expect(result.omitted).toBe(9);
+    expect(result.truncatedCount).toBe(1);
+    expect(result.omitted).toBe(1);
     expect(result.dedupedCount).toBe(0);
+    expect(result.stepsRun).toBe(1);
+    expect(result.stoppedReason).toBe('maxItems');
+    expect(scrolls).toBe(0);
+  });
+
+  it('scrolls a nested overflow container when scroll x/y are provided', async () => {
+    const document = makeDocument(`
+      <div id="feed" style="overflow:auto;height:40px"><article>One</article></div>
+    `);
+    const feed = document.querySelector('#feed') as any;
+    let containerScrolls = 0;
+    feed.scrollBy = () => {
+      containerScrolls += 1;
+    };
+    Object.defineProperty(feed, 'scrollHeight', { configurable: true, value: 200 });
+    Object.defineProperty(feed, 'clientHeight', { configurable: true, value: 40 });
+    (document as any).elementFromPoint = () => feed;
+    const fakeWindow = {
+      document,
+      scrollBy: () => {
+        throw new Error('window scroll should not run');
+      },
+      getComputedStyle: () => ({ overflow: 'auto', overflowY: 'auto', overflowX: 'hidden' })
+    };
+
+    const result = await collectScroll(
+      {
+        steps: 2,
+        delayMs: 0,
+        scroll: { x: 10, y: 10, deltaY: 80 },
+        extract: { selector: 'article', includeText: true }
+      },
+      document as unknown as Document,
+      fakeWindow as unknown as Window
+    );
+
+    expect(result.stepsRun).toBe(2);
+    expect(result.stoppedReason).toBe('stepsExhausted');
+    expect(containerScrolls).toBe(1);
+  });
+
+  it('stops collect_scroll early when until.noNewItemsForSteps is satisfied', async () => {
+    const document = makeDocument('<article>One</article>');
+    let scrolls = 0;
+    const fakeWindow = {
+      document,
+      scrollBy: () => {
+        scrolls += 1;
+      }
+    };
+
+    const result = await collectScroll(
+      {
+        steps: 5,
+        delayMs: 0,
+        until: { noNewItemsForSteps: 2 },
+        extract: { selector: 'article', includeText: true },
+        dedupeBy: 'text'
+      },
+      document as unknown as Document,
+      fakeWindow as unknown as Window
+    );
+
+    expect(result.count).toBe(1);
     expect(result.stepsRun).toBe(3);
+    expect(result.stoppedReason).toBe('noNewItems');
     expect(scrolls).toBe(2);
+  });
+
+  it('stops collect_scroll on ISO date cutoff and requires includeTimes', async () => {
+    const document = makeDocument(`
+      <article><time datetime="2024-01-10T00:00:00.000Z">Jan 10</time>Newer</article>
+      <article><time datetime="2023-12-01T00:00:00.000Z">Dec 1</time>Older</article>
+    `);
+    const fakeWindow = { document, scrollBy: () => undefined };
+
+    await expect(
+      collectScroll(
+        {
+          steps: 3,
+          delayMs: 0,
+          until: { stopBeforeDatetime: '2024-01-01T00:00:00.000Z' },
+          extract: { selector: 'article', includeText: true }
+        },
+        document as unknown as Document,
+        fakeWindow as unknown as Window
+      )
+    ).rejects.toThrow('includeTimes');
+
+    const result = await collectScroll(
+      {
+        steps: 3,
+        delayMs: 0,
+        until: { stopBeforeDatetime: '2024-01-01T00:00:00.000Z' },
+        extract: { selector: 'article', includeText: true, includeTimes: true }
+      },
+      document as unknown as Document,
+      fakeWindow as unknown as Window
+    );
+
+    expect(result.stoppedReason).toBe('dateCutoff');
+    expect(result.stepsRun).toBe(1);
+    expect(result.count).toBe(2);
+  });
+
+  it('resolves viewport bounds for a snapshot ref', () => {
+    const document = makeDocument('<button id="go">Go</button>');
+    const button = document.querySelector('#go') as any;
+    setRect(button, { x: 12, y: 24, width: 80, height: 20 });
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document, { mode: 'full' });
+    const ref = snapshot.elements[0].ref;
+    Object.defineProperty(document.defaultView, 'innerWidth', { configurable: true, value: 1024 });
+    Object.defineProperty(document.defaultView, 'innerHeight', { configurable: true, value: 768 });
+    Object.defineProperty(document.defaultView, 'devicePixelRatio', { configurable: true, value: 2 });
+
+    expect(boundsForRef(ref, document as unknown as Document)).toEqual({
+      bounds: { x: 12, y: 24, width: 80, height: 20 },
+      viewport: { width: 1024, height: 768, deviceScaleFactor: 2 }
+    });
   });
 
   it('caps collect_scroll delay to stay within the broker timeout budget', async () => {

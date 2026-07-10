@@ -704,13 +704,37 @@ export function registerBrowserTools(
     'screenshot',
     {
       title: 'Capture visible screenshot',
-      description: 'Capture the visible viewport of an allowed tab. Returns a data URL and MIME type.',
+      description:
+        'Capture the visible viewport of an allowed tab. Optionally crop to a snapshot ref or viewport bounds (with padding). Returns a data URL and MIME type; crop metadata is included only when cropping.',
       inputSchema: {
         format: z.enum(['png', 'jpeg']).optional(),
+        ref: z.string().min(1).optional().describe('Snapshot ref to crop to (mutually exclusive with bounds).'),
+        bounds: z
+          .object({
+            x: z.number(),
+            y: z.number(),
+            width: z.number().positive(),
+            height: z.number().positive()
+          })
+          .optional()
+          .describe('Viewport CSS-pixel crop rect (mutually exclusive with ref).'),
+        padding: z
+          .number()
+          .min(0)
+          .optional()
+          .describe('Optional non-negative CSS pixels to expand the crop rect before viewport intersection.'),
         ...OptionalTarget
       }
     },
-    async (args) => forward(bridge, 'screenshot', args)
+    async (args) => {
+      if (args.ref !== undefined && args.bounds !== undefined) {
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: 'screenshot accepts either ref or bounds, not both' }]
+        };
+      }
+      return forward(bridge, 'screenshot', args);
+    }
   );
 
   registerTool(
@@ -814,12 +838,44 @@ export function registerBrowserTools(
     'collect_scroll',
     {
       title: 'Collect while scrolling',
-      description: 'Scroll a bounded number of steps, extract selected elements each step, and optionally dedupe feed-like results.',
+      description:
+        'Scroll a bounded number of steps (hard ceiling when until is set), extract selected elements each step, optionally target a nested scroll container, and optionally stop early via until conditions. Results include stoppedReason.',
       inputSchema: {
-        steps: z.number().int().positive().max(20),
-        deltaY: z.number().optional(),
+        steps: z
+          .number()
+          .int()
+          .positive()
+          .max(20)
+          .describe('Maximum scroll/extract steps. Hard ceiling when until is set.'),
+        deltaY: z.number().optional().describe('Legacy window scroll deltaY when scroll is omitted.'),
+        scroll: z
+          .object({
+            x: z.number().optional(),
+            y: z.number().optional(),
+            deltaX: z.number().optional(),
+            deltaY: z.number().optional()
+          })
+          .optional()
+          .describe('Scroll target for each step. When set, overrides top-level deltaY. Pass x/y to scroll a nested overflow container under that point.'),
         delayMs: z.number().int().min(0).max(1_000).optional(),
         maxItems: z.number().int().positive().max(500).optional(),
+        until: z
+          .object({
+            noNewItemsForSteps: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .describe('Stop after this many consecutive steps add zero new items after dedupe.'),
+            stopBeforeDatetime: z
+              .string()
+              .min(1)
+              .optional()
+              .describe(
+                'ISO-8601 cutoff. Stop when an extracted item has time.datetime strictly before this instant. Requires extract.includeTimes: true.'
+              )
+          })
+          .optional(),
         extract: z.object({
           selector: z.string().min(1).max(500),
           includeText: z.boolean().optional(),

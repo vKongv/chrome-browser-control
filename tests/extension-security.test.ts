@@ -160,7 +160,12 @@ function loadBackgroundHarness({
       sendMessage: async (tabId: number, message: Record<string, unknown>) => {
         sentMessages.push({ tabId, message });
         if (message?.action === 'ping') return { ok: true, result: { ready: true } };
-        return { ok: true, result: typeof contentResult === 'function' ? contentResult(tabId, message) : contentResult };
+        try {
+          const result = typeof contentResult === 'function' ? contentResult(tabId, message) : contentResult;
+          return { ok: true, result };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
       },
       captureVisibleTab: async (windowId: number, options: Record<string, unknown>) => {
         captures.push({ windowId, options });
@@ -172,6 +177,28 @@ function loadBackgroundHarness({
       executeScript: async () => undefined
     }
   };
+  const drawImageCalls: unknown[][] = [];
+  class FakeOffscreenCanvas {
+    width: number;
+    height: number;
+    constructor(width: number, height: number) {
+      this.width = width;
+      this.height = height;
+    }
+    getContext() {
+      return {
+        drawImage: (...args: unknown[]) => {
+          drawImageCalls.push(args);
+        }
+      };
+    }
+    async convertToBlob({ type }: { type: string }) {
+      return {
+        type,
+        arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer
+      };
+    }
+  }
   const context = vm.createContext({
     URL,
     chrome,
@@ -184,7 +211,18 @@ function loadBackgroundHarness({
       callback();
       return 0;
     },
-    clearTimeout
+    clearTimeout,
+    fetch: async () => ({
+      blob: async () => ({})
+    }),
+    createImageBitmap: async () => ({
+      width: 200,
+      height: 200,
+      close: () => undefined
+    }),
+    OffscreenCanvas: FakeOffscreenCanvas,
+    btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'),
+    Uint8Array
   });
   (context as any).globalThis = context;
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8'), context);
@@ -192,6 +230,7 @@ function loadBackgroundHarness({
   return Object.assign((context as any).BrowserControlBackground, {
     sentMessages,
     captures,
+    drawImageCalls,
     tabs,
     tabGetCount: () => tabGetCount,
     resetTabGetCount() {
@@ -2035,6 +2074,308 @@ describe('extension background origin enforcement', () => {
       'screenshot capture was blocked by Chrome permissions'
     );
     expect(background.captures).toEqual([{ windowId: 1, options: { format: 'png' } }]);
+  });
+
+  it('crops screenshots to bounds with padding and reports crop metadata', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'page_status') {
+          return {
+            viewport: { width: 200, height: 100, deviceScaleFactor: 2 }
+          };
+        }
+        return {};
+      }
+    });
+
+    const result = await background.handleBridgeRequest('screenshot', {
+      tabId: 1,
+      bounds: { x: 10, y: 10, width: 40, height: 20 },
+      padding: 5
+    });
+
+    expect(result).toMatchObject({
+      mimeType: 'image/png',
+      visibleOnly: true,
+      cropped: true,
+      cropBounds: { x: 5, y: 5, width: 50, height: 30 },
+      deviceScaleFactor: 2
+    });
+    expect(result).not.toHaveProperty('ref');
+    expect(result.dataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(result.dataUrl).not.toBe('data:image/png;base64,ZmFrZQ==');
+    expect(background.captures).toEqual([{ windowId: 1, options: { format: 'png' } }]);
+    expect(background.drawImageCalls).toHaveLength(1);
+    expect(background.drawImageCalls[0].slice(1)).toEqual([10, 10, 100, 60, 0, 0, 100, 60]);
+    expect(background.sentMessages.some((entry: { message: { action?: string } }) => entry.message.action === 'page_status')).toBe(
+      true
+    );
+  });
+
+  it('rejects non-finite crop bounds before captureVisibleTab', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'page_status') {
+          return { viewport: { width: 200, height: 100, deviceScaleFactor: 1 } };
+        }
+        return {};
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('screenshot', {
+        tabId: 1,
+        bounds: { x: Number.NaN, y: 10, width: 40, height: 20 }
+      })
+    ).rejects.toThrow('outside the visible viewport');
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('crops screenshots to a snapshot ref using content bounds', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'ref_bounds') {
+          return {
+            bounds: { x: 20, y: 30, width: 50, height: 25 },
+            viewport: { width: 400, height: 300, deviceScaleFactor: 1 }
+          };
+        }
+        return {};
+      }
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1, ref: 'e12' })).resolves.toMatchObject({
+      cropped: true,
+      cropBounds: { x: 20, y: 30, width: 50, height: 25 },
+      deviceScaleFactor: 1,
+      ref: 'e12'
+    });
+    expect(background.sentMessages.some((entry: { message: { action?: string } }) => entry.message.action === 'ref_bounds')).toBe(
+      true
+    );
+  });
+
+  it('activates inactive tabs before resolving screenshot crop bounds', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1,
+          _activateAfterGets: 2
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'ref_bounds') {
+          expect(background.tabs[0].active).toBe(true);
+          return {
+            bounds: { x: 20, y: 30, width: 50, height: 25 },
+            viewport: { width: 400, height: 300, deviceScaleFactor: 1 }
+          };
+        }
+        return {};
+      }
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1, ref: 'e12' })).resolves.toMatchObject({
+      cropped: true,
+      activated: true,
+      ref: 'e12',
+      cropBounds: { x: 20, y: 30, width: 50, height: 25 }
+    });
+    const refBoundsIndex = background.sentMessages.findIndex(
+      (entry: { message: { action?: string } }) => entry.message.action === 'ref_bounds'
+    );
+    expect(refBoundsIndex).toBeGreaterThanOrEqual(0);
+    expect(background.captures).toHaveLength(1);
+  });
+
+  it('rejects empty crop intersection before captureVisibleTab', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'page_status') {
+          return { viewport: { width: 100, height: 100, deviceScaleFactor: 1 } };
+        }
+        return {};
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('screenshot', {
+        tabId: 1,
+        bounds: { x: 200, y: 200, width: 40, height: 40 }
+      })
+    ).rejects.toThrow('outside the visible viewport');
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('rejects stale screenshot refs before capture', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (message.action === 'ref_bounds') {
+          throw new Error('No element found for ref stale. Refresh snapshot and try again.');
+        }
+        return {};
+      }
+    });
+
+    await expect(background.handleBridgeRequest('screenshot', { tabId: 1, ref: 'stale' })).rejects.toThrow(
+      'No element found for ref stale'
+    );
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('rejects screenshot requests that set both ref and bounds', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ]
+    });
+
+    await expect(
+      background.handleBridgeRequest('screenshot', {
+        tabId: 1,
+        ref: 'e1',
+        bounds: { x: 1, y: 1, width: 10, height: 10 }
+      })
+    ).rejects.toThrow('either ref or bounds');
+    expect(background.captures).toHaveLength(0);
+  });
+
+  it('omits crop fields for uncropped screenshots', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          status: 'complete',
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1
+        }
+      ]
+    });
+
+    const result = await background.handleBridgeRequest('screenshot', { tabId: 1 });
+    expect(result).toEqual({
+      dataUrl: 'data:image/png;base64,ZmFrZQ==',
+      mimeType: 'image/png',
+      tabId: 1,
+      windowId: 1,
+      visibleOnly: true,
+      activated: false
+    });
+    expect(result).not.toHaveProperty('cropped');
+    expect(result).not.toHaveProperty('cropBounds');
+    expect(result).not.toHaveProperty('deviceScaleFactor');
   });
 
   it('rejects exclusive claim conflicts with structured holder metadata', async () => {

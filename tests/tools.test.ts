@@ -190,6 +190,63 @@ describe('registerBrowserTools', () => {
     ]);
   });
 
+  it('accepts collect_scroll until/scroll and screenshot crop schema fields', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    const collectSchema = z.object(server.configs.get('collect_scroll')?.inputSchema as z.ZodRawShape);
+    expect(
+      collectSchema.parse({
+        steps: 5,
+        scroll: { x: 10, y: 20, deltaY: 100 },
+        until: { noNewItemsForSteps: 2, stopBeforeDatetime: '2024-01-01T00:00:00.000Z' },
+        extract: { selector: 'article', includeTimes: true }
+      })
+    ).toMatchObject({
+      scroll: { x: 10, y: 20, deltaY: 100 },
+      until: { noNewItemsForSteps: 2 }
+    });
+
+    await server.tools.get('collect_scroll')?.({
+      steps: 3,
+      scroll: { x: 5, y: 5, deltaY: 50 },
+      until: { noNewItemsForSteps: 1 },
+      extract: { selector: 'article', includeText: true }
+    });
+    expect(bridge.calls.at(-1)).toEqual({
+      action: 'collect_scroll',
+      params: {
+        steps: 3,
+        scroll: { x: 5, y: 5, deltaY: 50 },
+        until: { noNewItemsForSteps: 1 },
+        extract: { selector: 'article', includeText: true }
+      }
+    });
+
+    const screenshotSchema = z.object(server.configs.get('screenshot')?.inputSchema as z.ZodRawShape);
+    expect(screenshotSchema.parse({ bounds: { x: 1, y: 2, width: 3, height: 4 }, padding: 2 })).toMatchObject({
+      bounds: { x: 1, y: 2, width: 3, height: 4 },
+      padding: 2
+    });
+
+    const both = await server.tools.get('screenshot')?.({
+      ref: 'e1',
+      bounds: { x: 1, y: 2, width: 3, height: 4 }
+    });
+    expect(both).toMatchObject({
+      isError: true,
+      content: [{ text: 'screenshot accepts either ref or bounds, not both' }]
+    });
+    expect(bridge.calls.filter((call) => call.action === 'screenshot')).toEqual([]);
+
+    await server.tools.get('screenshot')?.({ ref: 'e1', padding: 4 });
+    expect(bridge.calls.at(-1)).toEqual({
+      action: 'screenshot',
+      params: { ref: 'e1', padding: 4 }
+    });
+  });
+
   it('rejects wait_for without a condition before calling the bridge', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();

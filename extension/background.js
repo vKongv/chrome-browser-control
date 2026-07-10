@@ -592,6 +592,52 @@ async function waitForTabActive(tabId, timeoutMs = 1500) {
   throw new Error('Timed out waiting for Chrome tab activation before screenshot capture');
 }
 
+function intersectCropBounds(bounds, viewport, padding = 0) {
+  const pad = Math.max(0, Number(padding) || 0);
+  const left = Number(bounds.x) - pad;
+  const top = Number(bounds.y) - pad;
+  const right = Number(bounds.x) + Number(bounds.width) + pad;
+  const bottom = Number(bounds.y) + Number(bounds.height) + pad;
+  const x = Math.max(0, left);
+  const y = Math.max(0, top);
+  const maxX = Math.max(0, Number(viewport.width) || 0);
+  const maxY = Math.max(0, Number(viewport.height) || 0);
+  const width = Math.min(right, maxX) - x;
+  const height = Math.min(bottom, maxY) - y;
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(width),
+    height: Math.round(height)
+  };
+}
+
+async function cropDataUrl(dataUrl, cropBounds, deviceScaleFactor, format) {
+  const scale = Number(deviceScaleFactor) > 0 ? Number(deviceScaleFactor) : 1;
+  const sx = Math.round(cropBounds.x * scale);
+  const sy = Math.round(cropBounds.y * scale);
+  const sw = Math.max(1, Math.round(cropBounds.width * scale));
+  const sh = Math.max(1, Math.round(cropBounds.height * scale));
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = new OffscreenCanvas(sw, sh);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('screenshot crop failed: OffscreenCanvas 2d context unavailable');
+    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, sw, sh);
+    const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    const croppedBlob = await canvas.convertToBlob({ type: mimeType, ...(format === 'jpeg' ? { quality: 0.92 } : {}) });
+    const buffer = await croppedBlob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+    return `data:${mimeType};base64,${btoa(binary)}`;
+  } finally {
+    bitmap.close?.();
+  }
+}
+
 async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = []) {
   let tab = await chrome.tabs.get(tabId);
   if (!isInjectableUrl(tab.url || '')) {
@@ -599,6 +645,15 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
   }
   assertAllowedUrl(tab.url || '', allowedOrigins, 'screenshot');
   await assertScreenshotPermission(allowedOrigins);
+
+  const hasRef = params.ref !== undefined && params.ref !== null && String(params.ref).length > 0;
+  const hasBounds = params.bounds && typeof params.bounds === 'object' && !Array.isArray(params.bounds);
+  if (hasRef && hasBounds) {
+    throw new Error('screenshot accepts either ref or bounds, not both');
+  }
+  const wantsCrop = hasRef || hasBounds;
+
+  // Activate before crop resolution so viewport-relative bounds match captureVisibleTab.
   const format = params.format === 'jpeg' ? 'jpeg' : 'png';
   let activated = false;
   if (!tab.active) {
@@ -606,6 +661,42 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
     tab = await waitForTabActive(tabId);
     activated = true;
   }
+
+  let cropBounds;
+  let deviceScaleFactor = 1;
+  let cropRef;
+  if (wantsCrop) {
+    let sourceBounds;
+    let viewport;
+    if (hasRef) {
+      cropRef = String(params.ref);
+      const resolved = await sendToContent(tabId, 'ref_bounds', { ref: cropRef }, allowedOrigins);
+      sourceBounds = resolved?.bounds;
+      viewport = resolved?.viewport;
+      if (!sourceBounds || typeof sourceBounds.width !== 'number' || typeof sourceBounds.height !== 'number') {
+        throw new Error(`No viewport bounds available for ref ${cropRef}. Refresh snapshot and try again.`);
+      }
+    } else {
+      sourceBounds = {
+        x: Number(params.bounds.x),
+        y: Number(params.bounds.y),
+        width: Number(params.bounds.width),
+        height: Number(params.bounds.height)
+      };
+      const status = await sendToContent(tabId, 'page_status', {}, allowedOrigins);
+      viewport = status?.viewport;
+    }
+    if (!viewport || typeof viewport.width !== 'number' || typeof viewport.height !== 'number') {
+      throw new Error('screenshot crop requires page viewport dimensions');
+    }
+    deviceScaleFactor = Number(viewport.deviceScaleFactor) > 0 ? Number(viewport.deviceScaleFactor) : 1;
+    cropBounds = intersectCropBounds(sourceBounds, viewport, params.padding);
+    const cropFinite = [cropBounds.x, cropBounds.y, cropBounds.width, cropBounds.height].every(Number.isFinite);
+    if (!cropFinite || cropBounds.width <= 0 || cropBounds.height <= 0) {
+      throw new Error('screenshot crop is outside the visible viewport (empty intersection after padding)');
+    }
+  }
+
   let dataUrl;
   try {
     dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format });
@@ -618,13 +709,30 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
     }
     throw error;
   }
+
+  if (!wantsCrop) {
+    return {
+      dataUrl,
+      mimeType: `image/${format}`,
+      tabId,
+      windowId: tab.windowId,
+      visibleOnly: true,
+      activated
+    };
+  }
+
+  const croppedDataUrl = await cropDataUrl(dataUrl, cropBounds, deviceScaleFactor, format);
   return {
-    dataUrl,
+    dataUrl: croppedDataUrl,
     mimeType: `image/${format}`,
     tabId,
     windowId: tab.windowId,
     visibleOnly: true,
-    activated
+    activated,
+    cropped: true,
+    cropBounds,
+    deviceScaleFactor,
+    ...(cropRef ? { ref: cropRef } : {})
   };
 }
 

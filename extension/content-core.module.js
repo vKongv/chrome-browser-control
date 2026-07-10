@@ -334,6 +334,18 @@ function boundsForElement(element) {
   };
 }
 
+export function boundsForRef(ref, documentRef = document) {
+  const element = findByRef(ref, documentRef);
+  if (!element) throw new Error(`No element found for ref ${ref}. Refresh snapshot and try again.`);
+  const bounds = boundsForElement(element);
+  if (!bounds) throw new Error(`No viewport bounds available for ref ${ref}. Refresh snapshot and try again.`);
+  const windowRef = documentRef.defaultView || window;
+  return {
+    bounds,
+    viewport: viewportFor(windowRef)
+  };
+}
+
 function elementHref(element) {
   if (element.href) return String(element.href).slice(0, 500);
   const link = element.closest?.('a[href]') || element.querySelector?.('a[href]');
@@ -1013,16 +1025,39 @@ export async function collectScroll(options = {}, documentRef = document, window
   const steps = boundedLimit(options.steps, DEFAULT_COLLECT_STEPS, MAX_COLLECT_STEPS);
   const delayMs = Math.min(MAX_COLLECT_DELAY_MS, Math.max(0, Number(options.delayMs ?? DEFAULT_COLLECT_DELAY_MS)));
   const deltaY = typeof options.deltaY === 'number' ? options.deltaY : 600;
+  const scrollParams =
+    options.scroll && typeof options.scroll === 'object' && !Array.isArray(options.scroll) ? options.scroll : { deltaY };
   const maxItems = boundedLimit(options.maxItems, DEFAULT_COLLECT_ITEM_LIMIT, MAX_COLLECT_ITEM_LIMIT);
   const extract = options.extract || {};
   if (!extract.selector) throw new Error('collect_scroll requires extract.selector');
+  const until = options.until && typeof options.until === 'object' && !Array.isArray(options.until) ? options.until : undefined;
+  const noNewItemsForSteps =
+    until && typeof until.noNewItemsForSteps === 'number' && Number.isFinite(until.noNewItemsForSteps)
+      ? Math.max(1, Math.floor(until.noNewItemsForSteps))
+      : undefined;
+  const stopBeforeDatetime = until?.stopBeforeDatetime != null ? String(until.stopBeforeDatetime) : undefined;
+  let stopBeforeMs;
+  if (stopBeforeDatetime) {
+    if (!extract.includeTimes) {
+      throw new Error('collect_scroll until.stopBeforeDatetime requires extract.includeTimes: true');
+    }
+    stopBeforeMs = Date.parse(stopBeforeDatetime);
+    if (!Number.isFinite(stopBeforeMs)) {
+      throw new Error('collect_scroll until.stopBeforeDatetime must be a valid ISO-8601 datetime');
+    }
+  }
   const dedupeBy = options.dedupeBy || 'none';
   const seen = new Set();
   const items = [];
   let dedupedCount = 0;
   let omitted = 0;
   let truncatedCount = 0;
+  let consecutiveEmptySteps = 0;
+  let stoppedReason = 'stepsExhausted';
+  let stepsRun = 0;
   for (let step = 0; step < steps; step += 1) {
+    stepsRun = step + 1;
+    const beforeCount = items.length;
     const result = extractElements(
       {
         selector: extract.selector,
@@ -1035,6 +1070,7 @@ export async function collectScroll(options = {}, documentRef = document, window
       documentRef
     );
     omitted += result.omitted || 0;
+    let hitDateCutoff = false;
     for (const item of result.items) {
       const key = dedupeKeyForItem(item, dedupeBy);
       if (key && seen.has(key)) {
@@ -1044,23 +1080,54 @@ export async function collectScroll(options = {}, documentRef = document, window
       if (key) seen.add(key);
       if (items.length < maxItems) {
         items.push(item);
+        if (stopBeforeMs !== undefined) {
+          const datetime = item.time?.datetime;
+          if (datetime) {
+            const itemMs = Date.parse(String(datetime));
+            if (Number.isFinite(itemMs) && itemMs < stopBeforeMs) {
+              hitDateCutoff = true;
+              break;
+            }
+          }
+        }
       } else {
         truncatedCount += 1;
       }
     }
+    if (hitDateCutoff) {
+      stoppedReason = 'dateCutoff';
+      break;
+    }
+    if (items.length >= maxItems) {
+      stoppedReason = 'maxItems';
+      break;
+    }
+    const newItemsThisStep = items.length - beforeCount;
+    if (noNewItemsForSteps !== undefined) {
+      if (newItemsThisStep === 0) {
+        consecutiveEmptySteps += 1;
+        if (consecutiveEmptySteps >= noNewItemsForSteps) {
+          stoppedReason = 'noNewItems';
+          break;
+        }
+      } else {
+        consecutiveEmptySteps = 0;
+      }
+    }
     if (step < steps - 1) {
-      performScroll({ deltaY }, windowRef);
+      performScroll(scrollParams, windowRef);
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
   return {
-    stepsRun: steps,
+    stepsRun,
     items,
     count: items.length,
     dedupedCount,
     omitted: omitted + truncatedCount,
     truncatedCount,
-    maxItems
+    maxItems,
+    stoppedReason
   };
 }
 
@@ -1088,6 +1155,7 @@ globalThis.BrowserControlContentCore = {
   buildVisibleSnapshotFromDocument,
   isPasswordLike,
   findByRef,
+  boundsForRef,
   performClick,
   performType,
   performScroll,
