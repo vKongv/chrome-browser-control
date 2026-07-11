@@ -65,6 +65,7 @@ describe('protocol validation', () => {
       'ping',
       'name_session',
       'list_tabs',
+      'list_frames',
       'claim_tab',
       'release_tab',
       'finalize_tabs',

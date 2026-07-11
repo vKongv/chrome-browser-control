@@ -40,7 +40,7 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     const count = registerBrowserTools(server, bridge);
 
-    expect(count).toBe(23);
+    expect(count).toBe(24);
     expect([...server.tools.keys()].sort()).toEqual([
       'browser_status',
       'claim_tab',
@@ -52,6 +52,7 @@ describe('registerBrowserTools', () => {
       'extract_feed_posts',
       'finalize_tabs',
       'keypress',
+      'list_frames',
       'list_tabs',
       'name_session',
       'navigate',
@@ -136,6 +137,40 @@ describe('registerBrowserTools', () => {
       const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
       expect(inputSchema.after).toBeUndefined();
     }
+  });
+
+  it('exposes documentId only on document-target tools and forwards list_frames tab targets', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    for (const tool of [
+      'snapshot',
+      'visible_snapshot',
+      'click',
+      'type',
+      'scroll',
+      'query_elements',
+      'extract_elements',
+      'extract_feed_posts',
+      'keypress',
+      'click_at',
+      'wait_for',
+      'page_status',
+      'console_logs',
+      'collect_scroll',
+      'perform_actions'
+    ]) {
+      const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
+      expect(inputSchema.documentId, tool).toBeTruthy();
+    }
+    for (const tool of ['navigate', 'screenshot', 'list_frames']) {
+      const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
+      expect(inputSchema.documentId, tool).toBeUndefined();
+    }
+
+    await server.tools.get('list_frames')?.({ sessionTabId: 'tab-a' });
+    expect(bridge.calls.at(-1)).toEqual({ action: 'list_frames', params: { sessionTabId: 'tab-a' } });
   });
 
   it('forwards snapshot textLimit to the bridge', async () => {
@@ -401,7 +436,7 @@ describe('registerBrowserTools', () => {
     registerBrowserTools(server, bridge, {
       getStatusContext: () => ({
         adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
-        registeredToolCount: 23,
+        registeredToolCount: 24,
         brokerOwnership: 'adopted'
       })
     });
@@ -412,7 +447,7 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([{ action: 'ping', params: {} }]);
     expect(status).toMatchObject({
       ready: true,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 23 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 24 },
       broker: { reachable: true, ownership: 'adopted' },
       extension: {
         connected: true,
@@ -453,7 +488,7 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     bridge.error = new Error('No Chrome extension connected to broker');
     registerBrowserTools(server, bridge, {
-      getStatusContext: () => ({ registeredToolCount: 23, brokerPort: 8765 })
+      getStatusContext: () => ({ registeredToolCount: 24, brokerPort: 8765 })
     });
 
     const result = await server.tools.get('browser_status')?.({});
@@ -461,7 +496,7 @@ describe('registerBrowserTools', () => {
 
     expect(status).toMatchObject({
       ready: false,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 23 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 24 },
       broker: { reachable: true },
       extension: { connected: false },
       error: 'No Chrome extension connected to broker'

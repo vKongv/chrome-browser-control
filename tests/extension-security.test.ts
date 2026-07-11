@@ -23,35 +23,75 @@ function withNavigateMetadata(expected: Record<string, unknown>, requestedUrl?: 
   };
 }
 
+function withTopDocumentMetadata(expected: Record<string, unknown>, tabId = 1) {
+  return {
+    ...expected,
+    documentId: `doc-${tabId}`,
+    frameId: 0,
+    isTopFrame: true,
+    coordinateSpace: 'tabViewport'
+  };
+}
+
+function successfulTopStep(index: number, action: string, params: Record<string, unknown>) {
+  return { index, action, ok: true, result: withTopDocumentMetadata({ action, params }) };
+}
+
 function loadBackgroundHarness({
   settings,
   tabs,
   bridgeStatus = 'connected',
   staleActiveTab,
   contentResult = {},
-  grantedOrigins = [],
+  grantedOrigins,
   grantedPermissions = [],
-  captureError
+  captureError,
+  frames,
+  contentReady = true
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
   bridgeStatus?: string;
   staleActiveTab?: Record<string, unknown>;
-  contentResult?: Record<string, unknown> | ((tabId: number, message: Record<string, unknown>) => Record<string, unknown>);
+  contentResult?:
+    | Record<string, unknown>
+    | ((tabId: number, message: Record<string, unknown>, options: { documentId?: string }) => Record<string, unknown>);
   grantedOrigins?: string[];
   grantedPermissions?: string[];
   captureError?: Error;
+  frames?: Array<Record<string, unknown>>;
+  contentReady?: boolean;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
   let tabGetCount = 0;
   const sentMessages: Array<{ tabId: number; message: Record<string, unknown> }> = [];
+  const messageTargets: Array<{ tabId: number; documentId?: string }> = [];
+  const injectionTargets: Array<Record<string, unknown>> = [];
+  let contentListenerReady = contentReady;
   const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
   const FakeDate = class extends Date {
     static now() {
       return now;
     }
+  };
+  const effectiveGrantedOrigins = grantedOrigins ?? (Array.isArray(settings.allowedOrigins) ? settings.allowedOrigins : []);
+  const configuredFrames =
+    frames ??
+    tabs.map((tab) => ({
+      tabId: tab.id,
+      frameId: 0,
+      parentFrameId: -1,
+      documentId: `doc-${tab.id}`,
+      url: tab.url,
+      documentLifecycle: 'active',
+      frameType: 'outermost_frame'
+    }));
+  const originMatches = (grant: string, requested: string) => {
+    if (grant === '<all_urls>') return true;
+    const escaped = grant.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*');
+    return new RegExp(`^${escaped}$`).test(requested);
   };
   const chrome = {
     storage: {
@@ -78,11 +118,13 @@ function loadBackgroundHarness({
     },
     permissions: {
       getAll: async () => ({
-        origins: grantedOrigins,
+        origins: effectiveGrantedOrigins,
         permissions: grantedPermissions
       }),
       contains: (request: { origins?: string[]; permissions?: string[] }, callback?: (granted: boolean) => void) => {
-        const originsGranted = (request.origins || []).every((origin) => grantedOrigins.includes(origin));
+        const originsGranted = (request.origins || []).every((origin) =>
+          effectiveGrantedOrigins.some((grant) => originMatches(grant, origin))
+        );
         const permissionsGranted = (request.permissions || []).every((permission) => grantedPermissions.includes(permission));
         const granted = originsGranted && permissionsGranted;
         callback?.(granted);
@@ -157,11 +199,15 @@ function loadBackgroundHarness({
         tabs.push(tab);
         return tab;
       },
-      sendMessage: async (tabId: number, message: Record<string, unknown>) => {
+      sendMessage: async (tabId: number, message: Record<string, unknown>, options: { documentId?: string } = {}) => {
         sentMessages.push({ tabId, message });
-        if (message?.action === 'ping') return { ok: true, result: { ready: true } };
+        messageTargets.push({ tabId, documentId: options.documentId });
+        if (message?.action === 'ping') {
+          if (!contentListenerReady) throw new Error('Could not establish connection. Receiving end does not exist.');
+          return { ok: true, result: { ready: true } };
+        }
         try {
-          const result = typeof contentResult === 'function' ? contentResult(tabId, message) : contentResult;
+          const result = typeof contentResult === 'function' ? contentResult(tabId, message, options) : contentResult;
           return { ok: true, result };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -173,8 +219,26 @@ function loadBackgroundHarness({
         return `data:image/${options.format};base64,ZmFrZQ==`;
       }
     },
+    webNavigation: {
+      getAllFrames: async ({ tabId }: { tabId: number }) =>
+        configuredFrames
+          .filter((frame) => frame.tabId === tabId)
+          .map(({ tabId: _tabId, ...frame }) => frame),
+      getFrame: async ({ tabId, frameId, documentId }: { tabId: number; frameId?: number; documentId?: string }) => {
+        const found = configuredFrames.find(
+          (frame) => frame.tabId === tabId && (documentId !== undefined ? frame.documentId === documentId : frame.frameId === frameId)
+        );
+        if (!found) return null;
+        const { tabId: _tabId, ...frame } = found;
+        return frame;
+      }
+    },
     scripting: {
-      executeScript: async () => undefined
+      executeScript: async (details: Record<string, unknown>) => {
+        injectionTargets.push(details);
+        if ((details.files as string[] | undefined)?.includes('content.js')) contentListenerReady = true;
+        return undefined;
+      }
     }
   };
   const drawImageCalls: unknown[][] = [];
@@ -229,6 +293,9 @@ function loadBackgroundHarness({
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/background.js'), 'utf8'), context);
   return Object.assign((context as any).BrowserControlBackground, {
     sentMessages,
+    messageTargets,
+    injectionTargets,
+    frames: configuredFrames,
     captures,
     drawImageCalls,
     tabs,
@@ -397,8 +464,9 @@ describe('extension background origin enforcement', () => {
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      protocolVersion: 5,
+      protocolVersion: 6,
       features: expect.arrayContaining([
+        'document-targeting',
         'act-observe',
         'navigate-pending-warning',
         'snapshot-text-limit',
@@ -408,6 +476,452 @@ describe('extension background origin enforcement', () => {
         'session-tabs',
         'visible-snapshot'
       ])
+    });
+  });
+
+  it('discovers allowed same-origin and cross-origin frames and redacts blocked or unsupported rows', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-doc',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 2,
+        parentFrameId: 0,
+        documentId: 'same-doc',
+        parentDocumentId: 'top-doc',
+        url: 'https://allowed.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 3,
+        parentFrameId: 0,
+        documentId: 'cross-doc',
+        parentDocumentId: 'top-doc',
+        url: 'https://cross.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 4,
+        parentFrameId: 0,
+        documentId: 'blocked-secret-doc',
+        parentDocumentId: 'top-doc',
+        url: 'https://blocked.example/private',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 5,
+        parentFrameId: 0,
+        documentId: 'opaque-secret-doc',
+        parentDocumentId: 'top-doc',
+        url: 'about:blank',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 6,
+        parentFrameId: 0,
+        documentId: 'fenced-secret-doc',
+        parentDocumentId: 'top-doc',
+        url: 'https://allowed.example/fenced',
+        documentLifecycle: 'active',
+        frameType: 'fenced_frame'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*', 'https://cross.example/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Allowed',
+          url: 'https://allowed.example/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      frames,
+      grantedOrigins: ['https://allowed.example/*', 'https://cross.example/*']
+    });
+
+    const result = await background.handleBridgeRequest('list_frames', { tabId: 1 });
+    expect(result.slice(0, 3)).toEqual([
+      expect.objectContaining({ documentId: 'top-doc', url: 'https://allowed.example/', operable: true }),
+      expect.objectContaining({ documentId: 'same-doc', parentDocumentId: 'top-doc', operable: true }),
+      expect.objectContaining({ documentId: 'cross-doc', parentDocumentId: 'top-doc', operable: true })
+    ]);
+    for (const row of result.slice(3)) {
+      expect(row).toMatchObject({ urlRedacted: true, operable: false });
+      expect(row).not.toHaveProperty('url');
+      expect(row).not.toHaveProperty('documentId');
+      expect(row).not.toHaveProperty('parentDocumentId');
+      expect(JSON.stringify(row)).not.toContain('secret');
+    }
+    expect(result[3]).toMatchObject({ allowedByPolicy: false, hostPermissionGranted: null, reason: 'policy_denied' });
+    expect(result[4]).toMatchObject({ schemeSupported: false, allowedByPolicy: null, hostPermissionGranted: null });
+    expect(result[5]).toMatchObject({ frameTypeSupported: false, allowedByPolicy: null, hostPermissionGranted: null });
+  });
+
+  it('uses wildcard-capable host permission checks and redacts host-denied documents', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-doc',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 2,
+        parentFrameId: 0,
+        documentId: 'wildcard-doc',
+        parentDocumentId: 'top-doc',
+        url: 'https://wildcard.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 3,
+        parentFrameId: 0,
+        documentId: 'denied-secret-doc',
+        parentDocumentId: 'top-doc',
+        url: 'https://denied.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['http://*/*', 'https://*/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      frames,
+      grantedOrigins: ['https://allowed.example/*', 'https://wildcard.example/*']
+    });
+
+    const result = await background.handleBridgeRequest('list_frames', { tabId: 1 });
+    expect(result[1]).toMatchObject({ documentId: 'wildcard-doc', hostPermissionGranted: true, operable: true });
+    expect(result[2]).toMatchObject({ urlRedacted: true, allowedByPolicy: true, hostPermissionGranted: false });
+    expect(result[2]).not.toHaveProperty('url');
+    expect(result[2]).not.toHaveProperty('documentId');
+  });
+
+  it('routes every ping, injection, and message to the exact child document and strips routing params', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-doc',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 7,
+        parentFrameId: 0,
+        documentId: 'child-doc',
+        parentDocumentId: 'top-doc',
+        url: 'https://cross.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*', 'https://cross.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      frames,
+      contentReady: false,
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await expect(
+      background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'child-doc', mode: 'visible' })
+    ).resolves.toEqual(
+      expect.objectContaining({ documentId: 'child-doc', frameId: 7, isTopFrame: false, coordinateSpace: 'frameViewport' })
+    );
+    expect(background.injectionTargets).toEqual([
+      { target: { tabId: 1, documentIds: ['child-doc'] }, files: ['content-core.js'] },
+      { target: { tabId: 1, documentIds: ['child-doc'] }, files: ['content.js'] }
+    ]);
+    expect(background.messageTargets.every((target: { documentId?: string }) => target.documentId === 'child-doc')).toBe(true);
+    expect(background.sentMessages.at(-1)?.message.params).toEqual({ mode: 'visible' });
+  });
+
+  it('fails exact targets for wrong tabs, disappeared documents, replacements, and unsupported frames', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-doc',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 8,
+        parentFrameId: 0,
+        documentId: 'replacement-doc',
+        url: 'https://allowed.example/replacement',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 9,
+        parentFrameId: 0,
+        documentId: 'fenced-doc',
+        url: 'https://allowed.example/fenced',
+        documentLifecycle: 'active',
+        frameType: 'fenced_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 10,
+        parentFrameId: 0,
+        documentId: 'inactive-doc',
+        url: 'https://allowed.example/inactive',
+        documentLifecycle: 'cached',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 11,
+        parentFrameId: 0,
+        documentId: 'policy-doc',
+        url: 'https://blocked.example/private',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 12,
+        parentFrameId: 0,
+        documentId: 'host-denied-doc',
+        url: 'https://host-denied.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 2,
+        frameId: 4,
+        parentFrameId: 0,
+        documentId: 'other-tab-doc',
+        url: 'https://allowed.example/other',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*', 'https://host-denied.example/*']
+      },
+      tabs: [
+        { id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' },
+        { id: 2, active: false, url: 'https://allowed.example/other', windowId: 1, status: 'complete' }
+      ],
+      frames,
+      grantedOrigins: ['https://allowed.example/*']
+    });
+
+    for (const documentId of ['other-tab-doc', 'missing-doc', 'old-document-for-frame-8']) {
+      await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId })).rejects.toThrow('DOCUMENT_STALE:');
+    }
+    await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'fenced-doc' })).rejects.toThrow(
+      'DOCUMENT_UNSUPPORTED:'
+    );
+    await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'inactive-doc' })).rejects.toThrow(
+      'DOCUMENT_UNSUPPORTED:'
+    );
+    await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'policy-doc' })).rejects.toThrow(
+      'DOCUMENT_POLICY_DENIED:'
+    );
+    await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'host-denied-doc' })).rejects.toThrow(
+      'DOCUMENT_HOST_PERMISSION_DENIED:'
+    );
+    expect(background.sentMessages).toEqual([]);
+  });
+
+  it('disambiguates colliding refs by exact document routing and target metadata', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-doc',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 2,
+        parentFrameId: 0,
+        documentId: 'child-doc',
+        url: 'https://allowed.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      frames,
+      contentResult: (_tabId, _message, options) => ({ ref: 'h1', executionContext: options.documentId })
+    });
+
+    const top = await background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'top-doc' });
+    const child = await background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'child-doc' });
+    expect(top).toMatchObject({ ref: 'h1', executionContext: 'top-doc', documentId: 'top-doc', coordinateSpace: 'tabViewport' });
+    expect(child).toMatchObject({ ref: 'h1', executionContext: 'child-doc', documentId: 'child-doc', coordinateSpace: 'frameViewport' });
+  });
+
+  it('revalidates fixed explicit documents across batches and after observations without changing stable prefixes', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-doc',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 2,
+        parentFrameId: 0,
+        documentId: 'child-doc',
+        url: 'https://allowed.example/frame',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      }
+    ];
+    let replaceAfterAction = true;
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      frames,
+      contentResult: (_tabId, message) => {
+        if (replaceAfterAction && message.action === 'click') {
+          const child = frames.find((frame) => frame.frameId === 2);
+          if (child) child.documentId = 'replacement-doc';
+          replaceAfterAction = false;
+        }
+        return { action: message.action };
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        documentId: 'child-doc',
+        actions: [
+          { action: 'click', ref: 'h1' },
+          { action: 'scroll', deltaY: 1 }
+        ]
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      failedIndex: 1,
+      steps: [{ ok: true }, { ok: false, error: expect.stringMatching(/^DOCUMENT_STALE:/) }]
+    });
+
+    frames[1].documentId = 'child-doc';
+    replaceAfterAction = true;
+    await expect(
+      background.handleBridgeRequest('click', {
+        tabId: 1,
+        documentId: 'child-doc',
+        ref: 'h1',
+        after: { snapshot: true }
+      })
+    ).resolves.toMatchObject({
+      documentId: 'child-doc',
+      after: { ok: false, error: expect.stringMatching(/^DOCUMENT_STALE:/) }
+    });
+  });
+
+  it('follows the current top document between omitted-target batch operations', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-a',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      frames,
+      contentResult: (_tabId, message) => {
+        if (message.action === 'click') frames[0].documentId = 'top-b';
+        return { action: message.action };
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [
+          { action: 'click', ref: 'h1' },
+          { action: 'scroll', deltaY: 1 }
+        ],
+        after: { pageStatus: true }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      steps: [{ result: { documentId: 'top-a' } }, { result: { documentId: 'top-b' } }],
+      after: { pageStatus: { documentId: 'top-b' } }
     });
   });
 
@@ -530,17 +1044,17 @@ describe('extension background origin enforcement', () => {
           pageStatus: true
         }
       })
-    ).resolves.toEqual({
+    ).resolves.toEqual(withTopDocumentMetadata({
       action: 'click',
-      params: { tabId: 1, ref: 'h1' },
+      params: { ref: 'h1' },
       after: {
-        waitFor: { action: 'wait_for', params: { selector: '.ready', timeoutMs: 1000 } },
-        snapshot: { action: 'snapshot', params: { mode: 'visible', limit: 2 } },
-        pageStatus: { action: 'page_status', params: {} }
+        waitFor: withTopDocumentMetadata({ action: 'wait_for', params: { selector: '.ready', timeoutMs: 1000 } }),
+        snapshot: withTopDocumentMetadata({ action: 'snapshot', params: { mode: 'visible', limit: 2 } }),
+        pageStatus: withTopDocumentMetadata({ action: 'page_status', params: {} })
       }
-    });
+    }));
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
-      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { tabId: 1, ref: 'h1' } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'wait_for', params: { selector: '.ready', timeoutMs: 1000 } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'snapshot', params: { mode: 'visible', limit: 2 } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'page_status', params: {} } }
@@ -585,8 +1099,8 @@ describe('extension background origin enforcement', () => {
         status: 'complete',
         source: 'extension',
         after: {
-          snapshot: { action: 'snapshot', params: {} },
-          pageStatus: { action: 'page_status', params: {} }
+          snapshot: withTopDocumentMetadata({ action: 'snapshot', params: {} }),
+          pageStatus: withTopDocumentMetadata({ action: 'page_status', params: {} })
         }
       })
     );
@@ -710,14 +1224,14 @@ describe('extension background origin enforcement', () => {
 
     await expect(
       background.handleBridgeRequest('scroll', { tabId: 1, deltaY: 0, after: { snapshot: true } })
-    ).resolves.toEqual({
+    ).resolves.toEqual(withTopDocumentMetadata({
       action: 'scroll',
-      params: { tabId: 1, deltaY: 0 },
+      params: { deltaY: 0 },
       after: {
         ok: false,
         error: 'snapshot failed'
       }
-    });
+    }));
   });
 
   it('runs perform_actions sequentially and applies terminal after only on full success', async () => {
@@ -755,13 +1269,13 @@ describe('extension background origin enforcement', () => {
       ok: true,
       completedCount: 3,
       steps: [
-        { index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } },
-        { index: 1, action: 'type', ok: true, result: { action: 'type', params: { ref: 'h2', text: 'hello' } } },
-        { index: 2, action: 'scroll', ok: true, result: { action: 'scroll', params: { deltaY: 200 } } }
+        successfulTopStep(0, 'click', { ref: 'h1' }),
+        successfulTopStep(1, 'type', { ref: 'h2', text: 'hello' }),
+        successfulTopStep(2, 'scroll', { deltaY: 200 })
       ],
       after: {
-        snapshot: { action: 'snapshot', params: {} },
-        pageStatus: { action: 'page_status', params: {} }
+        snapshot: withTopDocumentMetadata({ action: 'snapshot', params: {} }),
+        pageStatus: withTopDocumentMetadata({ action: 'page_status', params: {} })
       }
     });
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
@@ -812,7 +1326,7 @@ describe('extension background origin enforcement', () => {
       completedCount: 1,
       failedIndex: 1,
       steps: [
-        { index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } },
+        successfulTopStep(0, 'click', { ref: 'h1' }),
         { index: 1, action: 'type', ok: false, error: 'type failed' }
       ]
     });
@@ -860,7 +1374,7 @@ describe('extension background origin enforcement', () => {
         {
           ...tabBase,
           status: 'loading',
-          _navigateLoadsRemaining: 2,
+          _navigateLoadsRemaining: 3,
           _navigateFinal: { title: 'Example Domain', url: 'https://example.com/', status: 'complete' }
         }
       ],
@@ -954,7 +1468,7 @@ describe('extension background origin enforcement', () => {
       completedCount: 1,
       failedIndex: 1,
       steps: [
-        { index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } },
+        successfulTopStep(0, 'click', { ref: 'h1' }),
         {
           index: 1,
           action: 'type',
@@ -1007,7 +1521,7 @@ describe('extension background origin enforcement', () => {
       ok: false,
       completedCount: 1,
       failedIndex: 1,
-      steps: [{ index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } }],
+      steps: [successfulTopStep(0, 'click', { ref: 'h1' })],
       error: 'Action batch skipped after because the request time budget is nearly exhausted (500ms remaining)'
     });
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
@@ -1053,7 +1567,7 @@ describe('extension background origin enforcement', () => {
       ok: false,
       completedCount: 1,
       failedIndex: 1,
-      steps: [{ index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } }],
+      steps: [successfulTopStep(0, 'click', { ref: 'h1' })],
       error: 'Action batch skipped after because the request time budget is nearly exhausted (3000ms remaining)'
     });
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
@@ -1098,7 +1612,7 @@ describe('extension background origin enforcement', () => {
     ).resolves.toEqual({
       ok: true,
       completedCount: 1,
-      steps: [{ index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } }],
+      steps: [successfulTopStep(0, 'click', { ref: 'h1' })],
       after: {}
     });
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
@@ -1147,7 +1661,7 @@ describe('extension background origin enforcement', () => {
       completedCount: 1,
       failedIndex: 1,
       steps: [
-        { index: 0, action: 'click', ok: true, result: { action: 'click', params: { ref: 'h1' } } },
+        successfulTopStep(0, 'click', { ref: 'h1' }),
         { index: 1, action: 'type', ok: false, error: passwordError }
       ]
     });

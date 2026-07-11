@@ -39,7 +39,10 @@ Use this file to resume work without relying on chat history.
 - Use `wait_for`, `page_status`, `console_logs`, and `collect_scroll` for bounded diagnostics and lazy feeds. Set `maxItems` when a feed can produce many unique entries. Prefer `collect_scroll` `until` / nested `scroll` over manual step loops; read `stoppedReason`.
 - Use `screenshot` with optional `ref`/`bounds` crop for visual proof; prefer DOM extraction for structured data. Canvas/chart pixels are invisible to snapshot/extract tools.
 - Use `perform_actions` for up to 10 sequential `click`/`type`/`scroll`/`keypress` steps in one broker round-trip; terminal `after` runs only on full success. Refresh snapshot refs before a batch — stale refs fail fast mid-batch. Coordinate clicks stay on `click_at`.
-- MCP registers 23 browser tools; `browser_status.adapter.registeredToolCount` should be 23 after upgrade (restart MCP host if stale).
+- MCP registers 24 browser tools; `browser_status.adapter.registeredToolCount` should be 24 after upgrade (restart MCP host if stale).
+- Use `list_frames` to discover operable active HTTP(S) frame documents. Pass its `documentId` to DOM/content tools for exact-document iframe routing; omitted `documentId` keeps current top-frame behavior. Blocked and unsupported rows redact URLs and document identity.
+- Content results include background-attested `documentId`, `frameId`, `isTopFrame`, and `coordinateSpace`. Iframe coordinates are `frameViewport`; `navigate` and `screenshot` remain tab-only, and iframe bounds are not screenshot crop coordinates.
+- Exact document targets fail with stable `DOCUMENT_STALE`, `DOCUMENT_POLICY_DENIED`, `DOCUMENT_HOST_PERMISSION_DENIED`, or `DOCUMENT_UNSUPPORTED` prefixes and never fall back to a replacement frame document.
 - Use MCP server key `chrome_browser_control` only; remove legacy `chrome_browser` host entries to avoid stale tool schemas.
 - Snapshot refs are per-document in-memory handles and are stable across DOM reorder in the same document.
 - Stale/disconnected/expired refs are pruned and should fail cleanly.
