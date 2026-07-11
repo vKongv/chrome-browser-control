@@ -47,7 +47,8 @@ function loadBackgroundHarness({
   grantedPermissions = [],
   captureError,
   frames,
-  contentReady = true
+  contentReady = true,
+  sendMessageError
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
@@ -61,6 +62,7 @@ function loadBackgroundHarness({
   captureError?: Error;
   frames?: Array<Record<string, unknown>>;
   contentReady?: boolean;
+  sendMessageError?: (message: Record<string, unknown>, options: { documentId?: string }) => Error | undefined;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
@@ -202,6 +204,8 @@ function loadBackgroundHarness({
       sendMessage: async (tabId: number, message: Record<string, unknown>, options: { documentId?: string } = {}) => {
         sentMessages.push({ tabId, message });
         messageTargets.push({ tabId, documentId: options.documentId });
+        const targetedError = sendMessageError?.(message, options);
+        if (targetedError) throw targetedError;
         if (message?.action === 'ping') {
           if (!contentListenerReady) throw new Error('Could not establish connection. Receiving end does not exist.');
           return { ok: true, result: { ready: true } };
@@ -226,10 +230,13 @@ function loadBackgroundHarness({
           .map(({ tabId: _tabId, ...frame }) => frame),
       getFrame: async ({ tabId, frameId, documentId }: { tabId: number; frameId?: number; documentId?: string }) => {
         const found = configuredFrames.find(
-          (frame) => frame.tabId === tabId && (documentId !== undefined ? frame.documentId === documentId : frame.frameId === frameId)
+          (frame) =>
+            frame.tabId === tabId &&
+            (documentId === undefined || frame.documentId === documentId) &&
+            (frameId === undefined || frame.frameId === frameId)
         );
         if (!found) return null;
-        const { tabId: _tabId, ...frame } = found;
+        const { tabId: _tabId, frameId: _frameId, ...frame } = found;
         return frame;
       }
     },
@@ -764,7 +771,7 @@ describe('extension background origin enforcement', () => {
       'DOCUMENT_UNSUPPORTED:'
     );
     await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'inactive-doc' })).rejects.toThrow(
-      'DOCUMENT_UNSUPPORTED:'
+      'DOCUMENT_STALE:'
     );
     await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'policy-doc' })).rejects.toThrow(
       'DOCUMENT_POLICY_DENIED:'
@@ -773,6 +780,83 @@ describe('extension background origin enforcement', () => {
       'DOCUMENT_HOST_PERMISSION_DENIED:'
     );
     expect(background.sentMessages).toEqual([]);
+  });
+
+  it('treats a retained old document as stale when its frame has an active replacement', async () => {
+    const frames = [
+      {
+        tabId: 1,
+        frameId: 0,
+        parentFrameId: -1,
+        documentId: 'top-doc',
+        url: 'https://allowed.example/',
+        documentLifecycle: 'active',
+        frameType: 'outermost_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 4,
+        parentFrameId: 0,
+        documentId: 'old-child-doc',
+        url: 'https://allowed.example/old',
+        documentLifecycle: 'pending_deletion',
+        frameType: 'sub_frame'
+      },
+      {
+        tabId: 1,
+        frameId: 4,
+        parentFrameId: 0,
+        documentId: 'replacement-child-doc',
+        url: 'https://allowed.example/new',
+        documentLifecycle: 'active',
+        frameType: 'sub_frame'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      frames,
+      contentResult: { ref: 'h1' }
+    });
+
+    await expect(
+      background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'old-child-doc' })
+    ).rejects.toThrow('DOCUMENT_STALE:');
+    await expect(
+      background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'replacement-child-doc' })
+    ).resolves.toMatchObject({
+      documentId: 'replacement-child-doc',
+      frameId: 4,
+      isTopFrame: false,
+      coordinateSpace: 'frameViewport'
+    });
+    expect(background.messageTargets.every((target: { documentId?: string }) => target.documentId === 'replacement-child-doc')).toBe(true);
+  });
+
+  it('reports host permission revocation during a targeted message with the stable permission prefix', async () => {
+    const grantedOrigins = ['https://allowed.example/*'];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      grantedOrigins,
+      sendMessageError: (message) => {
+        if (message.action !== 'snapshot') return undefined;
+        grantedOrigins.splice(0);
+        return new Error('Cannot access contents of the page');
+      }
+    });
+
+    await expect(background.handleBridgeRequest('snapshot', { tabId: 1 })).rejects.toThrow(
+      'DOCUMENT_HOST_PERMISSION_DENIED:'
+    );
   });
 
   it('disambiguates colliding refs by exact document routing and target metadata', async () => {

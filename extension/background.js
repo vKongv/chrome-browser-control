@@ -385,18 +385,37 @@ async function validateDocumentFrame(frame, tabId, allowedOrigins) {
 }
 
 async function resolveDocumentTarget(tabId, documentId, allowedOrigins) {
-  let frame;
+  if (!documentId) {
+    let topFrame;
+    try {
+      topFrame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    } catch (_error) {
+      throw documentError('DOCUMENT_STALE', 'the top document is no longer present in the target tab');
+    }
+    return await validateDocumentFrame(topFrame ? { ...topFrame, frameId: 0 } : null, tabId, allowedOrigins);
+  }
+
+  let candidate;
   try {
-    frame = await chrome.webNavigation.getFrame(
-      documentId ? { tabId, documentId } : { tabId, frameId: 0 }
-    );
+    const frames = (await chrome.webNavigation.getAllFrames({ tabId })) || [];
+    candidate = frames.find((frame) => frame.documentId === documentId);
   } catch (_error) {
     throw documentError('DOCUMENT_STALE', 'the selected document is no longer present in the target tab');
   }
-  if (documentId && frame?.documentId !== documentId) {
+  if (!candidate || candidate.documentLifecycle !== SUPPORTED_DOCUMENT_LIFECYCLE) {
+    throw documentError('DOCUMENT_STALE', 'the selected document is no longer the active document for its frame');
+  }
+
+  let confirmed;
+  try {
+    confirmed = await chrome.webNavigation.getFrame({ tabId, frameId: candidate.frameId, documentId });
+  } catch (_error) {
     throw documentError('DOCUMENT_STALE', 'the selected document was replaced');
   }
-  return await validateDocumentFrame(frame, tabId, allowedOrigins);
+  if (confirmed?.documentId !== documentId || confirmed.documentLifecycle !== SUPPORTED_DOCUMENT_LIFECYCLE) {
+    throw documentError('DOCUMENT_STALE', 'the selected document was replaced');
+  }
+  return await validateDocumentFrame({ ...confirmed, frameId: candidate.frameId }, tabId, allowedOrigins);
 }
 
 function documentTargetMetadata(target) {
@@ -426,23 +445,28 @@ function exactDocumentChromeError(documentId) {
   );
 }
 
-async function sendTargetedMessage(target, message, requestedDocumentId, { mapFailure = true } = {}) {
+async function rethrowTargetedChromeFailure(tabId, requestedDocumentId, allowedOrigins) {
+  await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
+  throw exactDocumentChromeError(requestedDocumentId);
+}
+
+async function sendTargetedMessage(target, message, requestedDocumentId, allowedOrigins, { mapFailure = true } = {}) {
   try {
     return await chrome.tabs.sendMessage(target.tabId, message, { documentId: target.documentId });
   } catch (error) {
     if (!mapFailure) throw error;
-    throw exactDocumentChromeError(requestedDocumentId);
+    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins);
   }
 }
 
-async function injectTargetedScript(target, file, requestedDocumentId) {
+async function injectTargetedScript(target, file, requestedDocumentId, allowedOrigins) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId: target.tabId, documentIds: [target.documentId] },
       files: [file]
     });
   } catch (_error) {
-    throw exactDocumentChromeError(requestedDocumentId);
+    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins);
   }
 }
 
@@ -453,6 +477,7 @@ async function ensureContentScripts(tabId, requestedDocumentId, allowedOrigins) 
       pingTarget,
       { target: 'cbc-content', action: 'ping', params: {} },
       requestedDocumentId,
+      allowedOrigins,
       { mapFailure: false }
     );
     if (existing?.ok) return;
@@ -461,15 +486,16 @@ async function ensureContentScripts(tabId, requestedDocumentId, allowedOrigins) 
   }
 
   const coreTarget = await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
-  await injectTargetedScript(coreTarget, 'content-core.js', requestedDocumentId);
+  await injectTargetedScript(coreTarget, 'content-core.js', requestedDocumentId, allowedOrigins);
   const listenerTarget = await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
-  await injectTargetedScript(listenerTarget, 'content.js', requestedDocumentId);
+  await injectTargetedScript(listenerTarget, 'content.js', requestedDocumentId, allowedOrigins);
 
   const finalPingTarget = await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
   const injected = await sendTargetedMessage(
     finalPingTarget,
     { target: 'cbc-content', action: 'ping', params: {} },
-    requestedDocumentId
+    requestedDocumentId,
+    allowedOrigins
   );
   if (!injected?.ok) throw new Error(injected?.error || 'Browser content script did not become ready after injection');
 }
@@ -481,7 +507,8 @@ async function sendToContent(tabId, action, params = {}, allowedOrigins = [], { 
   const response = await sendTargetedMessage(
     target,
     { target: 'cbc-content', action, params: stripRoutingParams(params) },
-    documentId
+    documentId,
+    allowedOrigins
   );
   if (!response?.ok) throw new Error(response?.error || `Content action failed: ${action}`);
   return decorateContentResult(response.result, target);
