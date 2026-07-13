@@ -1,6 +1,6 @@
 {
   "name": "chrome-browser-control",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Local MCP server and Chrome MV3 extension for controlling the current Chrome profile from any stdio MCP host.",
   "license": "MIT",
