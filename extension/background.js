@@ -438,16 +438,9 @@ function stripRoutingParams(params = {}) {
   return contentParams;
 }
 
-function exactDocumentChromeError(documentId) {
-  return documentError(
-    'DOCUMENT_STALE',
-    documentId ? 'the selected document changed during the operation' : 'the top document changed during the operation'
-  );
-}
-
-async function rethrowTargetedChromeFailure(tabId, requestedDocumentId, allowedOrigins) {
+async function rethrowTargetedChromeFailure(tabId, requestedDocumentId, allowedOrigins, chromeError) {
   await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
-  throw exactDocumentChromeError(requestedDocumentId);
+  throw chromeError;
 }
 
 async function sendTargetedMessage(target, message, requestedDocumentId, allowedOrigins, { mapFailure = true } = {}) {
@@ -455,7 +448,7 @@ async function sendTargetedMessage(target, message, requestedDocumentId, allowed
     return await chrome.tabs.sendMessage(target.tabId, message, { documentId: target.documentId });
   } catch (error) {
     if (!mapFailure) throw error;
-    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins);
+    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins, error);
   }
 }
 
@@ -465,8 +458,8 @@ async function injectTargetedScript(target, file, requestedDocumentId, allowedOr
       target: { tabId: target.tabId, documentIds: [target.documentId] },
       files: [file]
     });
-  } catch (_error) {
-    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins);
+  } catch (error) {
+    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins, error);
   }
 }
 

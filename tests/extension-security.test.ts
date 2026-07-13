@@ -48,7 +48,8 @@ function loadBackgroundHarness({
   captureError,
   frames,
   contentReady = true,
-  sendMessageError
+  sendMessageError,
+  executeScriptError
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
@@ -63,6 +64,7 @@ function loadBackgroundHarness({
   frames?: Array<Record<string, unknown>>;
   contentReady?: boolean;
   sendMessageError?: (message: Record<string, unknown>, options: { documentId?: string }) => Error | undefined;
+  executeScriptError?: (details: Record<string, unknown>) => Error | undefined;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
@@ -243,6 +245,8 @@ function loadBackgroundHarness({
     scripting: {
       executeScript: async (details: Record<string, unknown>) => {
         injectionTargets.push(details);
+        const targetedError = executeScriptError?.(details);
+        if (targetedError) throw targetedError;
         if ((details.files as string[] | undefined)?.includes('content.js')) contentListenerReady = true;
         return undefined;
       }
@@ -857,6 +861,47 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('snapshot', { tabId: 1 })).rejects.toThrow(
       'DOCUMENT_HOST_PERMISSION_DENIED:'
     );
+  });
+
+  it('preserves a Chrome message failure when the exact document remains valid', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      sendMessageError: (message) =>
+        message.action === 'snapshot' ? new Error('Transient Chrome message failure') : undefined
+    });
+
+    await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'doc-1' })).rejects.toThrow(
+      'Transient Chrome message failure'
+    );
+    expect(
+      background.sentMessages.filter(({ message }: { message: Record<string, unknown> }) => message.action === 'snapshot')
+    ).toHaveLength(1);
+    expect(background.messageTargets.at(-1)).toEqual({ tabId: 1, documentId: 'doc-1' });
+  });
+
+  it('preserves a Chrome injection failure when the exact document remains valid', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
+      contentReady: false,
+      executeScriptError: () => new Error('Transient Chrome injection failure')
+    });
+
+    await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'doc-1' })).rejects.toThrow(
+      'Transient Chrome injection failure'
+    );
+    expect(background.injectionTargets).toEqual([
+      { target: { tabId: 1, documentIds: ['doc-1'] }, files: ['content-core.js'] }
+    ]);
   });
 
   it('disambiguates colliding refs by exact document routing and target metadata', async () => {
