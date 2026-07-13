@@ -20,8 +20,9 @@ const DEFAULTS = {
 };
 
 const EXTENSION_PROTOCOL_MARKER = {
-  protocolVersion: 5,
+  protocolVersion: 6,
   features: [
+    'document-targeting',
     'act-observe-budget',
     'act-observe',
     'navigate-pending-warning',
@@ -300,7 +301,15 @@ async function resolveNavigateTabId(params = {}, url, allowedOrigins) {
 
 async function resolvePageActionTabId(params = {}, allowedOrigins) {
   if (params.sessionTabId) return await resolveSessionTabId(params.sessionTabId, allowedOrigins);
-  if (params.tabId) return await resolveExplicitTabId(params.tabId);
+  if (params.tabId) {
+    const tabId = await resolveExplicitTabId(params.tabId);
+    const tab = await chrome.tabs.get(tabId);
+    if (!isInjectableUrl(tab.url || '')) {
+      throw new Error(`Cannot inspect this Chrome internal or restricted page: ${tab.url || 'unknown URL'}`);
+    }
+    assertAllowedUrl(tab.url || '', allowedOrigins, 'Page action');
+    return tabId;
+  }
   const claimedTabId = await resolveCurrentClaimedTabId(allowedOrigins);
   if (claimedTabId) return claimedTabId;
 
@@ -321,45 +330,181 @@ async function resolvePageActionTabId(params = {}, allowedOrigins) {
   return live.id;
 }
 
-async function ensureContentScripts(tabId, allowedOrigins) {
-  const tab = await chrome.tabs.get(tabId);
-  if (!isInjectableUrl(tab.url || '')) {
-    throw new Error(`Cannot inspect this Chrome internal or restricted page: ${tab.url || 'unknown URL'}`);
-  }
-  assertAllowedUrl(tab.url || '', allowedOrigins, 'Page action');
+const SUPPORTED_DOCUMENT_LIFECYCLE = 'active';
+const SUPPORTED_FRAME_TYPES = new Set(['outermost_frame', 'sub_frame']);
 
+function documentError(prefix, detail) {
+  return new Error(`${prefix}: ${detail}`);
+}
+
+function documentOriginPattern(url) {
+  const parsed = new URL(url);
+  return `${parsed.origin}/*`;
+}
+
+async function hasDocumentHostPermission(url) {
+  if (!chrome.permissions?.contains) return true;
+  return Boolean(await chrome.permissions.contains({ origins: [documentOriginPattern(url)] }));
+}
+
+function documentSupport(frame) {
+  const lifecycleSupported = frame?.documentLifecycle === SUPPORTED_DOCUMENT_LIFECYCLE;
+  const frameTypeSupported = SUPPORTED_FRAME_TYPES.has(frame?.frameType);
+  const schemeSupported = isInjectableUrl(frame?.url || '');
+  return { lifecycleSupported, frameTypeSupported, schemeSupported };
+}
+
+async function validateDocumentFrame(frame, tabId, allowedOrigins) {
+  if (!frame || !frame.documentId) {
+    throw documentError('DOCUMENT_STALE', 'the selected document is no longer present in the target tab');
+  }
+  const support = documentSupport(frame);
+  if (!support.lifecycleSupported) {
+    throw documentError('DOCUMENT_UNSUPPORTED', 'the selected document is not active');
+  }
+  if (!support.frameTypeSupported) {
+    throw documentError('DOCUMENT_UNSUPPORTED', 'the selected frame type is not supported');
+  }
+  if (!support.schemeSupported) {
+    throw documentError('DOCUMENT_UNSUPPORTED', 'only active HTTP(S) documents are supported');
+  }
+  if (!isUrlAllowed(frame.url, allowedOrigins)) {
+    throw documentError('DOCUMENT_POLICY_DENIED', 'the selected document is outside Allowed Origins');
+  }
+  if (!(await hasDocumentHostPermission(frame.url))) {
+    throw documentError('DOCUMENT_HOST_PERMISSION_DENIED', 'Chrome host permission is not granted for the selected document');
+  }
+  return {
+    tabId,
+    frameId: frame.frameId,
+    documentId: frame.documentId,
+    url: frame.url,
+    isTopFrame: frame.frameId === 0,
+    coordinateSpace: frame.frameId === 0 ? 'tabViewport' : 'frameViewport'
+  };
+}
+
+async function resolveDocumentTarget(tabId, documentId, allowedOrigins) {
+  if (!documentId) {
+    let topFrame;
+    try {
+      topFrame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    } catch (_error) {
+      throw documentError('DOCUMENT_STALE', 'the top document is no longer present in the target tab');
+    }
+    return await validateDocumentFrame(topFrame ? { ...topFrame, frameId: 0 } : null, tabId, allowedOrigins);
+  }
+
+  let candidate;
   try {
-    const existing = await chrome.tabs.sendMessage(tabId, {
-      target: 'cbc-content',
-      action: 'ping',
-      params: {}
+    const frames = (await chrome.webNavigation.getAllFrames({ tabId })) || [];
+    candidate = frames.find((frame) => frame.documentId === documentId);
+  } catch (_error) {
+    throw documentError('DOCUMENT_STALE', 'the selected document is no longer present in the target tab');
+  }
+  if (!candidate || candidate.documentLifecycle !== SUPPORTED_DOCUMENT_LIFECYCLE) {
+    throw documentError('DOCUMENT_STALE', 'the selected document is no longer the active document for its frame');
+  }
+
+  let confirmed;
+  try {
+    confirmed = await chrome.webNavigation.getFrame({ tabId, frameId: candidate.frameId, documentId });
+  } catch (_error) {
+    throw documentError('DOCUMENT_STALE', 'the selected document was replaced');
+  }
+  if (confirmed?.documentId !== documentId || confirmed.documentLifecycle !== SUPPORTED_DOCUMENT_LIFECYCLE) {
+    throw documentError('DOCUMENT_STALE', 'the selected document was replaced');
+  }
+  return await validateDocumentFrame({ ...confirmed, frameId: candidate.frameId }, tabId, allowedOrigins);
+}
+
+function documentTargetMetadata(target) {
+  return {
+    documentId: target.documentId,
+    frameId: target.frameId,
+    isTopFrame: target.isTopFrame,
+    coordinateSpace: target.coordinateSpace
+  };
+}
+
+function decorateContentResult(result, target) {
+  const metadata = documentTargetMetadata(target);
+  if (result && typeof result === 'object' && !Array.isArray(result)) return { ...result, ...metadata };
+  return { result, ...metadata };
+}
+
+function stripRoutingParams(params = {}) {
+  const { tabId: _tabId, sessionTabId: _sessionTabId, documentId: _documentId, ...contentParams } = params;
+  return contentParams;
+}
+
+async function rethrowTargetedChromeFailure(tabId, requestedDocumentId, allowedOrigins, chromeError) {
+  await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
+  throw chromeError;
+}
+
+async function sendTargetedMessage(target, message, requestedDocumentId, allowedOrigins, { mapFailure = true } = {}) {
+  try {
+    return await chrome.tabs.sendMessage(target.tabId, message, { documentId: target.documentId });
+  } catch (error) {
+    if (!mapFailure) throw error;
+    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins, error);
+  }
+}
+
+async function injectTargetedScript(target, file, requestedDocumentId, allowedOrigins) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: target.tabId, documentIds: [target.documentId] },
+      files: [file]
     });
+  } catch (error) {
+    return await rethrowTargetedChromeFailure(target.tabId, requestedDocumentId, allowedOrigins, error);
+  }
+}
+
+async function ensureContentScripts(tabId, requestedDocumentId, allowedOrigins) {
+  const pingTarget = await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
+  try {
+    const existing = await sendTargetedMessage(
+      pingTarget,
+      { target: 'cbc-content', action: 'ping', params: {} },
+      requestedDocumentId,
+      allowedOrigins,
+      { mapFailure: false }
+    );
     if (existing?.ok) return;
   } catch (_error) {
-    // No listener yet; inject below.
+    // No listener yet; re-resolve the document before each injection below.
   }
 
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['content-core.js'] });
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+  const coreTarget = await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
+  await injectTargetedScript(coreTarget, 'content-core.js', requestedDocumentId, allowedOrigins);
+  const listenerTarget = await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
+  await injectTargetedScript(listenerTarget, 'content.js', requestedDocumentId, allowedOrigins);
 
-  const injected = await chrome.tabs.sendMessage(tabId, {
-    target: 'cbc-content',
-    action: 'ping',
-    params: {}
-  });
+  const finalPingTarget = await resolveDocumentTarget(tabId, requestedDocumentId, allowedOrigins);
+  const injected = await sendTargetedMessage(
+    finalPingTarget,
+    { target: 'cbc-content', action: 'ping', params: {} },
+    requestedDocumentId,
+    allowedOrigins
+  );
   if (!injected?.ok) throw new Error(injected?.error || 'Browser content script did not become ready after injection');
 }
 
-async function sendToContent(tabId, action, params = {}, allowedOrigins = [], { waitForLoad = true } = {}) {
+async function sendToContent(tabId, action, params = {}, allowedOrigins = [], { waitForLoad = true, documentId } = {}) {
   if (waitForLoad) await waitForTabComplete(tabId);
-  await ensureContentScripts(tabId, allowedOrigins);
-  const response = await chrome.tabs.sendMessage(tabId, {
-    target: 'cbc-content',
-    action,
-    params
-  });
+  await ensureContentScripts(tabId, documentId, allowedOrigins);
+  const target = await resolveDocumentTarget(tabId, documentId, allowedOrigins);
+  const response = await sendTargetedMessage(
+    target,
+    { target: 'cbc-content', action, params: stripRoutingParams(params) },
+    documentId,
+    allowedOrigins
+  );
   if (!response?.ok) throw new Error(response?.error || `Content action failed: ${action}`);
-  return response.result;
+  return decorateContentResult(response.result, target);
 }
 
 function splitAfterParams(params = {}) {
@@ -434,7 +579,7 @@ function budgetAfterWaitForParams(waitFor, startedAt = Date.now()) {
   return next;
 }
 
-async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { startedAt = Date.now() } = {}) {
+async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { startedAt = Date.now(), documentId } = {}) {
   const observations = {};
   await waitForTabComplete(tabId);
   if (after.waitFor !== undefined) {
@@ -443,14 +588,17 @@ async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { st
       'wait_for',
       budgetAfterWaitForParams(after.waitFor, startedAt),
       allowedOrigins,
-      { waitForLoad: false }
+      { waitForLoad: false, documentId }
     );
   }
   if (after.snapshot !== undefined) {
-    observations.snapshot = await sendToContent(tabId, 'snapshot', normalizeSnapshotAfter(after.snapshot), allowedOrigins, { waitForLoad: false });
+    observations.snapshot = await sendToContent(tabId, 'snapshot', normalizeSnapshotAfter(after.snapshot), allowedOrigins, {
+      waitForLoad: false,
+      documentId
+    });
   }
   if (after.pageStatus === true) {
-    observations.pageStatus = await sendToContent(tabId, 'page_status', {}, allowedOrigins, { waitForLoad: false });
+    observations.pageStatus = await sendToContent(tabId, 'page_status', {}, allowedOrigins, { waitForLoad: false, documentId });
   }
   return observations;
 }
@@ -477,8 +625,9 @@ async function runPageActionWithAfter(action, params, allowedOrigins) {
   const { after, baseParams } = splitAfterParams(params);
   validateAfterRequest(after);
   const tabId = await resolvePageActionTabId(baseParams, allowedOrigins);
-  const result = await sendToContent(tabId, action, baseParams, allowedOrigins);
-  return await withAfterResult(result, tabId, after, allowedOrigins, { startedAt });
+  const documentId = baseParams.documentId;
+  const result = await sendToContent(tabId, action, baseParams, allowedOrigins, { documentId });
+  return await withAfterResult(result, tabId, after, allowedOrigins, { startedAt, documentId });
 }
 
 function validatePerformActionStep(step, index) {
@@ -518,6 +667,7 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
     { tabId: baseParams.tabId, sessionTabId: baseParams.sessionTabId },
     allowedOrigins
   );
+  const documentId = baseParams.documentId;
   const steps = [];
   for (let index = 0; index < actions.length; index += 1) {
     const step = actions[index];
@@ -532,7 +682,8 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
     }
     try {
       const result = await sendToContent(tabId, stepAction, performActionStepParams(step), allowedOrigins, {
-        waitForLoad: index === 0
+        waitForLoad: index === 0,
+        documentId
       });
       steps.push({ index, action: stepAction, ok: true, result });
     } catch (error) {
@@ -559,7 +710,7 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
       };
     }
   }
-  return await withAfterResult(batchSummary, tabId, after, allowedOrigins, { startedAt });
+  return await withAfterResult(batchSummary, tabId, after, allowedOrigins, { startedAt, documentId });
 }
 
 async function hasExactHostPermission(origin) {
@@ -736,6 +887,77 @@ async function captureVisibleScreenshot(tabId, params = {}, allowedOrigins = [])
   };
 }
 
+function redactedFrameRow(frame, support, details) {
+  return {
+    frameId: frame.frameId,
+    parentFrameId: frame.parentFrameId,
+    isTopFrame: frame.frameId === 0,
+    urlRedacted: true,
+    ...support,
+    allowedByPolicy: details.allowedByPolicy ?? null,
+    hostPermissionGranted: details.hostPermissionGranted ?? null,
+    operable: false,
+    reason: details.reason
+  };
+}
+
+async function listFrames(tabId, allowedOrigins) {
+  const frames = (await chrome.webNavigation.getAllFrames({ tabId })) || [];
+  const shaped = [];
+  const disclosedDocumentIds = new Set();
+  for (const frame of frames) {
+    const support = documentSupport(frame);
+    if (!support.lifecycleSupported) {
+      shaped.push(redactedFrameRow(frame, support, { reason: 'lifecycle_unsupported' }));
+      continue;
+    }
+    if (!support.frameTypeSupported) {
+      shaped.push(redactedFrameRow(frame, support, { reason: 'frame_type_unsupported' }));
+      continue;
+    }
+    if (!support.schemeSupported) {
+      shaped.push(redactedFrameRow(frame, support, { reason: 'scheme_unsupported' }));
+      continue;
+    }
+    if (!isUrlAllowed(frame.url, allowedOrigins)) {
+      shaped.push(redactedFrameRow(frame, support, { allowedByPolicy: false, reason: 'policy_denied' }));
+      continue;
+    }
+    if (!(await hasDocumentHostPermission(frame.url))) {
+      shaped.push(
+        redactedFrameRow(frame, support, {
+          allowedByPolicy: true,
+          hostPermissionGranted: false,
+          reason: 'host_permission_denied'
+        })
+      );
+      continue;
+    }
+    if (!frame.documentId) {
+      shaped.push(redactedFrameRow(frame, support, { allowedByPolicy: true, reason: 'document_identity_unavailable' }));
+      continue;
+    }
+    disclosedDocumentIds.add(frame.documentId);
+    shaped.push({
+      frameId: frame.frameId,
+      parentFrameId: frame.parentFrameId,
+      documentId: frame.documentId,
+      ...(frame.parentDocumentId ? { parentDocumentId: frame.parentDocumentId } : {}),
+      url: frame.url,
+      isTopFrame: frame.frameId === 0,
+      ...support,
+      allowedByPolicy: true,
+      hostPermissionGranted: true,
+      operable: true
+    });
+  }
+  return shaped.map((row) => {
+    if (!row.parentDocumentId || disclosedDocumentIds.has(row.parentDocumentId)) return row;
+    const { parentDocumentId: _parentDocumentId, ...withoutBlockedParentIdentity } = row;
+    return withoutBlockedParentIdentity;
+  });
+}
+
 async function handleBridgeRequest(action, params = {}) {
   const settings = await getSettings();
   switch (action) {
@@ -779,6 +1001,10 @@ async function handleBridgeRequest(action, params = {}) {
         hiddenTabCount: allTabs.length,
         allowedOrigins: describeAllowedOrigins(settings.allowedOrigins)
       };
+    }
+    case 'list_frames': {
+      const tabId = await resolvePageActionTabId(params, settings.allowedOrigins);
+      return await listFrames(tabId, settings.allowedOrigins);
     }
     case 'claim_tab': {
       if (!params.tabId) throw new Error('claim_tab requires tabId');
@@ -907,17 +1133,21 @@ async function handleBridgeRequest(action, params = {}) {
       return await withAfterResult(result, tabId, after, settings.allowedOrigins, { startedAt });
     }
     case 'visible_snapshot': {
+      const tabId = await resolvePageActionTabId(params, settings.allowedOrigins);
       return await sendToContent(
-        await resolvePageActionTabId(params, settings.allowedOrigins),
+        tabId,
         'snapshot',
         { ...params, mode: 'visible' },
-        settings.allowedOrigins
+        settings.allowedOrigins,
+        { documentId: params.documentId }
       );
     }
     case 'screenshot':
       return await captureVisibleScreenshot(await resolvePageActionTabId(params, settings.allowedOrigins), params, settings.allowedOrigins);
     case 'snapshot':
-      return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins);
+      return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins, {
+        documentId: params.documentId
+      });
     case 'click':
     case 'type':
     case 'scroll':
@@ -925,14 +1155,18 @@ async function handleBridgeRequest(action, params = {}) {
     case 'query_elements':
     case 'extract_elements':
     case 'extract_feed_posts':
-      return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins);
+      return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins, {
+        documentId: params.documentId
+      });
     case 'keypress':
     case 'click_at':
       return await runPageActionWithAfter(action, params, settings.allowedOrigins);
     case 'wait_for':
     case 'page_status':
     case 'console_logs':
-      return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins);
+      return await sendToContent(await resolvePageActionTabId(params, settings.allowedOrigins), action, params, settings.allowedOrigins, {
+        documentId: params.documentId
+      });
     case 'collect_scroll':
       return await runPageActionWithAfter(action, params, settings.allowedOrigins);
     case 'perform_actions':

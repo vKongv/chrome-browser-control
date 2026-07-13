@@ -45,9 +45,17 @@ async function forward(bridge: BridgeLike, action: BridgeAction, params: Record<
 }
 
 const OptionalTabId = z.number().int().positive().optional();
-const OptionalTarget = {
+const OptionalTabTarget = {
   tabId: OptionalTabId.describe('Optional Chrome tab id. Defaults to the claimed session tab, then the active tab.'),
   sessionTabId: z.string().min(1).optional().describe('Optional claimed tab session id returned by claim_tab.')
+};
+const OptionalDocumentTarget = {
+  ...OptionalTabTarget,
+  documentId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Exact frame document id returned by list_frames. Omit to target the current top document.')
 };
 const SnapshotMode = z.enum(['compact', 'full', 'visible']);
 const BoundedLimit = z.number().int().positive().max(500).optional();
@@ -480,6 +488,19 @@ export function registerBrowserTools(
   );
 
   registerTool(
+    'list_frames',
+    {
+      title: 'List frame documents',
+      description:
+        'List current frame documents for an allowed target tab. Blocked or unsupported frames are redacted and cannot be targeted.',
+      inputSchema: {
+        ...OptionalTabTarget
+      }
+    },
+    async (args) => forward(bridge, 'list_frames', args)
+  );
+
+  registerTool(
     'claim_tab',
     {
       title: 'Claim Chrome tab',
@@ -553,7 +574,7 @@ export function registerBrowserTools(
     {
       title: 'Snapshot active page',
       description:
-        'Return a simplified DOM snapshot for the active tab or a target tab. Compact mode (default) returns textPreview only — not text. Full mode returns text. Compact defaults to main-landmark scope when present; pass scope: "document" for legacy full-body text. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes textLimitApplied, textTotalLength, and textBytesOmitted; a warning appears when default limits truncate body text.',
+        'Return a simplified DOM snapshot for the current top document or an exact documentId from list_frames. Compact mode (default) returns textPreview only — not text. Full mode returns text. Compact defaults to main-landmark scope when present; pass scope: "document" for legacy full-body text. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes authoritative document identity and coordinate space.',
       inputSchema: {
         mode: SnapshotMode.optional().describe(
           'Snapshot detail mode. Defaults to compact. Use full for text and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
@@ -566,7 +587,7 @@ export function registerBrowserTools(
           .optional()
           .describe('Max body text characters. Optional; defaults to 500 (compact) or 4000 (full). Not a hard cap — maximum 100000.'),
         ...SnapshotScopeOptions,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forward(bridge, 'snapshot', args)
@@ -576,10 +597,11 @@ export function registerBrowserTools(
     'visible_snapshot',
     {
       title: 'Visible page snapshot',
-      description: 'Return a viewport-aware snapshot with only visible/intersecting elements, refs, labels, roles, bounds, and scroll metadata.',
+      description:
+        'Return a viewport-aware snapshot with visible/intersecting elements, refs, labels, roles, bounds, and scroll metadata. Iframe bounds use frameViewport coordinates.',
       inputSchema: {
         limit: z.number().int().positive().max(250).optional(),
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forward(bridge, 'visible_snapshot', args)
@@ -595,7 +617,7 @@ export function registerBrowserTools(
         url: z.string().url(),
         active: z.boolean().optional().describe('Whether to activate the tab. Defaults to true for backward compatibility.'),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalTabTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'navigate', args)
@@ -605,11 +627,11 @@ export function registerBrowserTools(
     'click',
     {
       title: 'Click page element',
-      description: 'Click an element by snapshot ref in the active tab or target tab.',
+      description: 'Click an element by snapshot ref in the current top document or an exact documentId from list_frames.',
       inputSchema: {
         ref: z.string().min(1),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'click', args)
@@ -625,7 +647,7 @@ export function registerBrowserTools(
         text: z.string(),
         force: z.boolean().optional().default(false),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'type', args)
@@ -636,14 +658,14 @@ export function registerBrowserTools(
     {
       title: 'Scroll page',
       description:
-        'Scroll the active tab or target tab by pixel deltas. Does not change snapshot body text — snapshot uses the full document innerText, not the visible viewport. Use textLimit on snapshot to capture more text; scroll only helps when the page lazy-loads content.',
+        'Scroll the current top document or an exact documentId by pixel deltas. x/y are tabViewport coordinates for the top document and frameViewport coordinates for an iframe. Use textLimit on snapshot to capture more text; scroll only helps when the page lazy-loads content.',
       inputSchema: {
         deltaX: z.number().optional().default(0),
         deltaY: z.number().optional().default(600),
         x: z.number().optional().describe('Optional viewport x coordinate to scroll a nested element under this point. Defaults to window scroll.'),
         y: z.number().optional().describe('Optional viewport y coordinate to scroll a nested element under this point. Defaults to window scroll.'),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'scroll', args)
@@ -660,7 +682,7 @@ export function registerBrowserTools(
         text: z.string().min(1).max(500).optional(),
         visible: z.boolean().optional(),
         limit: BoundedLimit,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forward(bridge, 'query_elements', args)
@@ -679,7 +701,7 @@ export function registerBrowserTools(
         includeLinks: z.boolean().optional(),
         includeTimes: z.boolean().optional(),
         visible: z.boolean().optional(),
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forward(bridge, 'extract_elements', args)
@@ -694,7 +716,7 @@ export function registerBrowserTools(
       inputSchema: {
         maxPosts: z.number().int().positive().max(50).optional().describe('Maximum posts to return. Defaults to 10.'),
         ...SnapshotScopeOptions,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forward(bridge, 'extract_feed_posts', args)
@@ -705,7 +727,7 @@ export function registerBrowserTools(
     {
       title: 'Capture visible screenshot',
       description:
-        'Capture the visible viewport of an allowed tab. Optionally crop to a snapshot ref or viewport bounds (with padding). Returns a data URL and MIME type; crop metadata is included only when cropping.',
+        'Capture the visible tab viewport. This tool is tab-target only; iframe frameViewport bounds are not valid crop coordinates. Optionally crop to a top-document snapshot ref or tabViewport bounds.',
       inputSchema: {
         format: z.enum(['png', 'jpeg']).optional(),
         ref: z.string().min(1).optional().describe('Snapshot ref to crop to (mutually exclusive with bounds).'),
@@ -723,7 +745,7 @@ export function registerBrowserTools(
           .min(0)
           .optional()
           .describe('Optional non-negative CSS pixels to expand the crop rect before viewport intersection.'),
-        ...OptionalTarget
+        ...OptionalTabTarget
       }
     },
     async (args) => {
@@ -745,7 +767,7 @@ export function registerBrowserTools(
       inputSchema: {
         keys: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)]),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'keypress', args)
@@ -755,12 +777,13 @@ export function registerBrowserTools(
     'click_at',
     {
       title: 'Click viewport coordinates',
-      description: 'Click the element at viewport coordinates in an allowed target tab.',
+      description:
+        'Click at tabViewport coordinates in the top document or frameViewport coordinates in an exact iframe documentId.',
       inputSchema: {
         x: z.number(),
         y: z.number(),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'click_at', args)
@@ -789,7 +812,7 @@ export function registerBrowserTools(
           .optional()
           .describe('Wait until scoped text length is stable for this many milliseconds.'),
         timeoutMs: z.number().int().positive().max(30_000).optional(),
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => {
@@ -814,7 +837,7 @@ export function registerBrowserTools(
       title: 'Page status',
       description: 'Return lightweight page status, viewport/scroll state, and resource summary counts for an allowed target tab.',
       inputSchema: {
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forward(bridge, 'page_status', args)
@@ -828,7 +851,7 @@ export function registerBrowserTools(
       inputSchema: {
         levels: z.array(z.string().min(1).max(20)).max(10).optional(),
         limit: z.number().int().positive().max(200).optional(),
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forward(bridge, 'console_logs', args)
@@ -886,7 +909,7 @@ export function registerBrowserTools(
         }),
         dedupeBy: z.enum(['text', 'href', 'statusHref', 'none']).optional(),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'collect_scroll', args)
@@ -897,7 +920,7 @@ export function registerBrowserTools(
     {
       title: 'Perform sequential page actions',
       description:
-        'Run up to 10 sequential page actions (click, type, scroll, keypress) in one broker round-trip. Fail-fast on the first step error; terminal after observations run only when every step succeeds. Steps cannot carry after, tabId, or sessionTabId.',
+        'Run up to 10 sequential page actions in one document target. An explicit batch-level documentId is revalidated before every step and after observation; steps cannot override it. Fail-fast on the first step error.',
       inputSchema: {
         actions: z
           .array(PerformActionStep)
@@ -905,7 +928,7 @@ export function registerBrowserTools(
           .max(10)
           .describe('Ordered action steps. Each step is a flat object with action plus action-specific fields.'),
         after: AfterObservation,
-        ...OptionalTarget
+        ...OptionalDocumentTarget
       }
     },
     async (args) => forwardActThenObserve(bridge, 'perform_actions', args)

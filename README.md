@@ -150,13 +150,14 @@ If your MCP host uses a config file, keep it private and outside the repository.
 
 ## Tools
 
-- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `4` includes the `act-observe` feature.
+- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `6` includes the `document-targeting` feature marker.
 - `name_session`: sets a human-readable session name for status/debugging.
 - `list_tabs`: lists tabs whose URL origin is allowed in the extension popup. When every open tab is filtered out, returns `{ tabs: [], detail, hiddenTabCount, allowedOrigins? }` instead of a bare `[]`. Wildcard mode is labeled clearly in `allowedOrigins`.
+- `list_frames`: lists current frame documents for an allowed tab using Chrome's frame registry. Operable active HTTP(S) documents include a `documentId`; policy-blocked, host-permission-denied, unsupported, fenced, and non-active rows retain hierarchy/status only and redact URL and document identity.
 - `claim_tab`: claims an allowed tab for this browser-control session and returns a `sessionTabId`. Claims are routing state, not exclusive browser locks.
 - `release_tab`: releases a claim by `sessionTabId` or `tabId` without closing the tab.
 - `finalize_tabs`: releases claim state for the session without closing tabs. Pass `keep` entries to preserve handoff/deliverable claims.
-- `snapshot`: returns a simplified DOM snapshot for an allowed tab. By default this is a compact automation snapshot that includes concise actionable elements, a text preview (500 chars), omitted counts, and region summaries. Pass `mode: "full"` for verbose element metadata and a `text` field (4000 chars by default). Pass `mode: "visible"` for viewport/intersection-aware elements with bounds and scroll metadata. Pass `textLimit` (up to `100000`) when you need more page body text — check `textBytesOmitted` to see if content was truncated.
+- `snapshot`: returns a simplified DOM snapshot for an allowed document. By default this is a compact automation snapshot that includes concise actionable elements, a text preview (500 chars), omitted counts, and region summaries. Pass `mode: "full"` for verbose element metadata and a `text` field (4000 chars by default). Pass `mode: "visible"` for viewport/intersection-aware elements with bounds and scroll metadata. Pass `textLimit` (up to `100000`) when you need more page body text — check `textBytesOmitted` to see if content was truncated.
 - `visible_snapshot`: convenience tool for `snapshot({ mode: "visible" })`.
 - `navigate`: navigates the active tab or a specified `tabId` to an allowed URL, then waits for the tab to finish loading when possible. If loading times out, the result includes `pending: true` and a `warning`. Supports `after` observations after the load wait.
 - `click`: clicks an element by snapshot ref on an allowed tab. Supports `after` observations.
@@ -172,6 +173,14 @@ If your MCP host uses a config file, keep it private and outside the repository.
 - `console_logs`: returns bounded console logs captured after the content script was injected. It cannot see older page console history.
 - `collect_scroll`: scrolls a bounded number of steps (hard ceiling when `until` is set), extracts selected elements each step, optionally targets a nested scroll container via `scroll`, applies an aggregate item cap (`maxItems`, default 100), and optionally dedupes by text or href for lazy feeds. Optional `until.noNewItemsForSteps` / `until.stopBeforeDatetime` (ISO-8601; requires `includeTimes`) set `stoppedReason`. Results include omitted/truncated counts. Supports `after` observations.
 - `perform_actions`: runs up to 10 sequential page actions (`click`, `type`, `scroll`, `keypress`) in one broker round-trip. Fail-fast on the first step error; terminal `after` observations run only when every step succeeds. Coordinate clicks stay on single-tool `click_at`. Steps cannot carry `after`, `tabId`, or `sessionTabId`.
+
+### Frame document targeting
+
+DOM/content tools accept an optional `documentId` returned by `list_frames`. Omitting it preserves existing behavior and targets the current top document for each operation. Supplying it selects that exact document: if the iframe navigates, disappears, moves to another tab, becomes unsupported, or loses access, the operation fails instead of falling back to the top frame or a replacement using the same `frameId`.
+
+Every content result carries background-attested `documentId`, `frameId`, `isTopFrame`, and `coordinateSpace`. Top-frame coordinates use `tabViewport`; iframe `visible_snapshot` bounds, `click_at`, and coordinate scrolling use `frameViewport`. Iframe-local bounds cannot be passed to screenshot cropping because `screenshot` remains a tab-viewport-only tool. `navigate`, `screenshot`, and `list_frames` accept tab targets only; `perform_actions.documentId` applies to the whole batch and cannot be overridden by a step.
+
+Document failures preserve one of these prefixes, including inside batch step errors and `after` failures: `DOCUMENT_STALE:`, `DOCUMENT_POLICY_DENIED:`, `DOCUMENT_HOST_PERMISSION_DENIED:`, or `DOCUMENT_UNSUPPORTED:`. V1 supports only active HTTP(S) outermost/subframe documents. It intentionally excludes `about:blank`, `about:srcdoc`, `blob:`, `data:`, origin-fallback frames, iframe navigation, and iframe-to-tab screenshot coordinate translation.
 
 ## Act Then Observe
 
@@ -231,7 +240,7 @@ To read long page content (for example API docs), raise `textLimit` instead of u
 
 Compact mode honors `textLimit` too; body text is returned in `textPreview` (there is no `text` field in compact mode). When `textBytesOmitted` is greater than zero, increase `textLimit` or scroll the page and snapshot again only if content is lazy-loaded below the fold.
 
-Refs are per-document in-memory IDs (`h...`) assigned from element identity, not output order. They remain stable across DOM insertion/reorder in the same document, and `click` / `type` resolve through the content script's ref store. Navigating to a different page loads a new document, so old refs are expected to fail cleanly; take a fresh snapshot after navigation or major page changes. The ref store prunes disconnected, expired, and over-cap entries, and removes stale `data-cbc-ref` attributes so pruned refs cannot be reused accidentally.
+Refs are per-document in-memory IDs (`h...`) assigned from element identity, not output order. They remain stable across DOM insertion/reorder in the same document, and `click` / `type` resolve through the content script's ref store. Refs can collide between frame documents, so retain the result's `documentId` and pass it with later iframe actions. Navigating to a different page loads a new document, so old refs are expected to fail cleanly; take a fresh snapshot after navigation or major page changes. The ref store prunes disconnected, expired, and over-cap entries, and removes stale `data-cbc-ref` attributes so pruned refs cannot be reused accidentally.
 
 ## Tab Sessions
 
@@ -258,7 +267,7 @@ npm audit
 
 `npm run benchmark:snapshots` is an alias for the same compact-vs-full benchmark. The benchmark prints compact bytes, full bytes, and reduction percentage; compact mode should stay at least 50% smaller on the dense fixture.
 
-After editing files under `extension/`, reload the unpacked extension on `chrome://extensions` before running browser e2e checks. A stale loaded background service worker can keep serving older behavior; `browser_status` should show the current `protocolVersion` and `features` marker when Chrome has loaded the latest extension code.
+After editing files under `extension/`, reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 24`, extension protocol version `6`, and the `document-targeting` feature marker when both sides are current.
 
 ## Limitations
 
