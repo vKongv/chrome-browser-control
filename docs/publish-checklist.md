@@ -2,7 +2,18 @@
 
 Manual-first release path for the public npm package. **Do not** publish from GitHub Actions on push or from pull-request workflows. Prefer interactive `npm login` / 2FA on a maintainer machine. Later automation (if ever approved) must use Trusted Publishing / OIDC, not a long-lived classic `NPM_TOKEN` as the primary path.
 
-Current release target: **`0.3.0`** (keep `package.json`, `package-lock.json`, and `extension/manifest.json` aligned).
+Current release target: **`0.3.1`** (keep `package.json`, `package-lock.json`, and `extension/manifest.json` aligned).
+
+## Choosing the bump
+
+Use a **minor release** for small changes; use a **major release** for large ones.
+
+| Maintainer label | Typical scope | Semver on `0.x` | Example |
+| --- | --- | --- | --- |
+| **Minor release** | Default tweaks, skill/docs, small fixes, narrow behavior polish | Bump **patch** (`Z` in `0.Y.Z`) | `0.3.0` → `0.3.1` |
+| **Major release** | New tool surfaces, architecture shifts, broad breaking defaults | Bump **minor** (`Y` in `0.Y.Z`) | `0.3.x` → `0.4.0` |
+
+Reserve a true semver **major** (`1.0.0`) for a stability / public API contract milestone. When unsure, prefer a minor (patch) release.
 
 ## Security contract (do not violate)
 
@@ -78,7 +89,7 @@ npx -y chrome-browser-control --help
 
 ## Optional GitHub Release (after npm succeeds)
 
-1. Create annotated tag for the published version (for this release, `v0.3.0`) on the same commit that was published.
+1. Create annotated tag for the published version (for this release, `v0.3.1`) on the same commit that was published.
 2. Open a GitHub Release for that tag with install commands (`npm install -g chrome-browser-control`, `npx -y chrome-browser-control setup`) and a short note that publish is manual / no CI publish credentials.
 3. Skip tagging/releasing if npm publish has not succeeded.
 

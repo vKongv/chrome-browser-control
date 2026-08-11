@@ -11,6 +11,18 @@ Use this skill as the operating playbook for the `chrome_browser_control` MCP se
 
 The browser is the user's live Chrome profile. Treat it as stateful, private, and user-owned.
 
+## When Not To Use The Browser
+
+Do not open or drive Chrome for work a plain HTTP fetch can finish. Prefer `curl`, the host fetch tool, or reading local/docs sources when the target is a public page, API, or static document with no login or interaction.
+
+Use `chrome_browser_control` when the task needs at least one of:
+- the user's logged-in session or profile cookies already in Chrome
+- clicks, typing, scrolling, or other UI interaction
+- JS-rendered or virtualized content a fetch cannot see
+- screenshots or on-page verification after an action
+
+If a direct fetch fails or returns an empty shell page, escalate to the browser. Stop and ask the user on login walls, MFA, consent screens, password entry, or ambiguous account choice (SSO already signed into Chrome may continue without asking).
+
 ## Standard Workflow
 
 1. Call `browser_status`.
@@ -22,12 +34,12 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
 
 2. Pick a tab deliberately.
    - Use `list_tabs` for existing pages.
-   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate.
+   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. Navigation stays in the background by default; pass `active: true` only when the user should see that tab.
    - After `navigate`, verify the landing entity with `requestedUrl`, `finalUrl`, and `redirected` (`url` aliases `finalUrl`) — especially after vanity URLs or redirects.
-   - For batch audits, prefer `navigate({ active: false })` to avoid stealing the user's focused tab.
    - For multi-step work, call `claim_tab` (advisory by default) and keep the returned `sessionTabId`.
-   - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases.
+   - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases. Exclusive leases are tab-level only — they do not isolate whole browsers like separate remote sessions.
    - Do not rely on active-tab fallback for a task with more than one action.
+   - Prefer DOM tools over `screenshot` when the user is browsing; screenshots may activate the target tab.
 
 3. Collect the cheapest state that answers the next question.
    - Use `query_elements` when selector, role, text, or visibility filters are enough.
@@ -41,7 +53,7 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
    - Click/type using refs from a recent snapshot or query result.
    - Use `perform_actions` when you already know a short ordered sequence (up to 10 steps) of `click`, `type`, `scroll`, or `keypress` actions on the same tab; one terminal `after` applies to the whole batch on full success. Snapshot refs can go stale mid-batch — refresh before batching when the page may change between steps.
    - Use single act tools when steps are uncertain, you need per-action `after`, or the flow includes `click_at`.
-   - Use `click_at` only when viewport coordinates are the clearest target.
+   - When refs miss or the control is canvas/custom-drawn, use `visible_snapshot` (or viewport bounds from `query_elements`) then `click_at` — not a screenshot-first hunt.
    - Use `keypress` for page-level keyboard events, not privileged browser shortcuts.
    - When the next verification is predictable, pass `after` on `navigate`, `click`, `type`, `scroll`, `keypress`, `click_at`, `collect_scroll`, or `perform_actions` to run post-action observations in the same tool call.
    - After navigation, reload, major DOM changes, or stale-ref errors, collect fresh state.
@@ -57,6 +69,28 @@ The browser is the user's live Chrome profile. Treat it as stateful, private, an
    - Call `release_tab` when a claimed tab is no longer needed.
    - Call `finalize_tabs` at the end of larger browser sessions.
    - Claims are routing state only; releasing/finalizing does not close user tabs.
+
+## Stuck Mechanics
+
+When the happy path fails, try these bounded recoveries before declaring the page unusable:
+
+- **Stale or missing refs:** refresh with `query_elements` or `visible_snapshot`, then retry. Do not reuse refs across navigations or major DOM changes.
+- **Virtualized / lazy lists:** use `visible_snapshot`, then `scroll` or `collect_scroll`; raise `textLimit` only when body text is required — scrolling does not stitch snapshot text.
+- **Dialogs / overlays:** compact/main snapshots ignore `dialog` by default. Pass `ignoreRoles: []` or `scope: "document"`, or target the dialog with `query_elements` / `list_frames` when the control lives in an iframe.
+- **Iframes:** call `list_frames`, then pass the operable `documentId` to DOM tools. Exact document targets fail with `DOCUMENT_*` errors and never fall back — pick a fresh id if stale.
+- **Coordinate clicks:** from `visible_snapshot` or `query_elements` bounds, click the center with `click_at`, then verify with a targeted `wait_for` / small snapshot. Prefer this over screenshots for interaction.
+- **Focus without hijacking the user:** keep `navigate` at default background; use `active: true` only when visibility is required. Avoid `screenshot` while the user is browsing the same window.
+
+Honest capability limits (do not invent workarounds):
+- No raw CDP, no arbitrary page `eval` / injected scripts beyond the shipped tools.
+- No cookie, localStorage, sessionStorage, history, bookmark, download, request-header, or response-body tools.
+- No file upload / `setFileInputFiles` helper.
+- No shadow-DOM piercing beyond what the accessibility/DOM snapshot already exposes.
+- No cloud or remote browser sessions — this controls the local Chrome profile only.
+- `screenshot` may activate the target tab (Chrome visible-tab capture). Prefer DOM tools when focus must stay with the user.
+- Password-like fields stay blocked unless the user authorized `force=true` for that action.
+
+If a needed capability is in the limits list, stop and tell the user what is missing rather than pretending a skill trick can replace it.
 
 ## Tool Selection
 

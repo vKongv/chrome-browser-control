@@ -1924,7 +1924,7 @@ describe('extension background origin enforcement', () => {
     );
     expect(tabs).toHaveLength(2);
     expect(tabs[0]).toMatchObject({ id: 2, url: 'https://allowed.example/docs' });
-    expect(tabs[1]).toMatchObject({ id: 3, url: 'https://allowed.example/next' });
+    expect(tabs[1]).toMatchObject({ id: 3, url: 'https://allowed.example/next', active: false });
   });
 
   it('reuses the active tab for navigate without tabId when the active tab is operable', async () => {
@@ -2037,10 +2037,38 @@ describe('extension background origin enforcement', () => {
       })
     );
     expect(tabs).toHaveLength(2);
-    expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start' });
+    expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start', active: false });
   });
 
-  it('creates a background tab when navigate has no target and active is false', async () => {
+  it('creates a background tab by default when navigate has no target', async () => {
+    const tabs: Array<Record<string, unknown>> = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Extensions',
+        url: 'chrome://extensions',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs
+    });
+
+    await expect(background.handleBridgeRequest('navigate', { url: 'https://example.com/start' })).resolves.toMatchObject({
+      id: 2,
+      finalUrl: 'https://example.com/start'
+    });
+    expect(tabs[0]).toMatchObject({ id: 1, active: true });
+    expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start', active: false });
+  });
+
+  it('creates a foreground tab when navigate has no target and active is true', async () => {
     const tabs: Array<Record<string, unknown>> = [
       {
         id: 1,
@@ -2061,13 +2089,12 @@ describe('extension background origin enforcement', () => {
     });
 
     await expect(
-      background.handleBridgeRequest('navigate', { url: 'https://example.com/start', active: false })
+      background.handleBridgeRequest('navigate', { url: 'https://example.com/start', active: true })
     ).resolves.toMatchObject({
       id: 2,
       finalUrl: 'https://example.com/start'
     });
-    expect(tabs[0]).toMatchObject({ id: 1, active: true });
-    expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start', active: false });
+    expect(tabs[1]).toMatchObject({ id: 2, url: 'https://example.com/start', active: true });
   });
 
   it('returns a clear error when an explicit navigate tabId is missing', async () => {
@@ -3268,7 +3295,7 @@ describe('extension background origin enforcement', () => {
     ).resolves.toMatchObject({ released: true, tabId: 2 });
   });
 
-  it('navigates with active:false without activating the tab', async () => {
+  it('navigates without activating the tab by default', async () => {
     const tabs = [
       {
         id: 1,
@@ -3292,12 +3319,43 @@ describe('extension background origin enforcement', () => {
     });
 
     await expect(
-      background.handleBridgeRequest('navigate', { tabId: 1, url: 'https://allowed.example/next', active: false })
+      background.handleBridgeRequest('navigate', { tabId: 1, url: 'https://allowed.example/next' })
     ).resolves.toMatchObject({
       finalUrl: 'https://allowed.example/next',
       redirected: false
     });
     expect(tabs[0].active).toBe(false);
+  });
+
+  it('activates the tab when navigate sets active:true', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: false,
+        highlighted: false,
+        title: 'Background',
+        url: 'https://allowed.example/docs',
+        windowId: 1,
+        status: 'complete',
+        _navigateFinal: { title: 'Next', url: 'https://allowed.example/next' }
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await expect(
+      background.handleBridgeRequest('navigate', { tabId: 1, url: 'https://allowed.example/next', active: true })
+    ).resolves.toMatchObject({
+      finalUrl: 'https://allowed.example/next',
+      redirected: false
+    });
+    expect(tabs[0].active).toBe(true);
   });
 
   it('reports redirected=true when final URL differs from requested URL', async () => {

@@ -34,6 +34,19 @@ Bump **both** files to the same semver before opening a release prep PR:
 | `package.json` | `"version"` |
 | `extension/manifest.json` | `"version"` |
 
+Also keep `package-lock.json` and `docs/publish-checklist.md` “Current release target” aligned.
+
+### Choosing the bump
+
+Use a **minor release** for small changes; use a **major release** for large ones.
+
+| Maintainer label | Typical scope | Semver on `0.x` | Example |
+|---|---|---|---|
+| **Minor release** | Default tweaks, skill/docs, small fixes, narrow behavior polish | Bump **patch** (`0.Y.Z` → `0.Y.Z+1`) | `0.3.0` → `0.3.1` |
+| **Major release** | New tool surfaces, architecture shifts, broad breaking defaults | Bump **minor** (`0.Y.Z` → `0.Y+1.0`) | `0.3.x` → `0.4.0` |
+
+Reserve semver **major** (`1.0.0`) for a stability / public API contract milestone. When unsure, prefer a minor (patch) release.
+
 Confirm `package.json` `"files"` still excludes `skills/` (only `dist`, `extension`, `package.json`, `README.md`). The agent skill under `skills/chrome-browser-control/` is **not** in the npm tarball — install from git or skills.sh separately.
 
 **Agent may:** edit version fields, run tests/build/pack checks, open or update a prep PR, draft release notes.

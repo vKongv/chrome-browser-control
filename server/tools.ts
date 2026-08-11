@@ -612,10 +612,10 @@ export function registerBrowserTools(
     {
       title: 'Navigate Chrome tab',
       description:
-        'Navigate the active tab or target tab to a URL. Default activates the tab; pass active: false for background audits without focus stealing.',
+        'Navigate the active tab or target tab to a URL. Default keeps the tab in the background (active: false); pass active: true only when focus/visibility is required.',
       inputSchema: {
         url: z.string().url(),
-        active: z.boolean().optional().describe('Whether to activate the tab. Defaults to true for backward compatibility.'),
+        active: z.boolean().optional().describe('Whether to activate the tab. Defaults to false so navigation does not steal focus.'),
         after: AfterObservation,
         ...OptionalTabTarget
       }
