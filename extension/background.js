@@ -293,7 +293,7 @@ async function resolveNavigateTabId(params = {}, url, allowedOrigins) {
     if (live && isOperableTab(live, allowedOrigins)) return live.id;
   }
 
-  const shouldActivate = params.active !== false;
+  const shouldActivate = params.active === true;
   const created = await chrome.tabs.create({ url, active: shouldActivate });
   if (!created?.id) throw new Error('Failed to create a tab for navigation');
   return created.id;
@@ -1112,8 +1112,11 @@ async function handleBridgeRequest(action, params = {}) {
       assertAllowedUrl(baseParams.url, settings.allowedOrigins, 'navigate');
       const tabId = await resolveNavigateTabId(baseParams, baseParams.url, settings.allowedOrigins);
       const requestedUrl = baseParams.url;
-      const shouldActivate = baseParams.active !== false;
-      await chrome.tabs.update(tabId, { url: requestedUrl, active: shouldActivate });
+      // Default: change URL only. Never force active:false — that can deactivate the
+      // tab the user is already viewing when navigate reuses the focused tab.
+      const update = { url: requestedUrl };
+      if (baseParams.active === true) update.active = true;
+      await chrome.tabs.update(tabId, update);
       const tab = await waitForTabComplete(tabId);
       const finalUrl = tab.url || requestedUrl;
       const result = {
