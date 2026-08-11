@@ -34,7 +34,7 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
 
 2. Pick a tab deliberately.
    - Use `list_tabs` for existing pages.
-   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. Navigation stays in the background by default; pass `active: true` only when the user should see that tab.
+   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. By default focus is unchanged; pass `active: true` only when the user should see that tab. New tabs without a target stay in the background unless `active: true`.
    - After `navigate`, verify the landing entity with `requestedUrl`, `finalUrl`, and `redirected` (`url` aliases `finalUrl`) — especially after vanity URLs or redirects.
    - For multi-step work, call `claim_tab` (advisory by default) and keep the returned `sessionTabId`.
    - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases. Exclusive leases are tab-level only — they do not isolate whole browsers like separate remote sessions.
@@ -79,7 +79,7 @@ When the happy path fails, try these bounded recoveries before declaring the pag
 - **Dialogs / overlays:** compact/main snapshots ignore `dialog` by default. Pass `ignoreRoles: []` or `scope: "document"`, or target the dialog with `query_elements` / `list_frames` when the control lives in an iframe.
 - **Iframes:** call `list_frames`, then pass the operable `documentId` to DOM tools. Exact document targets fail with `DOCUMENT_*` errors and never fall back — pick a fresh id if stale.
 - **Coordinate clicks:** from `visible_snapshot` or `query_elements` bounds, click the center with `click_at`, then verify with a targeted `wait_for` / small snapshot. Prefer this over screenshots for interaction.
-- **Focus without hijacking the user:** keep `navigate` at default background; use `active: true` only when visibility is required. Avoid `screenshot` while the user is browsing the same window.
+- **Focus without hijacking the user:** leave `navigate` at default (focus unchanged). Pass `active: true` only when visibility is required. New untargeted tabs stay in the background unless activated. Avoid `screenshot` while the user is browsing the same window.
 
 Honest capability limits (do not invent workarounds):
 - No raw CDP, no arbitrary page `eval` / injected scripts beyond the shipped tools.

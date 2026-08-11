@@ -3327,6 +3327,36 @@ describe('extension background origin enforcement', () => {
     expect(tabs[0].active).toBe(false);
   });
 
+  it('preserves focus when navigate reuses the already-active tab', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Focused',
+        url: 'https://allowed.example/docs',
+        windowId: 1,
+        status: 'complete',
+        _navigateFinal: { title: 'Next', url: 'https://allowed.example/next' }
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await expect(
+      background.handleBridgeRequest('navigate', { url: 'https://allowed.example/next' })
+    ).resolves.toMatchObject({
+      finalUrl: 'https://allowed.example/next'
+    });
+    expect(tabs[0].active).toBe(true);
+  });
+
   it('activates the tab when navigate sets active:true', async () => {
     const tabs = [
       {
