@@ -1,6 +1,7 @@
 export function isPasswordLike(element: any): boolean;
 export type SnapshotMode = 'compact' | 'full' | 'visible';
 export type SnapshotScope = 'document' | 'main' | 'article' | 'feed';
+export type AppliedSnapshotScope = SnapshotScope | 'dialog';
 export interface SnapshotScopeOptions {
   scope?: SnapshotScope;
   excludeSelectors?: string[];
@@ -50,7 +51,7 @@ export function scopedBodyText(
 ): {
   text: string;
   scopeRoot: Element;
-  scopeApplied: SnapshotScope;
+  scopeApplied: AppliedSnapshotScope;
   excludeSelectors: string[];
   ignoreRoles: string[];
 };
@@ -70,7 +71,7 @@ export function buildSnapshotFromDocument(documentRef?: Document, options?: Snap
   textBytesOmitted?: number;
   warning?: string;
   regions?: Array<Record<string, unknown>>;
-  scopeApplied?: SnapshotScope;
+  scopeApplied?: AppliedSnapshotScope;
   scopeRoot?: ScopeRootHint;
   excludedCount?: number;
 };
@@ -134,7 +135,7 @@ export function extractFeedPosts(
   posts: FeedPost[];
   count: number;
   omitted?: number;
-  scopeApplied: SnapshotScope;
+  scopeApplied: AppliedSnapshotScope;
 };
 export function performClickAt(
   params: { x: number; y: number; allowHidden?: boolean },

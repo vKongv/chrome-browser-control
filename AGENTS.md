@@ -24,8 +24,8 @@ Use this file to resume work without relying on chat history.
 - Project/package name: `chrome-browser-control`.
 - GitHub repo: `vkongv/chrome-browser-control`.
 - Default snapshot mode is compact (500-char `textPreview`).
-- Compact snapshots default to `scope: "main"` when a main landmark exists; pass `scope: "document"` for legacy full-body text.
-- Snapshot scope options: `scope`, `excludeSelectors`, `ignoreRoles` (compact/main defaults ignore `dialog` role).
+- Compact snapshots default to `scope: "main"` when a main landmark exists; a visible genuinely-modal dialog (`aria-modal="true"` or `<dialog>` opened with `showModal()`) takes snapshot scope instead. Pass `scope: "document"` for legacy full-body text, including the page behind a modal.
+- Snapshot scope options: `scope`, `excludeSelectors`, `ignoreRoles`. Compact/main still default to ignoring `dialog` when no visible dialog is open. A visible non-modal `role="dialog"` is included but does not take scope. Escape hatches: `ignoreRoles: ["dialog"]` or `["alertdialog"]` hides both `dialog` and `alertdialog`, `ignoreRoles: []` includes them in the current scope, `scope: "document"` sees the full body, `mode: "full"` is the unscoped legacy snapshot.
 - Full legacy snapshot mode remains available with `snapshot({ mode: "full" })` (4000-char `text` by default).
 - Visible viewport mode is available through `snapshot({ mode: "visible" })` and `visible_snapshot`; use it for virtualized pages, viewport-bound UI, and coordinate planning.
 - Use `extract_feed_posts` for structured feed/post records (author, text, times, live flags) on feed-like pages.
@@ -98,7 +98,7 @@ cbctl doctor
 npm run benchmark:compact-snapshots
 ```
 
-Expected benchmark target: compact snapshots should remain at least 50% smaller than full snapshots on the dense fixture. Last verified reduction was 82.74%.
+Expected benchmark target: compact snapshots should remain at least 50% smaller than full snapshots on the dense fixture. Last verified reduction was 82.45%.
 
 ## MCP config generation
 

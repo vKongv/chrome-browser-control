@@ -192,6 +192,109 @@ function isInsideExcludedSubtree(element, excludeSelectors, documentRef) {
   return false;
 }
 
+function isDialogFamilyRole(role) {
+  const normalized = String(role || '').toLowerCase();
+  return normalized === 'dialog' || normalized === 'alertdialog';
+}
+
+function expandExplicitDialogIgnoreRoles(ignoreRoles) {
+  if (!ignoreRoles.some((role) => isDialogFamilyRole(role))) return ignoreRoles;
+  const expanded = [...ignoreRoles];
+  if (!expanded.some((role) => role.toLowerCase() === 'dialog')) expanded.push('dialog');
+  if (!expanded.some((role) => role.toLowerCase() === 'alertdialog')) expanded.push('alertdialog');
+  return expanded;
+}
+
+function isDialogLike(element) {
+  const role = String(element?.getAttribute?.('role') || '').toLowerCase();
+  if (isDialogFamilyRole(role)) return true;
+  return String(element?.tagName || '').toLowerCase() === 'dialog';
+}
+
+function isNativeModalDialog(element) {
+  if (String(element.tagName || '').toLowerCase() !== 'dialog' || element.open !== true) return false;
+  try {
+    // :modal is the only reliable showModal() vs show() signal. [open] is shared by both.
+    return element.matches(':modal');
+  } catch {
+    return false;
+  }
+}
+
+function hasAncestorOpacityZero(element) {
+  const windowRef = element.ownerDocument?.defaultView || window;
+  let current = element.parentElement;
+  while (current) {
+    const style = windowRef.getComputedStyle?.(current);
+    if (style && style.opacity === '0') return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function isDialogSubtreeVisible(element) {
+  if (!element || element.hidden === true) return false;
+  if (String(element.tagName || '').toLowerCase() === 'dialog' && element.open !== true) return false;
+  if (!isVisibleElement(element)) return false;
+  // Top-layer :modal dialogs paint as a root sibling; ancestor opacity cannot hide them.
+  if (isNativeModalDialog(element)) return true;
+  return !hasAncestorOpacityZero(element);
+}
+
+function isGenuinelyModalDialog(element) {
+  if (!isDialogLike(element) || !isDialogSubtreeVisible(element)) return false;
+  if (isNativeModalDialog(element)) return true;
+  return String(element.getAttribute('aria-modal') || '').toLowerCase() === 'true';
+}
+
+function findVisibleModalDialog(documentRef) {
+  const modals = [...documentRef.querySelectorAll('dialog, [role="dialog"], [role="alertdialog"]')].filter(
+    isGenuinelyModalDialog
+  );
+  if (!modals.length) return null;
+  // No public API exposes top-layer stack order, and implicit showModal() inertness
+  // is not reflected in element.inert. Prefer the modal that contains focus
+  // (where showModal() moved it). Otherwise last in tree order among non-inert
+  // candidates: innermost nested, or the later sibling.
+  const focus = documentRef.activeElement;
+  if (focus) {
+    for (let i = modals.length - 1; i >= 0; i -= 1) {
+      if (modals[i] === focus || modals[i].contains(focus)) return modals[i];
+    }
+  }
+  const live = modals.filter((element) => element.inert !== true);
+  const pool = live.length ? live : modals;
+  return pool[pool.length - 1];
+}
+
+function hasVisibleDialogRole(documentRef) {
+  for (const element of documentRef.querySelectorAll('dialog, [role="dialog"]')) {
+    if (isDialogSubtreeVisible(element) && roleFor(element).toLowerCase() === 'dialog') return true;
+  }
+  return false;
+}
+
+function isInsideHiddenDialogSubtree(element, scopeRoot) {
+  let current = element;
+  while (current && current !== scopeRoot) {
+    if (isDialogLike(current) && !isDialogSubtreeVisible(current)) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function pruneHiddenDialogSubtrees(originalRoot, cloneRoot) {
+  if (!originalRoot || !cloneRoot) return;
+  const originals = [originalRoot, ...originalRoot.querySelectorAll('*')];
+  const clones = [cloneRoot, ...cloneRoot.querySelectorAll('*')];
+  if (originals.length !== clones.length) return;
+  for (let i = clones.length - 1; i >= 1; i -= 1) {
+    if (roleFor(originals[i]).toLowerCase() !== 'dialog') continue;
+    if (isDialogSubtreeVisible(originals[i])) continue;
+    clones[i].remove();
+  }
+}
+
 function resolveScopeRoot(documentRef = document, scope = 'document') {
   const body = documentRef.body || documentRef.documentElement;
   if (!body) return body;
@@ -232,14 +335,45 @@ function resolveSnapshotScopeOptions(documentRef, options = {}, mode = 'compact'
   } else if (mode !== 'full' && hasMainLandmark(documentRef)) {
     scopeApplied = 'main';
   }
-  const ignoreRoles =
+  let ignoreRoles =
     options.ignoreRoles !== undefined
       ? normalizeStringArray(options.ignoreRoles, MAX_IGNORE_ROLES, 80)
       : scopeApplied === 'document'
         ? []
         : [...DEFAULT_IGNORE_ROLES];
+  if (options.ignoreRoles !== undefined) ignoreRoles = expandExplicitDialogIgnoreRoles(ignoreRoles);
   const excludeSelectors = normalizeStringArray(options.excludeSelectors, MAX_EXCLUDE_SELECTORS, MAX_EXCLUDE_SELECTOR_LENGTH);
-  return { scopeApplied, excludeSelectors, ignoreRoles };
+  let scopeRoot = resolveScopeRoot(documentRef, scopeApplied);
+  const userIgnoresDialog = options.ignoreRoles !== undefined && ignoreRoles.some((role) => isDialogFamilyRole(role));
+  const modalRoot = findVisibleModalDialog(documentRef);
+  const allowAutoModalScope = mode !== 'full' && !explicitScope && !userIgnoresDialog && modalRoot;
+  let pruneHiddenDialogs = false;
+
+  if (allowAutoModalScope) {
+    scopeApplied = 'dialog';
+    scopeRoot = modalRoot;
+    pruneHiddenDialogs = true;
+    return {
+      scopeApplied,
+      excludeSelectors,
+      ignoreRoles: ignoreRoles.filter((role) => !isDialogFamilyRole(role)),
+      scopeRoot,
+      pruneHiddenDialogs
+    };
+  }
+
+  if (options.ignoreRoles === undefined && scopeApplied !== 'document' && hasVisibleDialogRole(documentRef)) {
+    pruneHiddenDialogs = true;
+    return {
+      scopeApplied,
+      excludeSelectors,
+      ignoreRoles: ignoreRoles.filter((role) => !isDialogFamilyRole(role)),
+      scopeRoot,
+      pruneHiddenDialogs
+    };
+  }
+
+  return { scopeApplied, excludeSelectors, ignoreRoles, scopeRoot, pruneHiddenDialogs };
 }
 
 function scopeHintFor(root) {
@@ -250,7 +384,8 @@ function scopeHintFor(root) {
   return { tag, role, selectorHint };
 }
 
-function pruneScopedClone(clone, excludeSelectors, ignoreRoles) {
+function pruneScopedClone(clone, excludeSelectors, ignoreRoles, originalRoot, pruneHiddenDialogs = false) {
+  if (pruneHiddenDialogs) pruneHiddenDialogSubtrees(originalRoot, clone);
   for (const selector of excludeSelectors) {
     try {
       for (const element of [...clone.querySelectorAll(selector)]) {
@@ -269,20 +404,33 @@ function pruneScopedClone(clone, excludeSelectors, ignoreRoles) {
 function scopedBodyText(documentRef = document, options = {}) {
   const mode = options?.mode === 'full' ? 'full' : 'compact';
   const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, mode);
-  const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+  const scopeRoot = scopeOptions.scopeRoot;
   const clone = scopeRoot.cloneNode(true);
-  const text = pruneScopedClone(clone, scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
-  return { text, scopeRoot, ...scopeOptions };
+  const text = pruneScopedClone(
+    clone,
+    scopeOptions.excludeSelectors,
+    scopeOptions.ignoreRoles,
+    scopeRoot,
+    scopeOptions.pruneHiddenDialogs
+  );
+  return {
+    text,
+    scopeRoot,
+    scopeApplied: scopeOptions.scopeApplied,
+    excludeSelectors: scopeOptions.excludeSelectors,
+    ignoreRoles: scopeOptions.ignoreRoles
+  };
 }
 
 function interestingElementsInScope(documentRef, scopeRoot, scopeOptions) {
-  const { excludeSelectors, ignoreRoles } = scopeOptions;
+  const { excludeSelectors, ignoreRoles, pruneHiddenDialogs } = scopeOptions;
   const allInScope = [...scopeRoot.querySelectorAll(INTERESTING_SELECTOR)].filter(isInteresting);
   const filtered = allInScope.filter(
     (element) =>
       scopeRoot.contains(element) &&
       !isInsideExcludedSubtree(element, excludeSelectors, documentRef) &&
-      !isInsideIgnoredRoleSubtree(element, ignoreRoles)
+      !isInsideIgnoredRoleSubtree(element, ignoreRoles) &&
+      (!pruneHiddenDialogs || !isInsideHiddenDialogSubtree(element, scopeRoot))
   );
   return {
     elements: filtered,
@@ -483,7 +631,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
   cleanupRefStore(documentRef, now);
 
   const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, mode);
-  const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+  const scopeRoot = scopeOptions.scopeRoot;
   const scoped = interestingElementsInScope(documentRef, scopeRoot, scopeOptions);
   const elements = scoped.elements;
   const limit = mode === 'full' ? FULL_ELEMENT_LIMIT : COMPACT_ELEMENT_LIMIT;
@@ -494,7 +642,13 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
   });
   cleanupRefStore(documentRef, now);
 
-  const bodyText = pruneScopedClone(scopeRoot.cloneNode(true), scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
+  const bodyText = pruneScopedClone(
+    scopeRoot.cloneNode(true),
+    scopeOptions.excludeSelectors,
+    scopeOptions.ignoreRoles,
+    scopeRoot,
+    scopeOptions.pruneHiddenDialogs
+  );
   const textMeta = textSnapshotMeta(bodyText, textLimit, options);
   const scopeMeta = {
     scopeApplied: scopeOptions.scopeApplied,
@@ -841,8 +995,14 @@ function waitForCondition(options = {}, documentRef = document) {
         condition = 'selector';
       } else if (options.textInScope) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
-        const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
-        const scopedText = pruneScopedClone(scopeRoot.cloneNode(true), scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
+        const scopeRoot = scopeOptions.scopeRoot;
+        const scopedText = pruneScopedClone(
+          scopeRoot.cloneNode(true),
+          scopeOptions.excludeSelectors,
+          scopeOptions.ignoreRoles,
+          scopeRoot,
+          scopeOptions.pruneHiddenDialogs
+        );
         if (scopedText.includes(String(options.textInScope))) {
           matched = true;
           reason = 'textInScope';
@@ -854,8 +1014,14 @@ function waitForCondition(options = {}, documentRef = document) {
         condition = 'text';
       } else if (contentStableMs) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
-        const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
-        const scopedText = pruneScopedClone(scopeRoot.cloneNode(true), scopeOptions.excludeSelectors, scopeOptions.ignoreRoles);
+        const scopeRoot = scopeOptions.scopeRoot;
+        const scopedText = pruneScopedClone(
+          scopeRoot.cloneNode(true),
+          scopeOptions.excludeSelectors,
+          scopeOptions.ignoreRoles,
+          scopeRoot,
+          scopeOptions.pruneHiddenDialogs
+        );
         const length = scopedText.length;
         if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
           if (length === contentStableLastLength) {
@@ -998,7 +1164,7 @@ function postCandidatesInScope(documentRef, scopeRoot) {
 function extractFeedPosts(options = {}, documentRef = document) {
   const maxPosts = boundedLimit(options.maxPosts, 10, 50);
   const scopeOptions = resolveSnapshotScopeOptions(documentRef, { ...options, scope: options.scope || 'feed' }, 'compact');
-  const scopeRoot = resolveScopeRoot(documentRef, scopeOptions.scopeApplied);
+  const scopeRoot = scopeOptions.scopeRoot;
   const candidates = postCandidatesInScope(documentRef, scopeRoot);
   const posts = [];
   for (const candidate of candidates) {
