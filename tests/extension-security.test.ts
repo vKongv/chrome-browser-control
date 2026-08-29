@@ -80,6 +80,7 @@ function loadBackgroundHarness({
   const injectionTargets: Array<Record<string, unknown>> = [];
   let contentListenerReady = contentReady;
   const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
+  const windowUpdates: Array<{ windowId: number; update: Record<string, unknown> }> = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
   const runtimeMessageListeners: Array<
     (message: Record<string, unknown>, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void
@@ -259,6 +260,12 @@ function loadBackgroundHarness({
         return `data:image/${options.format};base64,ZmFrZQ==`;
       }
     },
+    windows: {
+      update: async (windowId: number, update: Record<string, unknown>) => {
+        windowUpdates.push({ windowId, update });
+        return { id: windowId, focused: update.focused === true };
+      }
+    },
     webNavigation: {
       getAllFrames: async ({ tabId }: { tabId: number }) =>
         configuredFrames
@@ -342,6 +349,7 @@ function loadBackgroundHarness({
     injectionTargets,
     frames: configuredFrames,
     captures,
+    windowUpdates,
     drawImageCalls,
     tabs,
     tabGetCount: () => tabGetCount,
@@ -572,7 +580,8 @@ describe('extension background origin enforcement', () => {
         'exclusive-claims',
         'extract-feed-posts',
         'session-tabs',
-        'visible-snapshot'
+        'visible-snapshot',
+        'activate-tab'
       ])
     });
   });
@@ -1892,6 +1901,75 @@ describe('extension background origin enforcement', () => {
       completedCount: 1,
       steps: [{ index: 0, action: 'type', ok: true, result: { action: 'type', params: { ref: 'pwd', text: 'secret', force: true } } }]
     });
+  });
+
+  it('fail-fast perform_actions on hidden click/type steps unless that step sets allowHidden', async () => {
+    const hiddenError =
+      'DOCUMENT_HIDDEN: document.visibilityState is hidden. Call activate_tab to focus the tab and its window, or pass allowHidden=true to keep working in the background.';
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://example.com/*']
+      },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
+          status: 'complete'
+        }
+      ],
+      contentResult: (_tabId, message) => {
+        if (
+          (message.action === 'click' || message.action === 'type') &&
+          message.params?.allowHidden !== true
+        ) {
+          throw new Error(hiddenError);
+        }
+        return { action: message.action, params: message.params };
+      }
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [
+          { action: 'click', ref: 'h1' },
+          { action: 'type', ref: 'h2', text: 'hello' }
+        ]
+      })
+    ).resolves.toEqual({
+      ok: false,
+      completedCount: 0,
+      failedIndex: 0,
+      steps: [{ index: 0, action: 'click', ok: false, error: hiddenError }]
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
+        actions: [
+          { action: 'click', ref: 'h1', allowHidden: true },
+          { action: 'type', ref: 'h2', text: 'hello', allowHidden: true }
+        ]
+      })
+    ).resolves.toEqual({
+      ok: true,
+      completedCount: 2,
+      steps: [
+        successfulTopStep(0, 'click', { ref: 'h1', allowHidden: true }),
+        successfulTopStep(1, 'type', { ref: 'h2', text: 'hello', allowHidden: true })
+      ]
+    });
+    expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1', allowHidden: true } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'type', params: { ref: 'h2', text: 'hello', allowHidden: true } } }
+    ]);
   });
 
   it('lists all http/https tabs when wildcard origins are configured', async () => {
@@ -3869,6 +3947,73 @@ describe('extension background origin enforcement', () => {
       redirected: false
     });
     expect(tabs[0].active).toBe(true);
+  });
+
+  it('activate_tab focuses the tab and its window without navigating', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: false,
+        highlighted: false,
+        title: 'Background',
+        url: 'https://allowed.example/docs',
+        windowId: 7,
+        status: 'complete'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 7,
+      active: true,
+      focused: true
+    });
+    expect(tabs[0]).toMatchObject({
+      id: 1,
+      url: 'https://allowed.example/docs',
+      active: true
+    });
+    expect(background.windowUpdates).toEqual([{ windowId: 7, update: { focused: true } }]);
+    expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([]);
+  });
+
+  it('activate_tab focuses an already-active tab window without treating it as a no-op', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Active',
+        url: 'https://allowed.example/docs',
+        windowId: 3,
+        status: 'complete'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 3,
+      active: true,
+      focused: true
+    });
+    expect(tabs[0].url).toBe('https://allowed.example/docs');
+    expect(background.windowUpdates).toEqual([{ windowId: 3, update: { focused: true } }]);
   });
 
   it('reports redirected=true when final URL differs from requested URL', async () => {

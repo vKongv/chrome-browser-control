@@ -547,7 +547,17 @@ export function findByRef(ref, documentRef = document) {
   return null;
 }
 
-export function performClick({ ref }, documentRef = document) {
+function assertDocumentVisible(documentRef, allowHidden) {
+  if (allowHidden === true) return;
+  if (documentRef?.visibilityState === 'hidden') {
+    throw new Error(
+      'DOCUMENT_HIDDEN: document.visibilityState is hidden. Call activate_tab to focus the tab and its window, or pass allowHidden=true to keep working in the background.'
+    );
+  }
+}
+
+export function performClick({ ref, allowHidden = false }, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   const element = findByRef(ref, documentRef);
   if (!element) throw new Error(`No element found for ref ${ref}. Refresh snapshot and try again.`);
   element.scrollIntoView?.({ block: 'center', inline: 'center' });
@@ -555,7 +565,8 @@ export function performClick({ ref }, documentRef = document) {
   return { clicked: ref };
 }
 
-export function performType({ ref, text, force = false }, documentRef = document) {
+export function performType({ ref, text, force = false, allowHidden = false }, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   const element = findByRef(ref, documentRef);
   if (!element) throw new Error(`No element found for ref ${ref}. Refresh snapshot and try again.`);
   if (isPasswordLike(element) && !force) {
@@ -731,7 +742,8 @@ export function extractElements(options = {}, documentRef = document) {
   };
 }
 
-export function performClickAt({ x, y } = {}, documentRef = document) {
+export function performClickAt({ x, y, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   if (typeof x !== 'number' || typeof y !== 'number') throw new Error('click_at requires numeric x and y');
   const element = documentRef.elementFromPoint?.(x, y);
   if (!element) throw new Error(`No element found at viewport coordinates ${x},${y}`);

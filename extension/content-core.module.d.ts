@@ -91,9 +91,9 @@ export function boundsForRef(
   bounds: { x: number; y: number; width: number; height: number };
   viewport: { width: number; height: number; deviceScaleFactor: number };
 };
-export function performClick(params: { ref: string }, documentRef?: Document): { clicked: string };
+export function performClick(params: { ref: string; allowHidden?: boolean }, documentRef?: Document): { clicked: string };
 export function performType(
-  params: { ref: string; text: string; force?: boolean },
+  params: { ref: string; text: string; force?: boolean; allowHidden?: boolean },
   documentRef?: Document
 ): { typed: number; ref: string };
 export function performScroll(
@@ -136,7 +136,10 @@ export function extractFeedPosts(
   omitted?: number;
   scopeApplied: SnapshotScope;
 };
-export function performClickAt(params: { x: number; y: number }, documentRef?: Document): { clicked: boolean; x: number; y: number; ref: string };
+export function performClickAt(
+  params: { x: number; y: number; allowHidden?: boolean },
+  documentRef?: Document
+): { clicked: boolean; x: number; y: number; ref: string };
 export function performKeypress(params: { keys: string | string[] }, documentRef?: Document): { pressed: string[] };
 export function waitForCondition(
   params?: SnapshotScopeOptions & {

@@ -40,8 +40,9 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     const count = registerBrowserTools(server, bridge);
 
-    expect(count).toBe(24);
+    expect(count).toBe(25);
     expect([...server.tools.keys()].sort()).toEqual([
+      'activate_tab',
       'browser_status',
       'claim_tab',
       'click',
@@ -133,7 +134,7 @@ describe('registerBrowserTools', () => {
       const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
       expect(inputSchema.after).toBeTruthy();
     }
-    for (const tool of ['snapshot', 'query_elements', 'extract_elements', 'wait_for', 'page_status']) {
+    for (const tool of ['snapshot', 'query_elements', 'extract_elements', 'wait_for', 'page_status', 'activate_tab']) {
       const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
       expect(inputSchema.after).toBeUndefined();
     }
@@ -164,7 +165,7 @@ describe('registerBrowserTools', () => {
       const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
       expect(inputSchema.documentId, tool).toBeTruthy();
     }
-    for (const tool of ['navigate', 'screenshot', 'list_frames']) {
+    for (const tool of ['navigate', 'screenshot', 'list_frames', 'activate_tab']) {
       const inputSchema = server.configs.get(tool)?.inputSchema as Record<string, unknown>;
       expect(inputSchema.documentId, tool).toBeUndefined();
     }
@@ -394,6 +395,7 @@ describe('registerBrowserTools', () => {
 
     await server.tools.get('name_session')?.({ name: 'docs task' });
     await server.tools.get('claim_tab')?.({ tabId: 3 });
+    await server.tools.get('activate_tab')?.({ tabId: 3 });
     await server.tools.get('click_at')?.({ x: 10, y: 20, sessionTabId: 'tab-1' });
     await server.tools.get('keypress')?.({ keys: ['Tab', 'Enter'] });
     await server.tools.get('screenshot')?.({ format: 'jpeg' });
@@ -403,11 +405,43 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls.map((call) => call.action)).toEqual([
       'name_session',
       'claim_tab',
+      'activate_tab',
       'click_at',
       'keypress',
       'screenshot',
       'release_tab',
       'finalize_tabs'
+    ]);
+  });
+
+  it('forwards allowHidden on click, type, click_at, and perform_actions steps', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('click')?.({ ref: 'h1', allowHidden: true });
+    await server.tools.get('type')?.({ ref: 'h2', text: 'hello', allowHidden: true });
+    await server.tools.get('click_at')?.({ x: 10, y: 20, allowHidden: true });
+    await server.tools.get('perform_actions')?.({
+      actions: [
+        { action: 'click', ref: 'h1', allowHidden: true },
+        { action: 'type', ref: 'h2', text: 'hello', allowHidden: true }
+      ]
+    });
+
+    expect(bridge.calls).toEqual([
+      { action: 'click', params: { ref: 'h1', allowHidden: true } },
+      { action: 'type', params: { ref: 'h2', text: 'hello', allowHidden: true } },
+      { action: 'click_at', params: { x: 10, y: 20, allowHidden: true } },
+      {
+        action: 'perform_actions',
+        params: {
+          actions: [
+            { action: 'click', ref: 'h1', allowHidden: true },
+            { action: 'type', ref: 'h2', text: 'hello', allowHidden: true }
+          ]
+        }
+      }
     ]);
   });
 
@@ -436,7 +470,7 @@ describe('registerBrowserTools', () => {
     registerBrowserTools(server, bridge, {
       getStatusContext: () => ({
         adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
-        registeredToolCount: 24,
+        registeredToolCount: 25,
         brokerOwnership: 'adopted'
       })
     });
@@ -447,7 +481,7 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([{ action: 'ping', params: {} }]);
     expect(status).toMatchObject({
       ready: true,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 24 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 25 },
       broker: { reachable: true, ownership: 'adopted' },
       extension: {
         connected: true,
@@ -488,7 +522,7 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     bridge.error = new Error('No Chrome extension connected to broker');
     registerBrowserTools(server, bridge, {
-      getStatusContext: () => ({ registeredToolCount: 24, brokerPort: 8765 })
+      getStatusContext: () => ({ registeredToolCount: 25, brokerPort: 8765 })
     });
 
     const result = await server.tools.get('browser_status')?.({});
@@ -496,7 +530,7 @@ describe('registerBrowserTools', () => {
 
     expect(status).toMatchObject({
       ready: false,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 24 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 25 },
       broker: { reachable: true },
       extension: { connected: false },
       error: 'No Chrome extension connected to broker'

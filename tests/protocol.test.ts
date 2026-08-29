@@ -72,6 +72,7 @@ describe('protocol validation', () => {
       'snapshot',
       'visible_snapshot',
       'navigate',
+      'activate_tab',
       'click',
       'type',
       'scroll',

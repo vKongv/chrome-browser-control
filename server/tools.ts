@@ -122,10 +122,17 @@ const AfterObservation = z
   .optional()
   .describe('Optional act-then-observe requests, run after the page action in waitFor, snapshot, pageStatus order.');
 
+const AllowHidden = z
+  .boolean()
+  .optional()
+  .describe(
+    'When true, click/type on a hidden document. Default fails with DOCUMENT_HIDDEN and names activate_tab as the remedy.'
+  );
 const PerformActionClickStep = z
   .object({
     action: z.literal('click'),
-    ref: z.string().min(1)
+    ref: z.string().min(1),
+    allowHidden: AllowHidden
   })
   .strict();
 const PerformActionTypeStep = z
@@ -133,7 +140,8 @@ const PerformActionTypeStep = z
     action: z.literal('type'),
     ref: z.string().min(1),
     text: z.string(),
-    force: z.boolean().optional().default(false)
+    force: z.boolean().optional().default(false),
+    allowHidden: AllowHidden
   })
   .strict();
 const PerformActionScrollStep = z
@@ -627,12 +635,27 @@ export function registerBrowserTools(
   );
 
   registerTool(
+    'activate_tab',
+    {
+      title: 'Activate Chrome tab',
+      description:
+        'Focus an allowed tab and its window without navigating. Use this when click/type fail with DOCUMENT_HIDDEN, or when the tab is active in an unfocused window. Does not change the page URL.',
+      inputSchema: {
+        ...OptionalTabTarget
+      }
+    },
+    async (args) => forward(bridge, 'activate_tab', args)
+  );
+
+  registerTool(
     'click',
     {
       title: 'Click page element',
-      description: 'Click an element by snapshot ref in the current top document or an exact documentId from list_frames.',
+      description:
+        'Click an element by snapshot ref in the current top document or an exact documentId from list_frames. Fails with DOCUMENT_HIDDEN when the document is hidden unless allowHidden=true.',
       inputSchema: {
         ref: z.string().min(1),
+        allowHidden: AllowHidden,
         after: AfterObservation,
         ...OptionalDocumentTarget
       }
@@ -644,11 +667,13 @@ export function registerBrowserTools(
     'type',
     {
       title: 'Type into page element',
-      description: 'Type text into an element by snapshot ref. Password-like fields are blocked unless force=true.',
+      description:
+        'Type text into an element by snapshot ref. Password-like fields are blocked unless force=true. Fails with DOCUMENT_HIDDEN when the document is hidden unless allowHidden=true.',
       inputSchema: {
         ref: z.string().min(1),
         text: z.string(),
         force: z.boolean().optional().default(false),
+        allowHidden: AllowHidden,
         after: AfterObservation,
         ...OptionalDocumentTarget
       }
@@ -781,10 +806,11 @@ export function registerBrowserTools(
     {
       title: 'Click viewport coordinates',
       description:
-        'Click at tabViewport coordinates in the top document or frameViewport coordinates in an exact iframe documentId.',
+        'Click at tabViewport coordinates in the top document or frameViewport coordinates in an exact iframe documentId. Fails with DOCUMENT_HIDDEN when the document is hidden unless allowHidden=true.',
       inputSchema: {
         x: z.number(),
         y: z.number(),
+        allowHidden: AllowHidden,
         after: AfterObservation,
         ...OptionalDocumentTarget
       }
@@ -923,7 +949,7 @@ export function registerBrowserTools(
     {
       title: 'Perform sequential page actions',
       description:
-        'Run up to 10 sequential page actions in one document target. An explicit batch-level documentId is revalidated before every step and after observation; steps cannot override it. Fail-fast on the first step error.',
+        'Run up to 10 sequential page actions in one document target. An explicit batch-level documentId is revalidated before every step and after observation; steps cannot override it. Fail-fast on the first step error. Click and type steps fail with DOCUMENT_HIDDEN on hidden documents unless that step sets allowHidden=true.',
       inputSchema: {
         actions: z
           .array(PerformActionStep)

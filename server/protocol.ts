@@ -11,6 +11,7 @@ export const BridgeActionSchema = z.enum([
   'snapshot',
   'visible_snapshot',
   'navigate',
+  'activate_tab',
   'click',
   'type',
   'scroll',
