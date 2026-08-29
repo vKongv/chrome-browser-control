@@ -370,6 +370,61 @@ describe('extension content core', () => {
     expect(keys).toEqual(['Tab', 'Enter']);
   });
 
+  it('fails click, type, click_at, and keypress on hidden documents unless allowHidden is true', () => {
+    const document = makeDocument('<button id="save">Save</button><input id="name" />');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+    const buttonRef = snapshot.elements[0].ref;
+    const inputRef = snapshot.elements[1].ref;
+    const button = document.querySelector('#save') as unknown as HTMLElement;
+    const input = document.querySelector('#name') as unknown as HTMLElement;
+    (document as any).elementFromPoint = () => button;
+    let clicks = 0;
+    const keys: string[] = [];
+    button.addEventListener('click', () => clicks++);
+    input.addEventListener('keydown', (event) => keys.push((event as KeyboardEvent).key));
+    input.focus();
+
+    const hiddenError = /DOCUMENT_HIDDEN:[\s\S]*activate_tab/;
+    expect(() => performClick({ ref: buttonRef }, document as unknown as Document)).toThrow(hiddenError);
+    expect(() => performType({ ref: inputRef, text: 'Ada' }, document as unknown as Document)).toThrow(hiddenError);
+    expect(() => performClickAt({ x: 12, y: 18 }, document as unknown as Document)).toThrow(hiddenError);
+    expect(() => performKeypress({ keys: 'Enter' }, document as unknown as Document)).toThrow(hiddenError);
+    expect(clicks).toBe(0);
+    expect(keys).toEqual([]);
+    expect((document.querySelector('#name') as unknown as HTMLInputElement).value).toBe('');
+
+    expect(performClick({ ref: buttonRef, allowHidden: true }, document as unknown as Document)).toEqual({
+      clicked: buttonRef
+    });
+    expect(performType({ ref: inputRef, text: 'Ada', allowHidden: true }, document as unknown as Document)).toEqual({
+      typed: 3,
+      ref: inputRef
+    });
+    expect(performClickAt({ x: 12, y: 18, allowHidden: true }, document as unknown as Document)).toMatchObject({
+      clicked: true,
+      x: 12,
+      y: 18
+    });
+    expect(performKeypress({ keys: 'Enter', allowHidden: true }, document as unknown as Document)).toEqual({
+      pressed: ['Enter']
+    });
+    expect(clicks).toBe(2);
+    expect(keys).toEqual(['Enter']);
+    expect((document.querySelector('#name') as unknown as HTMLInputElement).value).toBe('Ada');
+  });
+
+  it('keeps read-shaped tools available on hidden documents', () => {
+    const document = makeDocument('<main><button id="save">Save</button><article>Post</article></main>');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+    expect(snapshot.elements[0]).toMatchObject({ role: 'button', label: 'Save' });
+    expect(queryElements({ selector: 'button' }, document as unknown as Document).count).toBe(1);
+    expect(extractElements({ selector: 'article' }, document as unknown as Document).items[0].text).toBe('Post');
+    expect(pageStatus(document as unknown as Document)).toMatchObject({ visibilityState: 'hidden' });
+  });
+
   it('waits for immediate matches and timeout evidence', async () => {
     const document = makeDocument('<main><p>Ready now</p></main>');
 

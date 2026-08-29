@@ -547,7 +547,17 @@ function findByRef(ref, documentRef = document) {
   return null;
 }
 
-function performClick({ ref }, documentRef = document) {
+function assertDocumentVisible(documentRef, allowHidden) {
+  if (allowHidden === true) return;
+  if (documentRef.visibilityState === 'hidden') {
+    throw new Error(
+      'DOCUMENT_HIDDEN: document.visibilityState is hidden. Call activate_tab to focus the tab and its window, or pass allowHidden=true to keep working in the background.'
+    );
+  }
+}
+
+function performClick({ ref, allowHidden = false }, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   const element = findByRef(ref, documentRef);
   if (!element) throw new Error(`No element found for ref ${ref}. Refresh snapshot and try again.`);
   element.scrollIntoView?.({ block: 'center', inline: 'center' });
@@ -555,7 +565,8 @@ function performClick({ ref }, documentRef = document) {
   return { clicked: ref };
 }
 
-function performType({ ref, text, force = false }, documentRef = document) {
+function performType({ ref, text, force = false, allowHidden = false }, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   const element = findByRef(ref, documentRef);
   if (!element) throw new Error(`No element found for ref ${ref}. Refresh snapshot and try again.`);
   if (isPasswordLike(element) && !force) {
@@ -731,7 +742,8 @@ function extractElements(options = {}, documentRef = document) {
   };
 }
 
-function performClickAt({ x, y } = {}, documentRef = document) {
+function performClickAt({ x, y, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   if (typeof x !== 'number' || typeof y !== 'number') throw new Error('click_at requires numeric x and y');
   const element = documentRef.elementFromPoint?.(x, y);
   if (!element) throw new Error(`No element found at viewport coordinates ${x},${y}`);
@@ -757,7 +769,8 @@ function parseKeySpec(spec) {
   };
 }
 
-function performKeypress({ keys } = {}, documentRef = document) {
+function performKeypress({ keys, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   const keyList = Array.isArray(keys) ? keys : [keys];
   if (!keyList.length || keyList.some((key) => !key)) throw new Error('keypress requires keys');
   const view = documentRef.defaultView || window;

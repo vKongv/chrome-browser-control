@@ -32,6 +32,7 @@ const EXTENSION_PROTOCOL_MARKER = {
     'exclusive-claims',
     'extract-feed-posts',
     'navigate-active',
+    'activate-tab',
     'navigate-redirect-metadata',
     'wait-for-extended',
     'visible-snapshot',
@@ -812,7 +813,19 @@ async function waitForTabActive(tabId, timeoutMs = 1500) {
     if (tab.active) return tab;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error('Timed out waiting for Chrome tab activation before screenshot capture');
+  throw new Error('Timed out waiting for Chrome tab activation');
+}
+
+async function activateTab(tabId) {
+  await chrome.tabs.update(tabId, { active: true });
+  const tab = await waitForTabActive(tabId);
+  const focusedWindow = await chrome.windows.update(tab.windowId, { focused: true });
+  return {
+    tabId: tab.id,
+    windowId: tab.windowId,
+    active: tab.active,
+    focused: focusedWindow.focused
+  };
 }
 
 function intersectCropBounds(bounds, viewport, padding = 0) {
@@ -1211,6 +1224,10 @@ async function handleBridgeRequest(action, params = {}) {
         result.pending = true;
       }
       return await withAfterResult(result, tabId, after, settings.allowedOrigins, { startedAt });
+    }
+    case 'activate_tab': {
+      const tabId = await resolvePageActionTabId(params, settings.allowedOrigins);
+      return await activateTab(tabId);
     }
     case 'visible_snapshot': {
       const tabId = await resolvePageActionTabId(params, settings.allowedOrigins);

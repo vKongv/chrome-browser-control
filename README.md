@@ -160,25 +160,26 @@ If your MCP host uses a config file, keep it private and outside the repository.
 - `snapshot`: returns a simplified DOM snapshot for an allowed document. By default this is a compact automation snapshot that includes concise actionable elements, a text preview (500 chars), omitted counts, and region summaries. Pass `mode: "full"` for verbose element metadata and a `text` field (4000 chars by default). Pass `mode: "visible"` for viewport/intersection-aware elements with bounds and scroll metadata. Pass `textLimit` (up to `100000`) when you need more page body text — check `textBytesOmitted` to see if content was truncated.
 - `visible_snapshot`: convenience tool for `snapshot({ mode: "visible" })`.
 - `navigate`: navigates the active tab or a specified `tabId` to an allowed URL, then waits for the tab to finish loading when possible. By default focus is unchanged (background tabs stay in the background; the focused tab is not deactivated). Pass `active: true` only when the tab must become visible. If loading times out, the result includes `pending: true` and a `warning`. Supports `after` observations after the load wait.
-- `click`: clicks an element by snapshot ref on an allowed tab. Supports `after` observations.
-- `type`: types into an element by snapshot ref on an allowed tab. Password-like fields are blocked unless `force=true`. Supports `after` observations.
+- `activate_tab`: focuses an allowed tab and its Chrome window without changing the URL. Use this when click/type/keypress fail with `DOCUMENT_HIDDEN`, or when the tab is already active in an unfocused window. `screenshot.activated` only reports whether the tab was made active in its window — not whether the window was focused.
+- `click`: clicks an element by snapshot ref on an allowed tab. Fails with `DOCUMENT_HIDDEN` when the document is hidden unless `allowHidden: true`. Supports `after` observations.
+- `type`: types into an element by snapshot ref on an allowed tab. Password-like fields are blocked unless `force=true`. Fails with `DOCUMENT_HIDDEN` when the document is hidden unless `allowHidden: true`. Supports `after` observations.
 - `scroll`: scrolls an allowed tab by `deltaX` and `deltaY`. Optional `x`/`y` viewport coordinates scroll a scrollable element under that point when one is found. Scrolling does not paginate snapshot text — snapshots use full `document.body` innerText. Raise `textLimit` on `snapshot` instead of scroll-stitching unless the page lazy-loads content. Supports `after` observations.
 - `query_elements`: returns bounded refs/roles/labels/bounds for elements filtered by CSS selector, role, text, and visibility.
 - `extract_elements`: extracts bounded text/html/links/time data from a CSS selector. HTML extraction redacts password/OTP/hidden-token attribute values and marks sensitive items instead of leaking secret values. This is the supported alternative to raw JavaScript evaluation.
 - `screenshot`: captures the visible viewport of an allowed tab as a data URL. Optional `ref` or `bounds` (+ `padding`) crop after capture; empty crops fail before `captureVisibleTab`. Uncropped responses omit crop fields. MV3 capture is viewport-only; inactive target tabs may be activated before capture. Chrome requires `<all_urls>` or `activeTab` for `captureVisibleTab`; this extension requests optional `<all_urls>` only in wildcard (`*`) mode, so wildcard screenshots need that popup grant.
-- `keypress`: dispatches common DOM keyboard events to the page. Browser/OS-level shortcuts are not guaranteed under MV3. Supports `after` observations.
-- `click_at`: dispatches mouse events at viewport coordinates. Supports `after` observations.
+- `keypress`: dispatches common DOM keyboard events to the page. Browser/OS-level shortcuts are not guaranteed under MV3. Fails with `DOCUMENT_HIDDEN` when the document is hidden unless `allowHidden: true`. Supports `after` observations.
+- `click_at`: dispatches mouse events at viewport coordinates. Fails with `DOCUMENT_HIDDEN` when the document is hidden unless `allowHidden: true`. Supports `after` observations.
 - `wait_for`: waits for bounded selector/text/URL-substring conditions and returns match/timeout evidence.
 - `page_status`: returns title, URL, ready/visibility state, viewport/scroll state, and resource counts by initiator type. It does not expose request headers or response bodies.
 - `console_logs`: returns bounded console logs captured after the content script was injected. It cannot see older page console history.
 - `collect_scroll`: scrolls a bounded number of steps (hard ceiling when `until` is set), extracts selected elements each step, optionally targets a nested scroll container via `scroll`, applies an aggregate item cap (`maxItems`, default 100), and optionally dedupes by text or href for lazy feeds. Optional `until.noNewItemsForSteps` / `until.stopBeforeDatetime` (ISO-8601; requires `includeTimes`) set `stoppedReason`. Results include omitted/truncated counts. Supports `after` observations.
-- `perform_actions`: runs up to 10 sequential page actions (`click`, `type`, `scroll`, `keypress`) in one broker round-trip. Fail-fast on the first step error; terminal `after` observations run only when every step succeeds. Coordinate clicks stay on single-tool `click_at`. Steps cannot carry `after`, `tabId`, or `sessionTabId`.
+- `perform_actions`: runs up to 10 sequential page actions (`click`, `type`, `scroll`, `keypress`) in one broker round-trip. Fail-fast on the first step error; terminal `after` observations run only when every step succeeds. Click, type, and keypress steps fail with `DOCUMENT_HIDDEN` on hidden documents unless that step sets `allowHidden: true`. Scroll steps stay unguarded. Coordinate clicks stay on single-tool `click_at`. Steps cannot carry `after`, `tabId`, or `sessionTabId`.
 
 ### Frame document targeting
 
 DOM/content tools accept an optional `documentId` returned by `list_frames`. Omitting it preserves existing behavior and targets the current top document for each operation. Supplying it selects that exact document: if the iframe navigates, disappears, moves to another tab, becomes unsupported, or loses access, the operation fails instead of falling back to the top frame or a replacement using the same `frameId`.
 
-Every content result carries background-attested `documentId`, `frameId`, `isTopFrame`, and `coordinateSpace`. Top-frame coordinates use `tabViewport`; iframe `visible_snapshot` bounds, `click_at`, and coordinate scrolling use `frameViewport`. Iframe-local bounds cannot be passed to screenshot cropping because `screenshot` remains a tab-viewport-only tool. `navigate`, `screenshot`, and `list_frames` accept tab targets only; `perform_actions.documentId` applies to the whole batch and cannot be overridden by a step.
+Every content result carries background-attested `documentId`, `frameId`, `isTopFrame`, and `coordinateSpace`. Top-frame coordinates use `tabViewport`; iframe `visible_snapshot` bounds, `click_at`, and coordinate scrolling use `frameViewport`. Iframe-local bounds cannot be passed to screenshot cropping because `screenshot` remains a tab-viewport-only tool. `navigate`, `activate_tab`, `screenshot`, and `list_frames` accept tab targets only; `perform_actions.documentId` applies to the whole batch and cannot be overridden by a step.
 
 Document failures preserve one of these prefixes, including inside batch step errors and `after` failures: `DOCUMENT_STALE:`, `DOCUMENT_POLICY_DENIED:`, `DOCUMENT_HOST_PERMISSION_DENIED:`, or `DOCUMENT_UNSUPPORTED:`. V1 supports only active HTTP(S) outermost/subframe documents. It intentionally excludes `about:blank`, `about:srcdoc`, `blob:`, `data:`, origin-fallback frames, iframe navigation, and iframe-to-tab screenshot coordinate translation.
 
@@ -250,7 +251,7 @@ Prefer `claim_tab` before multi-step browser work:
 { "tabId": 123 }
 ```
 
-The returned `sessionTabId` can be passed to `snapshot`, `navigate`, `click`, `type`, `scroll`, `query_elements`, `extract_elements`, `screenshot`, `wait_for`, and related page tools. If a session has a current claim, page actions without an explicit `tabId` or `sessionTabId` route to that claim. If no claim exists, legacy active-tab fallback remains.
+The returned `sessionTabId` can be passed to `snapshot`, `navigate`, `activate_tab`, `click`, `type`, `scroll`, `query_elements`, `extract_elements`, `screenshot`, `wait_for`, and related page tools. If a session has a current claim, page actions without an explicit `tabId` or `sessionTabId` route to that claim. If no claim exists, legacy active-tab fallback remains.
 
 Claims are advisory MCP routing state only. They do not stop the user from changing, closing, or navigating a tab. Use `release_tab` or `finalize_tabs` when a task is complete; neither tool closes browser tabs.
 
@@ -267,7 +268,7 @@ npm audit
 
 `npm run benchmark:snapshots` is an alias for the same compact-vs-full benchmark. The benchmark prints compact bytes, full bytes, and reduction percentage; compact mode should stay at least 50% smaller on the dense fixture.
 
-After editing files under `extension/`, reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 24`, extension protocol version `6`, and the `document-targeting` feature marker when both sides are current.
+After editing files under `extension/`, reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 25`, extension protocol version `6`, and the `document-targeting` feature marker when both sides are current.
 
 ## Limitations
 

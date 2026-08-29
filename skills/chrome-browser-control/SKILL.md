@@ -1,6 +1,6 @@
 ---
 name: chrome-browser-control
-description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when an agent needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, visible_snapshot, query_elements, extract_elements, extract_feed_posts, wait_for, page_status, console_logs, collect_scroll, perform_actions, and screenshot.
+description: Operate a connected Chrome profile through the chrome-browser-control MCP server. Use when an agent needs to browse, inspect, click, type, scroll, screenshot, debug, or summarize pages with tools such as browser_status, list_tabs, claim_tab, activate_tab, visible_snapshot, query_elements, extract_elements, extract_feed_posts, wait_for, page_status, console_logs, collect_scroll, perform_actions, and screenshot.
 ---
 
 # Chrome Browser Control
@@ -34,7 +34,7 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
 
 2. Pick a tab deliberately.
    - Use `list_tabs` for existing pages.
-   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. By default focus is unchanged; pass `active: true` only when the user should see that tab. New tabs without a target stay in the background unless `active: true`.
+   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. By default focus is unchanged; pass `active: true` only when the user should see that tab. New tabs without a target stay in the background unless `active: true`. Use `activate_tab` to focus a tab and its window without navigating.
    - After `navigate`, verify the landing entity with `requestedUrl`, `finalUrl`, and `redirected` (`url` aliases `finalUrl`) — especially after vanity URLs or redirects.
    - For multi-step work, call `claim_tab` (advisory by default) and keep the returned `sessionTabId`.
    - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases. Exclusive leases are tab-level only — they do not isolate whole browsers like separate remote sessions.
@@ -50,7 +50,7 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
    - Use `extract_elements` for bounded selector extraction instead of raw JavaScript evaluation.
 
 4. Act from fresh state.
-   - Click/type using refs from a recent snapshot or query result.
+   - Click/type using refs from a recent snapshot or query result. If click, type, `click_at`, or `keypress` fail with `DOCUMENT_HIDDEN`, call `activate_tab` and retry. Pass `allowHidden: true` only when you intentionally need background-tab writes.
    - Use `perform_actions` when you already know a short ordered sequence (up to 10 steps) of `click`, `type`, `scroll`, or `keypress` actions on the same tab; one terminal `after` applies to the whole batch on full success. Snapshot refs can go stale mid-batch — refresh before batching when the page may change between steps.
    - Use single act tools when steps are uncertain, you need per-action `after`, or the flow includes `click_at`.
    - When refs miss or the control is canvas/custom-drawn, use `visible_snapshot` (or viewport bounds from `query_elements`) then `click_at` — not a screenshot-first hunt.
@@ -79,7 +79,8 @@ When the happy path fails, try these bounded recoveries before declaring the pag
 - **Dialogs / overlays:** compact/main snapshots ignore `dialog` by default. Pass `ignoreRoles: []` or `scope: "document"`, or target the dialog with `query_elements` / `list_frames` when the control lives in an iframe.
 - **Iframes:** call `list_frames`, then pass the operable `documentId` to DOM tools. Exact document targets fail with `DOCUMENT_*` errors and never fall back — pick a fresh id if stale.
 - **Coordinate clicks:** from `visible_snapshot` or `query_elements` bounds, click the center with `click_at`, then verify with a targeted `wait_for` / small snapshot. Prefer this over screenshots for interaction.
-- **Focus without hijacking the user:** leave `navigate` at default (focus unchanged). Pass `active: true` only when visibility is required. New untargeted tabs stay in the background unless activated. Avoid `screenshot` while the user is browsing the same window.
+- **Hidden document / ignored writes:** `click`, `type`, `click_at`, `keypress`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Scroll steps stay unguarded. Call `activate_tab`, then retry. Do not treat `screenshot.activated: false` as that recovery — it only means the tab was already active in its window.
+- **Focus without hijacking the user:** leave `navigate` at default (focus unchanged). Pass `active: true` only when visibility is required. Use `activate_tab` when a later write needs the tab and window focused. New untargeted tabs stay in the background unless activated. Avoid `screenshot` while the user is browsing the same window.
 
 Honest capability limits (do not invent workarounds):
 - No raw CDP, no arbitrary page `eval` / injected scripts beyond the shipped tools.
@@ -100,6 +101,7 @@ If a needed capability is in the limits list, stop and tell the user what is mis
 - Structured content extraction: prefer `extract_elements`, `extract_feed_posts`, or DOM tables over screenshots when the data is in the DOM.
 - Infinite scroll or feeds: `collect_scroll` (use `until` / nested `scroll` when useful); use `extract_feed_posts` first when post heuristics fit.
 - Multi-step form/focus chains on one tab: `perform_actions` (not `click_at`).
+- Focus without navigating: `activate_tab`.
 - Post-action synchronization: `wait_for`.
 - Debugging: `page_status`, then `console_logs`.
 - Visual proof: `screenshot` (optionally cropped) when the user asks for pixels or DOM tools are insufficient.
