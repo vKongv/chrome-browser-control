@@ -1903,7 +1903,7 @@ describe('extension background origin enforcement', () => {
     });
   });
 
-  it('fail-fast perform_actions on hidden click/type steps unless that step sets allowHidden', async () => {
+  it('fail-fast perform_actions on hidden click/type/keypress steps unless that step sets allowHidden', async () => {
     const hiddenError =
       'DOCUMENT_HIDDEN: document.visibilityState is hidden. Call activate_tab to focus the tab and its window, or pass allowHidden=true to keep working in the background.';
     const background = loadBackgroundHarness({
@@ -1925,7 +1925,7 @@ describe('extension background origin enforcement', () => {
       ],
       contentResult: (_tabId, message) => {
         if (
-          (message.action === 'click' || message.action === 'type') &&
+          (message.action === 'click' || message.action === 'type' || message.action === 'keypress') &&
           message.params?.allowHidden !== true
         ) {
           throw new Error(hiddenError);
@@ -1933,6 +1933,8 @@ describe('extension background origin enforcement', () => {
         return { action: message.action, params: message.params };
       }
     });
+
+    await expect(background.handleBridgeRequest('keypress', { tabId: 1, keys: 'Enter' })).rejects.toThrow(hiddenError);
 
     await expect(
       background.handleBridgeRequest('perform_actions', {
@@ -1952,23 +1954,47 @@ describe('extension background origin enforcement', () => {
     await expect(
       background.handleBridgeRequest('perform_actions', {
         tabId: 1,
+        actions: [{ action: 'keypress', keys: 'Enter' }]
+      })
+    ).resolves.toEqual({
+      ok: false,
+      completedCount: 0,
+      failedIndex: 0,
+      steps: [{ index: 0, action: 'keypress', ok: false, error: hiddenError }]
+    });
+
+    await expect(
+      background.handleBridgeRequest('perform_actions', {
+        tabId: 1,
         actions: [
           { action: 'click', ref: 'h1', allowHidden: true },
-          { action: 'type', ref: 'h2', text: 'hello', allowHidden: true }
+          { action: 'type', ref: 'h2', text: 'hello', allowHidden: true },
+          { action: 'keypress', keys: 'Enter', allowHidden: true }
         ]
       })
     ).resolves.toEqual({
       ok: true,
-      completedCount: 2,
+      completedCount: 3,
       steps: [
         successfulTopStep(0, 'click', { ref: 'h1', allowHidden: true }),
-        successfulTopStep(1, 'type', { ref: 'h2', text: 'hello', allowHidden: true })
+        successfulTopStep(1, 'type', { ref: 'h2', text: 'hello', allowHidden: true }),
+        successfulTopStep(2, 'keypress', { keys: 'Enter', allowHidden: true })
       ]
     });
+
+    await expect(
+      background.handleBridgeRequest('keypress', { tabId: 1, keys: 'Enter', allowHidden: true })
+    ).resolves.toEqual(
+      withTopDocumentMetadata({ action: 'keypress', params: { keys: 'Enter', allowHidden: true } })
+    );
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'keypress', params: { keys: 'Enter' } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'keypress', params: { keys: 'Enter' } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1', allowHidden: true } } },
-      { tabId: 1, message: { target: 'cbc-content', action: 'type', params: { ref: 'h2', text: 'hello', allowHidden: true } } }
+      { tabId: 1, message: { target: 'cbc-content', action: 'type', params: { ref: 'h2', text: 'hello', allowHidden: true } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'keypress', params: { keys: 'Enter', allowHidden: true } } },
+      { tabId: 1, message: { target: 'cbc-content', action: 'keypress', params: { keys: 'Enter', allowHidden: true } } }
     ]);
   });
 

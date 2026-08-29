@@ -769,7 +769,8 @@ function parseKeySpec(spec) {
   };
 }
 
-export function performKeypress({ keys } = {}, documentRef = document) {
+export function performKeypress({ keys, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
   const keyList = Array.isArray(keys) ? keys : [keys];
   if (!keyList.length || keyList.some((key) => !key)) throw new Error('keypress requires keys');
   const view = documentRef.defaultView || window;

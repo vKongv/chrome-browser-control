@@ -156,7 +156,8 @@ const PerformActionScrollStep = z
 const PerformActionKeypressStep = z
   .object({
     action: z.literal('keypress'),
-    keys: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)])
+    keys: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)]),
+    allowHidden: AllowHidden
   })
   .strict();
 const PerformActionStep = z.discriminatedUnion('action', [
@@ -791,9 +792,11 @@ export function registerBrowserTools(
     'keypress',
     {
       title: 'Press page keys',
-      description: 'Dispatch common DOM keyboard events in the target page. Browser/OS shortcuts are not guaranteed under MV3.',
+      description:
+        'Dispatch common DOM keyboard events in the target page. Browser/OS shortcuts are not guaranteed under MV3. Fails with DOCUMENT_HIDDEN when the document is hidden unless allowHidden=true.',
       inputSchema: {
         keys: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(20)]),
+        allowHidden: AllowHidden,
         after: AfterObservation,
         ...OptionalDocumentTarget
       }
@@ -949,7 +952,7 @@ export function registerBrowserTools(
     {
       title: 'Perform sequential page actions',
       description:
-        'Run up to 10 sequential page actions in one document target. An explicit batch-level documentId is revalidated before every step and after observation; steps cannot override it. Fail-fast on the first step error. Click and type steps fail with DOCUMENT_HIDDEN on hidden documents unless that step sets allowHidden=true.',
+        'Run up to 10 sequential page actions in one document target. An explicit batch-level documentId is revalidated before every step and after observation; steps cannot override it. Fail-fast on the first step error. Click, type, and keypress steps fail with DOCUMENT_HIDDEN on hidden documents unless that step sets allowHidden=true.',
       inputSchema: {
         actions: z
           .array(PerformActionStep)

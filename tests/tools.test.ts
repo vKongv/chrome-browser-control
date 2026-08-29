@@ -414,7 +414,7 @@ describe('registerBrowserTools', () => {
     ]);
   });
 
-  it('forwards allowHidden on click, type, click_at, and perform_actions steps', async () => {
+  it('forwards allowHidden on click, type, click_at, keypress, and perform_actions steps', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
     registerBrowserTools(server, bridge);
@@ -422,10 +422,12 @@ describe('registerBrowserTools', () => {
     await server.tools.get('click')?.({ ref: 'h1', allowHidden: true });
     await server.tools.get('type')?.({ ref: 'h2', text: 'hello', allowHidden: true });
     await server.tools.get('click_at')?.({ x: 10, y: 20, allowHidden: true });
+    await server.tools.get('keypress')?.({ keys: 'Enter', allowHidden: true });
     await server.tools.get('perform_actions')?.({
       actions: [
         { action: 'click', ref: 'h1', allowHidden: true },
-        { action: 'type', ref: 'h2', text: 'hello', allowHidden: true }
+        { action: 'type', ref: 'h2', text: 'hello', allowHidden: true },
+        { action: 'keypress', keys: 'Enter', allowHidden: true }
       ]
     });
 
@@ -433,12 +435,14 @@ describe('registerBrowserTools', () => {
       { action: 'click', params: { ref: 'h1', allowHidden: true } },
       { action: 'type', params: { ref: 'h2', text: 'hello', allowHidden: true } },
       { action: 'click_at', params: { x: 10, y: 20, allowHidden: true } },
+      { action: 'keypress', params: { keys: 'Enter', allowHidden: true } },
       {
         action: 'perform_actions',
         params: {
           actions: [
             { action: 'click', ref: 'h1', allowHidden: true },
-            { action: 'type', ref: 'h2', text: 'hello', allowHidden: true }
+            { action: 'type', ref: 'h2', text: 'hello', allowHidden: true },
+            { action: 'keypress', keys: 'Enter', allowHidden: true }
           ]
         }
       }

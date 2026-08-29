@@ -140,7 +140,10 @@ export function performClickAt(
   params: { x: number; y: number; allowHidden?: boolean },
   documentRef?: Document
 ): { clicked: boolean; x: number; y: number; ref: string };
-export function performKeypress(params: { keys: string | string[] }, documentRef?: Document): { pressed: string[] };
+export function performKeypress(
+  params: { keys: string | string[]; allowHidden?: boolean },
+  documentRef?: Document
+): { pressed: string[] };
 export function waitForCondition(
   params?: SnapshotScopeOptions & {
     text?: string;
