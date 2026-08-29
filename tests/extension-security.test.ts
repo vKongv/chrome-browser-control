@@ -49,7 +49,10 @@ function loadBackgroundHarness({
   frames,
   contentReady = true,
   sendMessageError,
-  executeScriptError
+  executeScriptError,
+  sessionStore,
+  sessionGetHold,
+  sessionGetError
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
@@ -65,6 +68,9 @@ function loadBackgroundHarness({
   contentReady?: boolean;
   sendMessageError?: (message: Record<string, unknown>, options: { documentId?: string }) => Error | undefined;
   executeScriptError?: (details: Record<string, unknown>) => Error | undefined;
+  sessionStore?: Record<string, unknown>;
+  sessionGetHold?: Promise<void>;
+  sessionGetError?: Error;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
@@ -75,6 +81,10 @@ function loadBackgroundHarness({
   let contentListenerReady = contentReady;
   const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
+  const runtimeMessageListeners: Array<
+    (message: Record<string, unknown>, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void
+  > = [];
+  const sessionData: Record<string, unknown> = { ...(sessionStore ?? {}) };
   const FakeDate = class extends Date {
     static now() {
       return now;
@@ -97,11 +107,29 @@ function loadBackgroundHarness({
     const escaped = grant.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*');
     return new RegExp(`^${escaped}$`).test(requested);
   };
+  const readSessionStore = async (key?: string | string[] | Record<string, unknown>) => {
+    if (sessionGetHold) await sessionGetHold;
+    if (sessionGetError) throw sessionGetError;
+    if (typeof key === 'string') return { [key]: sessionData[key] };
+    if (Array.isArray(key)) {
+      return Object.fromEntries(key.map((item) => [item, sessionData[item]]));
+    }
+    if (key && typeof key === 'object') {
+      return { ...key, ...sessionData };
+    }
+    return { ...sessionData };
+  };
   const chrome = {
     storage: {
       local: {
         get: async (defaults: Record<string, unknown>) => ({ ...defaults, ...settings }),
         set: async () => undefined
+      },
+      session: {
+        get: readSessionStore,
+        set: async (items: Record<string, unknown>) => {
+          Object.assign(sessionData, items);
+        }
       }
     },
     runtime: {
@@ -109,7 +137,13 @@ function loadBackgroundHarness({
       getURL: (path: string) => `chrome-extension://test/${path}`,
       onInstalled: { addListener: () => undefined },
       onStartup: { addListener: () => undefined },
-      onMessage: { addListener: () => undefined },
+      onMessage: {
+        addListener: (
+          listener: (message: Record<string, unknown>, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void
+        ) => {
+          runtimeMessageListeners.push(listener);
+        }
+      },
       sendMessage: async (message: Record<string, unknown>) => {
         if (message?.target === 'cbc-offscreen' && message?.action === 'status') {
           return { ok: true, status: bridgeStatus };
@@ -321,8 +355,61 @@ function loadBackgroundHarness({
       const index = tabs.findIndex((tab) => tab.id === tabId);
       if (index >= 0) tabs.splice(index, 1);
       for (const listener of tabRemovedListeners) listener(tabId);
+    },
+    sessionStore: sessionData,
+    sendRuntimeMessage(message: Record<string, unknown>) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const sendResponse = (response: unknown) => {
+          if (settled) return;
+          settled = true;
+          resolve(response);
+        };
+        let asyncResponse = false;
+        for (const listener of runtimeMessageListeners) {
+          if (listener(message, {}, sendResponse) === true) asyncResponse = true;
+        }
+        if (!asyncResponse && !settled) resolve(undefined);
+      });
     }
   });
+}
+
+function exclusiveClaimSessionState(overrides: Record<string, unknown> = {}) {
+  return {
+    nextClaimId: 2,
+    currentSessionTabId: 'tab-1',
+    claimedTabs: [
+      [
+        'tab-1',
+        {
+          sessionTabId: 'tab-1',
+          tabId: 2,
+          claimedAt: 0,
+          exclusive: true,
+          ownerId: 'owner-a',
+          ownerLabel: 'Agent A',
+          expiresAt: 60_000
+        }
+      ]
+    ],
+    tabLeases: [
+      [
+        2,
+        {
+          ownerId: 'owner-a',
+          ownerLabel: 'Agent A',
+          sessionName: 'Audit A',
+          expiresAt: 60_000
+        }
+      ]
+    ],
+    ...overrides
+  };
+}
+
+async function flushMicrotasks(times = 8) {
+  for (let i = 0; i < times; i += 1) await Promise.resolve();
 }
 
 describe('extension security helpers', () => {
@@ -3293,6 +3380,402 @@ describe('extension background origin enforcement', () => {
     await expect(
       background.handleBridgeRequest('release_tab', { sessionTabId: exclusive.sessionTabId })
     ).resolves.toMatchObject({ released: true, tabId: 2 });
+  });
+
+  it('rehydrates persisted exclusive claims after a service-worker restart', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        status: 'complete',
+        title: 'Active',
+        url: 'https://allowed.example/active',
+        windowId: 1
+      },
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Claimed',
+        url: 'https://allowed.example/claimed',
+        windowId: 1
+      },
+      {
+        id: 3,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Other',
+        url: 'https://allowed.example/other',
+        windowId: 1
+      }
+    ];
+    const first = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await first.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      owner: 'Agent A',
+      ttlMs: 60_000
+    });
+
+    const restarted = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      sessionStore: { cbcClaimState: first.sessionStore.cbcClaimState },
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    await expect(restarted.handleBridgeRequest('page_status', { sessionTabId: 'tab-1' })).resolves.toMatchObject({
+      action: 'page_status'
+    });
+    expect(restarted.sentMessages.at(-1)).toMatchObject({ tabId: 2, message: { action: 'page_status' } });
+
+    await expect(restarted.handleBridgeRequest('page_status')).resolves.toMatchObject({
+      action: 'page_status'
+    });
+    expect(restarted.sentMessages.at(-1)).toMatchObject({ tabId: 2 });
+
+    await expect(restarted.handleBridgeRequest('ping')).resolves.toMatchObject({
+      session: {
+        claimedTabs: [expect.objectContaining({ sessionTabId: 'tab-1', tabId: 2, exclusive: true, ownerId: 'owner-a' })]
+      }
+    });
+
+    await expect(
+      restarted.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-b', ttlMs: 60_000 })
+    ).rejects.toThrow('TAB_EXCLUSIVE_CLAIM_CONFLICT');
+
+    await expect(restarted.handleBridgeRequest('claim_tab', { tabId: 3 })).resolves.toMatchObject({
+      sessionTabId: 'tab-2',
+      tabId: 3
+    });
+  });
+
+  it('rehydrates sessionName so exclusive renewal does not blank the holder session', async () => {
+    const tabs = [
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Claimed',
+        url: 'https://allowed.example/claimed',
+        windowId: 1
+      }
+    ];
+    const first = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await first.handleBridgeRequest('name_session', { name: 'Audit A' });
+    await first.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      owner: 'Agent A',
+      ttlMs: 60_000
+    });
+
+    const restarted = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      sessionStore: { cbcClaimState: first.sessionStore.cbcClaimState }
+    });
+
+    await expect(restarted.handleBridgeRequest('ping')).resolves.toMatchObject({
+      session: { name: 'Audit A' }
+    });
+
+    await expect(
+      restarted.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-a',
+        ttlMs: 60_000
+      })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-a', leaseRenewed: true });
+
+    await expect(restarted.handleBridgeRequest('ping')).resolves.toMatchObject({
+      session: { name: 'Audit A' }
+    });
+
+    try {
+      await restarted.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-b',
+        ttlMs: 60_000
+      });
+      throw new Error('expected conflict');
+    } catch (error) {
+      expect((error as Error).message).toContain('TAB_EXCLUSIVE_CLAIM_CONFLICT');
+      const payload = JSON.parse((error as Error).message);
+      expect(payload.holder.sessionName).toBe('Audit A');
+    }
+  });
+
+  it('sweeps expired exclusive leases during rehydration', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ],
+      sessionStore: {
+        cbcClaimState: exclusiveClaimSessionState({
+          claimedTabs: [
+            [
+              'tab-1',
+              {
+                sessionTabId: 'tab-1',
+                tabId: 2,
+                exclusive: true,
+                ownerId: 'owner-a',
+                expiresAt: 0
+              }
+            ]
+          ],
+          tabLeases: [[2, { ownerId: 'owner-a', expiresAt: 0 }]]
+        })
+      }
+    });
+
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
+      session: { claimedTabs: [] }
+    });
+    await expect(
+      background.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-b', ttlMs: 60_000 })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
+  });
+
+  it('waits for rehydration before handling a bridge message', async () => {
+    let releaseHydration!: () => void;
+    const sessionGetHold = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ],
+      sessionStore: { cbcClaimState: exclusiveClaimSessionState() },
+      sessionGetHold,
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    const pending = background.sendRuntimeMessage({
+      target: 'cbc-background',
+      kind: 'bridge-request',
+      action: 'snapshot',
+      params: { sessionTabId: 'tab-1' }
+    });
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+    expect(background.sentMessages).toEqual([]);
+
+    releaseHydration();
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      result: expect.objectContaining({ action: 'snapshot' })
+    });
+    expect(background.sentMessages.at(-1)).toMatchObject({
+      tabId: 2,
+      message: { action: 'snapshot' }
+    });
+  });
+
+  it('waits for rehydration before handleBridgeRequest reads claim state', async () => {
+    let releaseHydration!: () => void;
+    const sessionGetHold = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ],
+      sessionStore: { cbcClaimState: exclusiveClaimSessionState() },
+      sessionGetHold,
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    const pending = background.handleBridgeRequest('snapshot', { sessionTabId: 'tab-1' });
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+
+    releaseHydration();
+    await expect(pending).resolves.toMatchObject({ action: 'snapshot' });
+  });
+
+  it('degrades to in-memory claims when session storage is empty or unreadable', async () => {
+    const empty = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ]
+    });
+    await expect(empty.handleBridgeRequest('claim_tab', { tabId: 2 })).resolves.toMatchObject({
+      sessionTabId: 'tab-1',
+      tabId: 2
+    });
+
+    const unreadable = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ],
+      sessionGetError: new Error('session storage unavailable')
+    });
+    await expect(unreadable.handleBridgeRequest('claim_tab', { tabId: 2 })).resolves.toMatchObject({
+      sessionTabId: 'tab-1',
+      tabId: 2
+    });
+    await expect(unreadable.handleBridgeRequest('page_status', { sessionTabId: 'tab-1' })).resolves.toBeTruthy();
+  });
+
+  it('keeps tabs.onRemoved cleanup after persisted claims rehydrate', async () => {
+    const tabs = [
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Claimed',
+        url: 'https://allowed.example/claimed',
+        windowId: 1
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      sessionStore: { cbcClaimState: exclusiveClaimSessionState() }
+    });
+
+    await background.claimStateReady;
+    background.removeTab(2);
+    await flushMicrotasks();
+
+    tabs.push({
+      id: 2,
+      active: false,
+      highlighted: false,
+      status: 'complete',
+      title: 'Reused id',
+      url: 'https://allowed.example/claimed',
+      windowId: 1
+    });
+
+    await expect(
+      background.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-b', ttlMs: 60_000 })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
   });
 
   it('navigates without activating the tab by default', async () => {

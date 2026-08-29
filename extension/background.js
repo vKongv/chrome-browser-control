@@ -54,6 +54,7 @@ const PERFORM_ACTIONS_MIN_STEP_RESERVE_MS = 1_000;
 const PERFORM_ACTION_STEP_ALLOWLIST = ['click', 'type', 'scroll', 'keypress'];
 const DEFAULT_EXCLUSIVE_LEASE_TTL_MS = 300_000;
 const MAX_EXCLUSIVE_LEASE_TTL_MS = 3_600_000;
+const CLAIM_STATE_STORAGE_KEY = 'cbcClaimState';
 
 let status = 'disconnected';
 let sessionName = '';
@@ -62,10 +63,79 @@ let currentSessionTabId = '';
 const claimedTabs = new Map();
 const tabLeases = new Map();
 
+function serializeClaimState() {
+  return {
+    sessionName,
+    nextClaimId,
+    currentSessionTabId,
+    claimedTabs: [...claimedTabs.entries()],
+    tabLeases: [...tabLeases.entries()]
+  };
+}
+
+function persistClaimState() {
+  if (!chrome.storage?.session?.set) return Promise.resolve();
+  return chrome.storage.session.set({ [CLAIM_STATE_STORAGE_KEY]: serializeClaimState() }).catch(() => undefined);
+}
+
+function applyStoredClaimState(stored) {
+  if (!stored || typeof stored !== 'object') return;
+
+  if (typeof stored.sessionName === 'string') {
+    sessionName = stored.sessionName;
+  }
+
+  if (typeof stored.nextClaimId === 'number' && Number.isFinite(stored.nextClaimId) && stored.nextClaimId >= 1) {
+    nextClaimId = Math.floor(stored.nextClaimId);
+  }
+
+  if (typeof stored.currentSessionTabId === 'string') {
+    currentSessionTabId = stored.currentSessionTabId;
+  }
+
+  if (Array.isArray(stored.claimedTabs)) {
+    claimedTabs.clear();
+    for (const entry of stored.claimedTabs) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const [sessionTabId, claim] = entry;
+      if (typeof sessionTabId !== 'string' || !sessionTabId || !claim || typeof claim !== 'object') continue;
+      const tabId = Number(claim.tabId);
+      if (!Number.isFinite(tabId)) continue;
+      claimedTabs.set(sessionTabId, { ...claim, sessionTabId, tabId });
+    }
+  }
+
+  if (Array.isArray(stored.tabLeases)) {
+    tabLeases.clear();
+    for (const entry of stored.tabLeases) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const [rawTabId, lease] = entry;
+      const tabId = Number(rawTabId);
+      if (!Number.isFinite(tabId) || !lease || typeof lease !== 'object') continue;
+      tabLeases.set(tabId, lease);
+    }
+  }
+
+  if (currentSessionTabId && !claimedTabs.has(currentSessionTabId)) {
+    currentSessionTabId = claimedTabs.keys().next().value || '';
+  }
+}
+
+async function hydrateClaimState() {
+  if (!chrome.storage?.session?.get) return;
+  const stored = await chrome.storage.session.get(CLAIM_STATE_STORAGE_KEY).catch(() => undefined);
+  applyStoredClaimState(stored?.[CLAIM_STATE_STORAGE_KEY]);
+  sweepExpiredLeases();
+}
+
+const claimStateReady = hydrateClaimState();
+
 function sweepExpiredLeases(now = Date.now()) {
+  let changed = false;
   for (const [tabId, lease] of tabLeases) {
     if (!lease?.expiresAt || lease.expiresAt <= now) {
       tabLeases.delete(tabId);
+      changed = true;
       for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
         if (claim.tabId !== tabId || !claim.exclusive || claim.ownerId !== lease.ownerId) continue;
         claimedTabs.delete(sessionTabId);
@@ -73,6 +143,7 @@ function sweepExpiredLeases(now = Date.now()) {
       }
     }
   }
+  if (changed) void persistClaimState();
 }
 
 function getLeaseForTab(tabId) {
@@ -268,6 +339,7 @@ async function resolveSessionTabId(sessionTabId, allowedOrigins, { requireOperab
     claimedTabs.delete(sessionTabId);
     clearLeaseIfHeldByClaim(claim);
     if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
+    await persistClaimState();
     throw new Error(`Claimed tab is no longer available for sessionTabId: ${sessionTabId}`);
   }
   if (requireOperable && !isOperableTab(tab, allowedOrigins)) {
@@ -959,6 +1031,7 @@ async function listFrames(tabId, allowedOrigins) {
 }
 
 async function handleBridgeRequest(action, params = {}) {
+  await claimStateReady;
   const settings = await getSettings();
   switch (action) {
     case 'ping': {
@@ -976,6 +1049,7 @@ async function handleBridgeRequest(action, params = {}) {
       const name = String(params.name || '').trim();
       if (!name) throw new Error('name_session requires name');
       sessionName = name.slice(0, 120);
+      await persistClaimState();
       return { name: sessionName };
     }
     case 'list_tabs': {
@@ -1069,6 +1143,7 @@ async function handleBridgeRequest(action, params = {}) {
         });
       }
       currentSessionTabId = sessionTabId;
+      await persistClaimState();
       return sanitizeClaim(tab, sessionTabId, claim);
     }
     case 'release_tab': {
@@ -1080,6 +1155,7 @@ async function handleBridgeRequest(action, params = {}) {
       claimedTabs.delete(sessionTabId);
       clearLeaseIfHeldByClaim(claim);
       if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
+      await persistClaimState();
       return { released: true, sessionTabId, tabId: claim?.tabId };
     }
     case 'finalize_tabs': {
@@ -1102,6 +1178,7 @@ async function handleBridgeRequest(action, params = {}) {
         released += 1;
       }
       if (!claimedTabs.has(currentSessionTabId)) currentSessionTabId = keepIds.values().next().value || '';
+      await persistClaimState();
       return { released, kept: claimedTabs.size };
     }
     case 'navigate': {
@@ -1182,12 +1259,20 @@ async function handleBridgeRequest(action, params = {}) {
 chrome.runtime.onInstalled.addListener(() => connectBridge().catch(() => undefined));
 chrome.runtime.onStartup.addListener(() => connectBridge().catch(() => undefined));
 chrome.tabs.onRemoved.addListener((tabId) => {
-  clearLeaseForTab(tabId);
-  for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
-    if (claim.tabId !== tabId) continue;
-    claimedTabs.delete(sessionTabId);
-    if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
-  }
+  void claimStateReady
+    .then(() => {
+      const hadLease = tabLeases.has(tabId);
+      let hadClaim = false;
+      clearLeaseForTab(tabId);
+      for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
+        if (claim.tabId !== tabId) continue;
+        hadClaim = true;
+        claimedTabs.delete(sessionTabId);
+        if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
+      }
+      if (hadLease || hadClaim) return persistClaimState();
+    })
+    .catch(() => undefined);
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target === 'cbc-background' && message?.kind === 'status-update') {
@@ -1197,7 +1282,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.target === 'cbc-background' && message?.kind === 'bridge-request') {
-    handleBridgeRequest(message.action, message.params || {})
+    claimStateReady
+      .then(() => handleBridgeRequest(message.action, message.params || {}))
       .then((result) => sendResponse({ ok: true, result }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -1232,7 +1318,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 if (globalThis.CBC_TEST_HARNESS) {
   globalThis.BrowserControlBackground = {
-    handleBridgeRequest
+    handleBridgeRequest,
+    claimStateReady
   };
 }
 
