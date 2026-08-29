@@ -998,6 +998,22 @@ describe('extension content core', () => {
       expect(snapshot.textPreview).not.toContain('Faded wizard');
     });
 
+    it('still scopes to a native showModal() dialog under an opacity 0 ancestor', () => {
+      const document = makeDocument(`
+        <main><p>backgroundPage</p><button>Page action</button></main>
+        <div style="opacity:0">
+          <dialog id="top-layer-modal"><p>Top layer wizard</p><button>Modal next</button></dialog>
+        </div>
+      `);
+      showNativeDialog(document.getElementById('top-layer-modal'), true);
+
+      const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+      expect(snapshot.scopeApplied).toBe('dialog');
+      expect(snapshot.textPreview).toContain('Top layer wizard');
+      expect(snapshot.textPreview).not.toContain('backgroundPage');
+      expect(snapshot.elements.map((item) => item.label)).toContain('Modal next');
+    });
+
     it('scopes to the later-opened native modal when DOM order is reversed', () => {
       const document = makeDocument(`
         <main><p>Page behind stacked native modals</p></main>

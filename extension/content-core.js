@@ -236,6 +236,8 @@ function isDialogSubtreeVisible(element) {
   if (!element || element.hidden === true) return false;
   if (String(element.tagName || '').toLowerCase() === 'dialog' && element.open !== true) return false;
   if (!isVisibleElement(element)) return false;
+  // Top-layer :modal dialogs paint as a root sibling; ancestor opacity cannot hide them.
+  if (isNativeModalDialog(element)) return true;
   return !hasAncestorOpacityZero(element);
 }
 
