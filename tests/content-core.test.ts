@@ -875,12 +875,14 @@ describe('extension content core', () => {
 
       const displayNone = makeDocument(`
         ${baseHtml}
-        <div role="dialog" aria-modal="true" style="display:none"><p>Display none wizard</p><button>Hidden next</button></div>
+        <div id="display-none" role="dialog" aria-modal="true" style="display:none"><p>Display none wizard</p><button>Hidden next</button></div>
       `);
+      setRect(displayNone.getElementById('display-none'), VISIBLE_RECT);
       const hiddenAttr = makeDocument(`
         ${baseHtml}
-        <div role="dialog" aria-modal="true" hidden><p>Hidden attr wizard</p><button>Hidden next</button></div>
+        <div id="hidden-attr" role="dialog" aria-modal="true" hidden><p>Hidden attr wizard</p><button>Hidden next</button></div>
       `);
+      setRect(hiddenAttr.getElementById('hidden-attr'), VISIBLE_RECT);
       const visibilityHidden = makeDocument(`
         ${baseHtml}
         <div id="vis-hidden" role="dialog" aria-modal="true" style="visibility:hidden"><p>Visibility hidden wizard</p><button>Hidden next</button></div>
@@ -964,6 +966,72 @@ describe('extension content core', () => {
       expect(snapshot.scopeApplied).toBe('main');
       expect(snapshot.textPreview).toContain('Top feed');
       expect(snapshot.textPreview).not.toContain('Iframe wizard');
+    });
+
+    it('keeps controls when a visible modal is nested inside a hidden dialog', () => {
+      const document = makeDocument(`
+        <main><p>Campaign list behind the wizard</p><button>Create</button></main>
+        <div role="dialog" hidden>
+          <div role="dialog" aria-modal="true"><p>Create campaign wizard</p><button>Next</button></div>
+        </div>
+      `);
+      setRect(document.querySelector('[aria-modal="true"]'), VISIBLE_RECT);
+
+      const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+      expect(snapshot.scopeApplied).toBe('dialog');
+      expect(snapshot.textPreview).toContain('Create campaign wizard');
+      expect(snapshot.elements.map((item) => item.label)).toContain('Next');
+    });
+
+    it('does not steal compact scope when an ancestor has opacity 0', () => {
+      const document = makeDocument(`
+        <main><p>Campaign list behind the wizard</p><button>Create</button></main>
+        <div style="opacity:0">
+          <div role="dialog" aria-modal="true"><p>Faded wizard</p><button>Next</button></div>
+        </div>
+      `);
+      setRect(document.querySelector('[role="dialog"]'), VISIBLE_RECT);
+
+      const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+      expect(snapshot.scopeApplied).toBe('main');
+      expect(snapshot.textPreview).toContain('Campaign list behind');
+      expect(snapshot.textPreview).not.toContain('Faded wizard');
+    });
+
+    it('scopes to the later-opened native modal when DOM order is reversed', () => {
+      const document = makeDocument(`
+        <main><p>Page behind stacked native modals</p></main>
+        <dialog id="dialog-a"><p>First in DOM</p><button>A next</button></dialog>
+        <dialog id="dialog-b"><p>Second in DOM</p><button>B next</button></dialog>
+      `);
+      const firstInDom = document.getElementById('dialog-a');
+      const secondInDom = document.getElementById('dialog-b');
+      showNativeDialog(secondInDom, true);
+      showNativeDialog(firstInDom, true);
+      document.getElementById('dialog-a')?.querySelector('button')?.focus();
+
+      const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+      expect(snapshot.scopeApplied).toBe('dialog');
+      expect(snapshot.textPreview).toContain('First in DOM');
+      expect(snapshot.textPreview).not.toContain('Second in DOM');
+      expect(snapshot.elements.map((item) => item.label)).toContain('A next');
+    });
+
+    it('hides a modal alertdialog when ignoreRoles includes dialog', () => {
+      const document = makeDocument(`
+        <main>
+          <p>Settings page</p>
+          <button>Save settings</button>
+          <div role="alertdialog" aria-modal="true"><p>Confirm delete</p><button>Delete now</button></div>
+        </main>
+      `);
+      setRect(document.querySelector('[role="alertdialog"]'), VISIBLE_RECT);
+
+      const snapshot = buildSnapshotFromDocument(document as unknown as Document, { ignoreRoles: ['dialog'] });
+      expect(snapshot.scopeApplied).toBe('main');
+      expect(snapshot.textPreview).toContain('Settings page');
+      expect(snapshot.textPreview).not.toContain('Confirm delete');
+      expect(snapshot.elements.map((item) => item.label)).not.toContain('Delete now');
     });
 
     it('keeps ignoreRoles, scope, and mode escape hatches', () => {
