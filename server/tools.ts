@@ -62,7 +62,7 @@ const BoundedLimit = z.number().int().positive().max(500).optional();
 const SnapshotScope = z.enum(['document', 'main', 'article', 'feed']);
 const SnapshotScopeOptions = {
   scope: SnapshotScope.optional().describe(
-    'Content root for text and elements. Compact defaults to main when a main landmark exists; use document for legacy full-body text.'
+    'Content root for text and elements. Compact defaults to main when a main landmark exists, or to a visible modal dialog (aria-modal=true or <dialog> opened with showModal()). Use document for the page behind a modal; pass ignoreRoles: ["dialog"] to hide dialogs.'
   ),
   excludeSelectors: z
     .array(z.string().min(1).max(500))
@@ -73,7 +73,9 @@ const SnapshotScopeOptions = {
     .array(z.string().min(1).max(80))
     .max(20)
     .optional()
-    .describe('Computed roles to exclude from scoped snapshots. Compact/main defaults to ["dialog"].')
+    .describe(
+      'Computed roles to exclude from scoped snapshots. Compact/main defaults to ["dialog"] when no visible dialog is open. A visible non-modal dialog is included without taking scope; a visible modal takes scope. Pass ["dialog"] to hide dialogs, or [] to include them in the current scope.'
+    )
 };
 const AfterWaitFor = z
   .object({
@@ -583,7 +585,7 @@ export function registerBrowserTools(
     {
       title: 'Snapshot active page',
       description:
-        'Return a simplified DOM snapshot for the current top document or an exact documentId from list_frames. Compact mode (default) returns textPreview only — not text. Full mode returns text. Compact defaults to main-landmark scope when present; pass scope: "document" for legacy full-body text. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes authoritative document identity and coordinate space.',
+        'Return a simplified DOM snapshot for the current top document or an exact documentId from list_frames. Compact mode (default) returns textPreview only — not text. Full mode returns text. Compact defaults to main-landmark scope when present; a visible modal dialog (aria-modal=true or <dialog> opened with showModal()) takes scope instead. Pass scope: "document" for legacy full-body text including the page behind a modal, ignoreRoles: ["dialog"] to hide dialogs, or mode: "full" for the unscoped legacy snapshot. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes authoritative document identity and coordinate space.',
       inputSchema: {
         mode: SnapshotMode.optional().describe(
           'Snapshot detail mode. Defaults to compact. Use full for text and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
