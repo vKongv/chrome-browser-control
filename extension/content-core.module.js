@@ -193,10 +193,9 @@ function isInsideExcludedSubtree(element, excludeSelectors, documentRef) {
 }
 
 function isDialogLike(element) {
-  if (!element?.getAttribute) return false;
-  const role = String(element.getAttribute('role') || '').toLowerCase();
+  const role = String(element?.getAttribute?.('role') || '').toLowerCase();
   if (role === 'dialog' || role === 'alertdialog') return true;
-  return String(element.tagName || '').toLowerCase() === 'dialog';
+  return String(element?.tagName || '').toLowerCase() === 'dialog';
 }
 
 function isNativeModalDialog(element) {
@@ -210,8 +209,7 @@ function isNativeModalDialog(element) {
 }
 
 function isDialogSubtreeVisible(element) {
-  if (!element) return false;
-  if (element.hidden === true) return false;
+  if (!element || element.hidden === true) return false;
   if (String(element.tagName || '').toLowerCase() === 'dialog' && element.open !== true) return false;
   return isVisibleElement(element);
 }
@@ -223,7 +221,6 @@ function isGenuinelyModalDialog(element) {
 }
 
 function findVisibleModalDialog(documentRef) {
-  if (!documentRef?.querySelectorAll) return null;
   const nodes = documentRef.querySelectorAll('dialog, [role="dialog"], [role="alertdialog"]');
   let last = null;
   for (const element of nodes) {
@@ -234,7 +231,6 @@ function findVisibleModalDialog(documentRef) {
 }
 
 function hasVisibleDialogRole(documentRef) {
-  if (!documentRef?.querySelectorAll) return false;
   for (const element of documentRef.querySelectorAll('dialog, [role="dialog"]')) {
     if (isDialogSubtreeVisible(element) && roleFor(element).toLowerCase() === 'dialog') return true;
   }

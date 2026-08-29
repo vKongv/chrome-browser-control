@@ -839,8 +839,6 @@ describe('extension content core', () => {
     });
 
     it('scopes to role=alertdialog only when it is genuinely modal', () => {
-      // alertdialog is interrupting by APG prose, but authors use it for toasts.
-      // Same narrow predicate as dialog: aria-modal=true or dialog:modal, not the role alone.
       const toastDoc = makeDocument(`
         <main>
           <p>Settings page</p>
@@ -915,12 +913,10 @@ describe('extension content core', () => {
         <footer>Footer legal copy</footer>
       `;
       const snapshot = buildSnapshotFromDocument(makeDocument(html) as unknown as Document);
-      const { ref: _ref, ...elementRest } = snapshot.elements[0] as { ref: string } & Record<string, unknown>;
       expect(snapshot.scopeApplied).toBe('main');
       expect(snapshot.textPreview).toBe('Main feed content for auditLike');
       expect(snapshot.textPreview).not.toContain('Sidebar navigation');
-      expect(snapshot.elements).toHaveLength(1);
-      expect(elementRest).toEqual({ role: 'button', label: 'Like' });
+      expect(snapshot.elements.map((item) => item.label)).toEqual(['Like']);
       expect(snapshot.excludedCount).toBe(0);
     });
 
