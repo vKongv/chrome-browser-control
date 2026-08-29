@@ -823,8 +823,8 @@ async function activateTab(tabId) {
   return {
     tabId: tab.id,
     windowId: tab.windowId,
-    active: Boolean(tab.active),
-    focused: focusedWindow?.focused !== false
+    active: tab.active,
+    focused: focusedWindow.focused
   };
 }
 

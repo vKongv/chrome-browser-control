@@ -549,7 +549,7 @@ export function findByRef(ref, documentRef = document) {
 
 function assertDocumentVisible(documentRef, allowHidden) {
   if (allowHidden === true) return;
-  if (documentRef?.visibilityState === 'hidden') {
+  if (documentRef.visibilityState === 'hidden') {
     throw new Error(
       'DOCUMENT_HIDDEN: document.visibilityState is hidden. Call activate_tab to focus the tab and its window, or pass allowHidden=true to keep working in the background.'
     );
