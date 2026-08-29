@@ -65,6 +65,7 @@ const tabLeases = new Map();
 
 function serializeClaimState() {
   return {
+    sessionName,
     nextClaimId,
     currentSessionTabId,
     claimedTabs: [...claimedTabs.entries()],
@@ -79,6 +80,10 @@ function persistClaimState() {
 
 function applyStoredClaimState(stored) {
   if (!stored || typeof stored !== 'object') return;
+
+  if (typeof stored.sessionName === 'string') {
+    sessionName = stored.sessionName;
+  }
 
   if (typeof stored.nextClaimId === 'number' && Number.isFinite(stored.nextClaimId) && stored.nextClaimId >= 1) {
     nextClaimId = Math.floor(stored.nextClaimId);
@@ -1044,6 +1049,7 @@ async function handleBridgeRequest(action, params = {}) {
       const name = String(params.name || '').trim();
       if (!name) throw new Error('name_session requires name');
       sessionName = name.slice(0, 120);
+      await persistClaimState();
       return { name: sessionName };
     }
     case 'list_tabs': {
@@ -1255,13 +1261,16 @@ chrome.runtime.onStartup.addListener(() => connectBridge().catch(() => undefined
 chrome.tabs.onRemoved.addListener((tabId) => {
   void claimStateReady
     .then(() => {
+      const hadLease = tabLeases.has(tabId);
+      let hadClaim = false;
       clearLeaseForTab(tabId);
       for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
         if (claim.tabId !== tabId) continue;
+        hadClaim = true;
         claimedTabs.delete(sessionTabId);
         if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
       }
-      return persistClaimState();
+      if (hadLease || hadClaim) return persistClaimState();
     })
     .catch(() => undefined);
 });

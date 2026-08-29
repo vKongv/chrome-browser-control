@@ -3467,6 +3467,78 @@ describe('extension background origin enforcement', () => {
     });
   });
 
+  it('rehydrates sessionName so exclusive renewal does not blank the holder session', async () => {
+    const tabs = [
+      {
+        id: 2,
+        active: false,
+        highlighted: false,
+        status: 'complete',
+        title: 'Claimed',
+        url: 'https://allowed.example/claimed',
+        windowId: 1
+      }
+    ];
+    const first = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await first.handleBridgeRequest('name_session', { name: 'Audit A' });
+    await first.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      owner: 'Agent A',
+      ttlMs: 60_000
+    });
+
+    const restarted = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      sessionStore: { cbcClaimState: first.sessionStore.cbcClaimState }
+    });
+
+    await expect(restarted.handleBridgeRequest('ping')).resolves.toMatchObject({
+      session: { name: 'Audit A' }
+    });
+
+    await expect(
+      restarted.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-a',
+        ttlMs: 60_000
+      })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-a', leaseRenewed: true });
+
+    await expect(restarted.handleBridgeRequest('ping')).resolves.toMatchObject({
+      session: { name: 'Audit A' }
+    });
+
+    try {
+      await restarted.handleBridgeRequest('claim_tab', {
+        tabId: 2,
+        exclusive: true,
+        ownerId: 'owner-b',
+        ttlMs: 60_000
+      });
+      throw new Error('expected conflict');
+    } catch (error) {
+      expect((error as Error).message).toContain('TAB_EXCLUSIVE_CLAIM_CONFLICT');
+      const payload = JSON.parse((error as Error).message);
+      expect(payload.holder.sessionName).toBe('Audit A');
+    }
+  });
+
   it('sweeps expired exclusive leases during rehydration', async () => {
     const background = loadBackgroundHarness({
       settings: {
