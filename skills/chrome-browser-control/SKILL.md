@@ -50,7 +50,7 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
    - Use `extract_elements` for bounded selector extraction instead of raw JavaScript evaluation.
 
 4. Act from fresh state.
-   - Click/type using refs from a recent snapshot or query result. If those fail with `DOCUMENT_HIDDEN`, call `activate_tab` and retry. Pass `allowHidden: true` only when you intentionally need background-tab writes.
+   - Click/type using refs from a recent snapshot or query result. If click, type, `click_at`, or `keypress` fail with `DOCUMENT_HIDDEN`, call `activate_tab` and retry. Pass `allowHidden: true` only when you intentionally need background-tab writes.
    - Use `perform_actions` when you already know a short ordered sequence (up to 10 steps) of `click`, `type`, `scroll`, or `keypress` actions on the same tab; one terminal `after` applies to the whole batch on full success. Snapshot refs can go stale mid-batch — refresh before batching when the page may change between steps.
    - Use single act tools when steps are uncertain, you need per-action `after`, or the flow includes `click_at`.
    - When refs miss or the control is canvas/custom-drawn, use `visible_snapshot` (or viewport bounds from `query_elements`) then `click_at` — not a screenshot-first hunt.
@@ -79,7 +79,7 @@ When the happy path fails, try these bounded recoveries before declaring the pag
 - **Dialogs / overlays:** compact/main snapshots ignore `dialog` by default. Pass `ignoreRoles: []` or `scope: "document"`, or target the dialog with `query_elements` / `list_frames` when the control lives in an iframe.
 - **Iframes:** call `list_frames`, then pass the operable `documentId` to DOM tools. Exact document targets fail with `DOCUMENT_*` errors and never fall back — pick a fresh id if stale.
 - **Coordinate clicks:** from `visible_snapshot` or `query_elements` bounds, click the center with `click_at`, then verify with a targeted `wait_for` / small snapshot. Prefer this over screenshots for interaction.
-- **Hidden document / ignored clicks:** `click`, `type`, `click_at`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Call `activate_tab`, then retry. Do not treat `screenshot.activated: false` as that recovery — it only means the tab was already active in its window.
+- **Hidden document / ignored writes:** `click`, `type`, `click_at`, `keypress`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Scroll steps stay unguarded. Call `activate_tab`, then retry. Do not treat `screenshot.activated: false` as that recovery — it only means the tab was already active in its window.
 - **Focus without hijacking the user:** leave `navigate` at default (focus unchanged). Pass `active: true` only when visibility is required. Use `activate_tab` when a later write needs the tab and window focused. New untargeted tabs stay in the background unless activated. Avoid `screenshot` while the user is browsing the same window.
 
 Honest capability limits (do not invent workarounds):
