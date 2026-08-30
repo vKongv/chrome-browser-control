@@ -843,28 +843,28 @@ async function classifyVisibilityReadError(tabId, error) {
   try {
     tab = await chrome.tabs.get(tabId);
   } catch (_error) {
-    return { reason: 'document_unavailable' };
+    return { reason: 'document_unavailable', terminal: true };
   }
 
-  if (tab?.discarded || !isInjectableUrl(tab?.url || '')) {
-    return { reason: 'document_unavailable' };
+  if (!isInjectableUrl(tab?.url || '')) {
+    return { reason: 'document_unavailable', terminal: true };
   }
 
   if (tab?.url && !(await hasDocumentHostPermission(tab.url))) {
-    return { reason: 'host_permission_denied' };
+    return { reason: 'host_permission_denied', terminal: true };
   }
 
   const message = error instanceof Error ? error.message : String(error || '');
   if (/cannot access contents|host permission/i.test(message)) {
-    return { reason: 'host_permission_denied' };
+    return { reason: 'host_permission_denied', terminal: true };
   }
-  if (/discarded|no tab with id|frame was removed|receiving end does not exist/i.test(message)) {
-    return { reason: 'document_unavailable' };
+  if (/no tab with id/i.test(message)) {
+    return { reason: 'document_unavailable', terminal: true };
   }
-  if (tab?.status === 'loading') {
-    return { reason: 'document_unavailable' };
+  if (tab?.discarded || tab?.status === 'loading' || /discarded|frame was removed|receiving end does not exist/i.test(message)) {
+    return { reason: 'document_unavailable', terminal: false };
   }
-  return { reason: 'unknown' };
+  return { reason: 'unknown', terminal: false };
 }
 
 async function readDocumentVisibilityState(tabId) {
@@ -918,7 +918,7 @@ async function waitForDocumentVisible(tabId, timeoutMs = 1500) {
       last = hiddenVisibilityResult(raced.value.visibilityState);
     } else {
       last = failedVisibilityResult(raced.value?.reason || 'unknown');
-      if (last.reason === 'host_permission_denied' || last.reason === 'document_unavailable') break;
+      if (raced.value?.terminal) break;
     }
 
     const sleepFor = Math.min(50, remainingWaitMs(started, timeoutMs));

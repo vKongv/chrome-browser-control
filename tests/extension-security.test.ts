@@ -4294,6 +4294,86 @@ describe('extension background origin enforcement', () => {
     expect(result.warning).not.toMatch(/unless you pass allowHidden/);
   });
 
+  it('activate_tab keeps waiting when a loading document later becomes visible', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Loading',
+        url: 'https://allowed.example/docs',
+        windowId: 10,
+        status: 'loading'
+      }
+    ];
+    let remainingFailures = 1;
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      executeScriptError: (details) => {
+        if (typeof details.func !== 'function' || remainingFailures <= 0) return undefined;
+        remainingFailures -= 1;
+        tabs[0].status = 'complete';
+        return new Error('Could not establish connection. Receiving end does not exist.');
+      }
+    });
+
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 10,
+      active: true,
+      focused: true,
+      visibilityState: 'visible',
+      visible: true
+    });
+    expect(remainingFailures).toBe(0);
+  });
+
+  it('activate_tab keeps waiting when a discarded tab is restored after activation', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Discarded',
+        url: 'https://allowed.example/docs',
+        windowId: 11,
+        status: 'complete',
+        discarded: true
+      }
+    ];
+    let remainingFailures = 1;
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      executeScriptError: (details) => {
+        if (typeof details.func !== 'function' || remainingFailures <= 0) return undefined;
+        remainingFailures -= 1;
+        tabs[0].discarded = false;
+        return new Error('The tab is discarded');
+      }
+    });
+
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 11,
+      active: true,
+      focused: true,
+      visibilityState: 'visible',
+      visible: true
+    });
+    expect(tabs[0].discarded).toBe(false);
+    expect(remainingFailures).toBe(0);
+  });
+
   it('activate_tab focuses an already-active tab window without treating it as a no-op', async () => {
     const tabs = [
       {
