@@ -140,6 +140,18 @@ describe('registerBrowserTools', () => {
     }
   });
 
+  it('describes activate_tab visibility wait and result fields', () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    expect(String(server.configs.get('activate_tab')?.description)).toMatch(/visibilityState/);
+    expect(String(server.configs.get('activate_tab')?.description)).toMatch(/reason is present only when visible is false/);
+    expect(String(server.configs.get('activate_tab')?.description)).toMatch(/focused is not success/);
+    expect(String(server.configs.get('activate_tab')?.description)).toMatch(/only when visibilityState is hidden/);
+    expect(String(server.configs.get('activate_tab')?.description)).toMatch(/allowHidden will not help/);
+  });
+
   it('exposes documentId only on document-target tools and forwards list_frames tab targets', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();

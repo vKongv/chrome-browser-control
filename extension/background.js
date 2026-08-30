@@ -816,16 +816,149 @@ async function waitForTabActive(tabId, timeoutMs = 1500) {
   throw new Error('Timed out waiting for Chrome tab activation');
 }
 
+function remainingWaitMs(started, timeoutMs) {
+  return timeoutMs - (Date.now() - started);
+}
+
+function raceDeadline(promise, remainingMs) {
+  if (remainingMs <= 0) return Promise.resolve({ deadline: true });
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ deadline: true }), remainingMs);
+    Promise.resolve(promise).then(
+      (value) => finish({ deadline: false, value }),
+      (error) => finish({ deadline: false, error })
+    );
+  });
+}
+
+async function classifyVisibilityReadError(tabId, error) {
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch (_error) {
+    return { reason: 'document_unavailable', terminal: true };
+  }
+
+  if (!isInjectableUrl(tab?.url || '')) {
+    return { reason: 'document_unavailable', terminal: true };
+  }
+
+  if (tab?.url && !(await hasDocumentHostPermission(tab.url))) {
+    return { reason: 'host_permission_denied', terminal: true };
+  }
+
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (/cannot access contents|host permission/i.test(message)) {
+    return { reason: 'host_permission_denied', terminal: true };
+  }
+  if (/no tab with id/i.test(message)) {
+    return { reason: 'document_unavailable', terminal: true };
+  }
+  if (tab?.discarded || tab?.status === 'loading' || /discarded|frame was removed|receiving end does not exist/i.test(message)) {
+    return { reason: 'document_unavailable', terminal: false };
+  }
+  return { reason: 'unknown', terminal: false };
+}
+
+async function readDocumentVisibilityState(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => document.visibilityState
+    });
+    const visibilityState = results?.[0]?.result;
+    if (typeof visibilityState === 'string') {
+      return { ok: true, visibilityState };
+    }
+    return { ok: false, reason: 'unknown' };
+  } catch (error) {
+    return { ok: false, ...(await classifyVisibilityReadError(tabId, error)) };
+  }
+}
+
+function hiddenVisibilityResult(visibilityState) {
+  return {
+    visibilityState,
+    visible: false,
+    reason: visibilityState === 'hidden' ? 'hidden' : 'unknown'
+  };
+}
+
+function failedVisibilityResult(reason) {
+  return {
+    visibilityState: 'unknown',
+    visible: false,
+    reason
+  };
+}
+
+async function waitForDocumentVisible(tabId, timeoutMs = 1500) {
+  const started = Date.now();
+  let last = failedVisibilityResult('unknown');
+
+  while (true) {
+    const remaining = remainingWaitMs(started, timeoutMs);
+    if (remaining <= 0) break;
+
+    // A stalled renderer can leave executeScript pending; bound each probe.
+    const raced = await raceDeadline(readDocumentVisibilityState(tabId), remaining);
+    if (raced.deadline) break;
+    if (raced.error) {
+      last = failedVisibilityResult('unknown');
+    } else if (raced.value?.ok && raced.value.visibilityState === 'visible') {
+      return { visibilityState: 'visible', visible: true };
+    } else if (raced.value?.ok) {
+      last = hiddenVisibilityResult(raced.value.visibilityState);
+    } else {
+      last = failedVisibilityResult(raced.value?.reason || 'unknown');
+      if (raced.value?.terminal) break;
+    }
+
+    const sleepFor = Math.min(50, remainingWaitMs(started, timeoutMs));
+    if (sleepFor <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, sleepFor));
+  }
+
+  return last;
+}
+
+function activateTabVisibilityWarning(reason) {
+  if (reason === 'hidden') {
+    return 'Document is hidden. Writes will fail with DOCUMENT_HIDDEN unless you pass allowHidden=true.';
+  }
+  if (reason === 'host_permission_denied') {
+    return 'DOCUMENT_HOST_PERMISSION_DENIED: Chrome host permission is not granted for this tab. Grant it in the extension popup, then retry activate_tab. allowHidden will not help.';
+  }
+  if (reason === 'document_unavailable') {
+    return 'Document is unavailable (discarded, still loading, or restricted). Reload the tab and retry activate_tab. allowHidden will not help.';
+  }
+  return 'Could not confirm document visibility. Retry activate_tab. allowHidden will not help.';
+}
+
 async function activateTab(tabId) {
   await chrome.tabs.update(tabId, { active: true });
   const tab = await waitForTabActive(tabId);
   const focusedWindow = await chrome.windows.update(tab.windowId, { focused: true });
-  return {
+  const visibility = await waitForDocumentVisible(tabId);
+  const result = {
     tabId: tab.id,
     windowId: tab.windowId,
     active: tab.active,
-    focused: focusedWindow.focused
+    focused: focusedWindow.focused,
+    visibilityState: visibility.visibilityState,
+    visible: visibility.visible
   };
+  if (visibility.visible) return result;
+  result.reason = visibility.reason;
+  result.warning = activateTabVisibilityWarning(visibility.reason);
+  return result;
 }
 
 function intersectCropBounds(bounds, viewport, padding = 0) {
