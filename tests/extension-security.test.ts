@@ -289,6 +289,16 @@ function loadBackgroundHarness({
         const targetedError = executeScriptError?.(details);
         if (targetedError) throw targetedError;
         if ((details.files as string[] | undefined)?.includes('content.js')) contentListenerReady = true;
+        if (typeof details.func === 'function') {
+          const tabId = (details.target as { tabId?: number } | undefined)?.tabId;
+          const tab = tabs.find((candidate) => candidate.id === tabId);
+          const pendingReads = Number(tab?._visibilityAfterReads ?? 0);
+          if (tab && pendingReads > 0) {
+            tab._visibilityAfterReads = pendingReads - 1;
+            return [{ result: tab._pendingVisibilityState ?? 'hidden' }];
+          }
+          return [{ result: tab?._visibilityState ?? 'visible' }];
+        }
         return undefined;
       }
     }
@@ -4000,7 +4010,9 @@ describe('extension background origin enforcement', () => {
       tabId: 1,
       windowId: 7,
       active: true,
-      focused: true
+      focused: true,
+      visibilityState: 'visible',
+      visible: true
     });
     expect(tabs[0]).toMatchObject({
       id: 1,
@@ -4009,6 +4021,110 @@ describe('extension background origin enforcement', () => {
     });
     expect(background.windowUpdates).toEqual([{ windowId: 7, update: { focused: true } }]);
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([]);
+  });
+
+  it('activate_tab waits until document visibility becomes visible', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: false,
+        highlighted: false,
+        title: 'Background',
+        url: 'https://allowed.example/docs',
+        windowId: 7,
+        status: 'complete',
+        _visibilityAfterReads: 2
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 7,
+      active: true,
+      focused: true,
+      visibilityState: 'visible',
+      visible: true
+    });
+    const visibilityProbes = background.injectionTargets.filter(
+      (details: Record<string, unknown>) => typeof details.func === 'function'
+    );
+    expect(visibilityProbes).toHaveLength(3);
+  });
+
+  it('activate_tab reports hidden visibility instead of treating focused as success', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Hidden',
+        url: 'https://allowed.example/docs',
+        windowId: 4,
+        status: 'complete',
+        _visibilityState: 'hidden'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 4,
+      active: true,
+      focused: true,
+      visibilityState: 'hidden',
+      visible: false,
+      warning: 'Document is not visible. Writes will fail with DOCUMENT_HIDDEN unless you pass allowHidden=true.'
+    });
+    expect(background.windowUpdates).toEqual([{ windowId: 4, update: { focused: true } }]);
+  });
+
+  it('activate_tab reports unknown visibility when the document cannot be read', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Restricted',
+        url: 'https://allowed.example/docs',
+        windowId: 2,
+        status: 'complete'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      executeScriptError: (details) =>
+        typeof details.func === 'function' ? new Error('Could not inject script') : undefined
+    });
+
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 2,
+      active: true,
+      focused: true,
+      visibilityState: 'unknown',
+      visible: false,
+      warning: 'Document is not visible. Writes will fail with DOCUMENT_HIDDEN unless you pass allowHidden=true.'
+    });
   });
 
   it('activate_tab focuses an already-active tab window without treating it as a no-op', async () => {
@@ -4036,7 +4152,9 @@ describe('extension background origin enforcement', () => {
       tabId: 1,
       windowId: 3,
       active: true,
-      focused: true
+      focused: true,
+      visibilityState: 'visible',
+      visible: true
     });
     expect(tabs[0].url).toBe('https://allowed.example/docs');
     expect(background.windowUpdates).toEqual([{ windowId: 3, update: { focused: true } }]);

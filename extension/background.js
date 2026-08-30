@@ -816,16 +816,53 @@ async function waitForTabActive(tabId, timeoutMs = 1500) {
   throw new Error('Timed out waiting for Chrome tab activation');
 }
 
+async function readDocumentVisibilityState(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => document.visibilityState
+    });
+    const visibilityState = results?.[0]?.result;
+    return typeof visibilityState === 'string' ? visibilityState : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function waitForDocumentVisible(tabId, timeoutMs = 1500) {
+  const started = Date.now();
+  let visibilityState = null;
+  while (Date.now() - started <= timeoutMs) {
+    visibilityState = await readDocumentVisibilityState(tabId);
+    if (visibilityState === 'visible') {
+      return { visibilityState, visible: true };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return {
+    visibilityState: visibilityState || 'unknown',
+    visible: false
+  };
+}
+
 async function activateTab(tabId) {
   await chrome.tabs.update(tabId, { active: true });
   const tab = await waitForTabActive(tabId);
   const focusedWindow = await chrome.windows.update(tab.windowId, { focused: true });
-  return {
+  const visibility = await waitForDocumentVisible(tabId);
+  const result = {
     tabId: tab.id,
     windowId: tab.windowId,
     active: tab.active,
-    focused: focusedWindow.focused
+    focused: focusedWindow.focused,
+    visibilityState: visibility.visibilityState,
+    visible: visibility.visible
   };
+  if (!visibility.visible) {
+    result.warning =
+      'Document is not visible. Writes will fail with DOCUMENT_HIDDEN unless you pass allowHidden=true.';
+  }
+  return result;
 }
 
 function intersectCropBounds(bounds, viewport, padding = 0) {

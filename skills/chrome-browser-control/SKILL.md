@@ -34,7 +34,7 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
 
 2. Pick a tab deliberately.
    - Use `list_tabs` for existing pages.
-   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. By default focus is unchanged; pass `active: true` only when the user should see that tab. New tabs without a target stay in the background unless `active: true`. Use `activate_tab` to focus a tab and its window without navigating.
+   - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. By default focus is unchanged; pass `active: true` only when the user should see that tab. New tabs without a target stay in the background unless `active: true`. Use `activate_tab` to raise a tab and its window without navigating. Read `visible` / `visibilityState` from the result; do not treat `focused` as success.
    - After `navigate`, verify the landing entity with `requestedUrl`, `finalUrl`, and `redirected` (`url` aliases `finalUrl`) — especially after vanity URLs or redirects.
    - For multi-step work, call `claim_tab` (advisory by default) and keep the returned `sessionTabId`.
    - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases. Exclusive leases are tab-level only — they do not isolate whole browsers like separate remote sessions.
@@ -50,7 +50,7 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
    - Use `extract_elements` for bounded selector extraction instead of raw JavaScript evaluation.
 
 4. Act from fresh state.
-   - Click/type using refs from a recent snapshot or query result. If click, type, `click_at`, or `keypress` fail with `DOCUMENT_HIDDEN`, call `activate_tab` and retry. Pass `allowHidden: true` only when you intentionally need background-tab writes.
+   - Click/type using refs from a recent snapshot or query result. If click, type, `click_at`, or `keypress` fail with `DOCUMENT_HIDDEN`, call `activate_tab` and retry immediately. Read `visible` / `visibilityState` from the result. Pass `allowHidden: true` only when `activate_tab` returns `visible: false` and you still need the write, or when you intentionally need background-tab writes.
    - Use `perform_actions` when you already know a short ordered sequence (up to 10 steps) of `click`, `type`, `scroll`, or `keypress` actions on the same tab; one terminal `after` applies to the whole batch on full success. Snapshot refs can go stale mid-batch — refresh before batching when the page may change between steps.
    - Use single act tools when steps are uncertain, you need per-action `after`, or the flow includes `click_at`.
    - When refs miss or the control is canvas/custom-drawn, use `visible_snapshot` (or viewport bounds from `query_elements`) then `click_at` — not a screenshot-first hunt.
@@ -79,7 +79,7 @@ When the happy path fails, try these bounded recoveries before declaring the pag
 - **Dialogs / overlays:** compact snapshots scope to a visible modal (`aria-modal="true"` or `<dialog>` shown with `showModal()`). Other visible `role="dialog"` nodes are included in the current scope and do not steal it. Hidden or closed dialogs have no effect. To see the page behind a modal, pass `scope: "document"` or `scope: "main"`. To hide dialogs again, pass `ignoreRoles: ["dialog"]` or `["alertdialog"]` (both hide `dialog` and `alertdialog`). `ignoreRoles: []` includes dialogs in the current scope without changing the modal auto-scope. `mode: "full"` is the unscoped legacy snapshot. Target a dialog inside an iframe with `query_elements` / `list_frames` — a top-document snapshot does not see iframe modals. Stacked native modals pick the one that currently contains focus; if focus has left and opening order differs from DOM order, the wrong dialog can win — there is no public top-layer API to do better.
 - **Iframes:** call `list_frames`, then pass the operable `documentId` to DOM tools. Exact document targets fail with `DOCUMENT_*` errors and never fall back — pick a fresh id if stale.
 - **Coordinate clicks:** from `visible_snapshot` or `query_elements` bounds, click the center with `click_at`, then verify with a targeted `wait_for` / small snapshot. Prefer this over screenshots for interaction.
-- **Hidden document / ignored writes:** `click`, `type`, `click_at`, `keypress`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Scroll steps stay unguarded. Call `activate_tab`, then retry. Do not treat `screenshot.activated: false` as that recovery — it only means the tab was already active in its window.
+- **Hidden document / ignored writes:** `click`, `type`, `click_at`, `keypress`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Scroll steps stay unguarded. Call `activate_tab`, then retry. If `activate_tab` returns `visible: false`, the window could not be raised — pass `allowHidden: true` only then, or when you intentionally need a background write. Do not treat `focused` or `screenshot.activated: false` as that recovery.
 - **Focus without hijacking the user:** leave `navigate` at default (focus unchanged). Pass `active: true` only when visibility is required. Use `activate_tab` when a later write needs the tab and window focused. New untargeted tabs stay in the background unless activated. Avoid `screenshot` while the user is browsing the same window.
 
 Honest capability limits (do not invent workarounds):
@@ -101,7 +101,7 @@ If a needed capability is in the limits list, stop and tell the user what is mis
 - Structured content extraction: prefer `extract_elements`, `extract_feed_posts`, or DOM tables over screenshots when the data is in the DOM.
 - Infinite scroll or feeds: `collect_scroll` (use `until` / nested `scroll` when useful); use `extract_feed_posts` first when post heuristics fit.
 - Multi-step form/focus chains on one tab: `perform_actions` (not `click_at`).
-- Focus without navigating: `activate_tab`.
+- Focus without navigating: `activate_tab` (check `visible` before retrying writes).
 - Post-action synchronization: `wait_for`.
 - Debugging: `page_status`, then `console_logs`.
 - Visual proof: `screenshot` (optionally cropped) when the user asks for pixels or DOM tools are insufficient.
