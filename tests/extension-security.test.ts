@@ -4306,7 +4306,7 @@ describe('extension background origin enforcement', () => {
         status: 'loading'
       }
     ];
-    let remainingFailures = 1;
+    let visibilityProbes = 0;
     const background = loadBackgroundHarness({
       settings: {
         bridgeUrl: 'ws://127.0.0.1:8765',
@@ -4315,10 +4315,14 @@ describe('extension background origin enforcement', () => {
       },
       tabs,
       executeScriptError: (details) => {
-        if (typeof details.func !== 'function' || remainingFailures <= 0) return undefined;
-        remainingFailures -= 1;
+        if (typeof details.func !== 'function') return undefined;
+        visibilityProbes += 1;
+        if (visibilityProbes === 1) {
+          expect(tabs[0].status).toBe('loading');
+          return new Error('Transient injection failure');
+        }
         tabs[0].status = 'complete';
-        return new Error('Could not establish connection. Receiving end does not exist.');
+        return undefined;
       }
     });
 
@@ -4330,7 +4334,10 @@ describe('extension background origin enforcement', () => {
       visibilityState: 'visible',
       visible: true
     });
-    expect(remainingFailures).toBe(0);
+    expect(visibilityProbes).toBe(2);
+    expect(
+      background.injectionTargets.filter((details: Record<string, unknown>) => typeof details.func === 'function')
+    ).toHaveLength(2);
   });
 
   it('activate_tab keeps waiting when a discarded tab is restored after activation', async () => {
@@ -4346,7 +4353,7 @@ describe('extension background origin enforcement', () => {
         discarded: true
       }
     ];
-    let remainingFailures = 1;
+    let visibilityProbes = 0;
     const background = loadBackgroundHarness({
       settings: {
         bridgeUrl: 'ws://127.0.0.1:8765',
@@ -4355,10 +4362,14 @@ describe('extension background origin enforcement', () => {
       },
       tabs,
       executeScriptError: (details) => {
-        if (typeof details.func !== 'function' || remainingFailures <= 0) return undefined;
-        remainingFailures -= 1;
+        if (typeof details.func !== 'function') return undefined;
+        visibilityProbes += 1;
+        if (visibilityProbes === 1) {
+          expect(tabs[0].discarded).toBe(true);
+          return new Error('Transient injection failure');
+        }
         tabs[0].discarded = false;
-        return new Error('The tab is discarded');
+        return undefined;
       }
     });
 
@@ -4371,7 +4382,10 @@ describe('extension background origin enforcement', () => {
       visible: true
     });
     expect(tabs[0].discarded).toBe(false);
-    expect(remainingFailures).toBe(0);
+    expect(visibilityProbes).toBe(2);
+    expect(
+      background.injectionTargets.filter((details: Record<string, unknown>) => typeof details.func === 'function')
+    ).toHaveLength(2);
   });
 
   it('activate_tab focuses an already-active tab window without treating it as a no-op', async () => {
