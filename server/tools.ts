@@ -642,7 +642,7 @@ export function registerBrowserTools(
     {
       title: 'Activate Chrome tab',
       description:
-        'Focus an allowed tab and its window without navigating. Waits until the document reports visibilityState visible or a short timeout elapses. Returns visibilityState and visible; focused is not success. Use this when click/type fail with DOCUMENT_HIDDEN. If visible is false, pass allowHidden=true on the next write. Does not change the page URL.',
+        'Focus an allowed tab and its window without navigating. Waits until the document reports visibilityState visible or a short timeout elapses. Returns visibilityState, visible, and reason; focused is not success. Use this when click/type fail with DOCUMENT_HIDDEN. Pass allowHidden=true only when visibilityState is hidden. If reason is host_permission_denied or document_unavailable, grant permission or reload; allowHidden will not help. Does not change the page URL.',
       inputSchema: {
         ...OptionalTabTarget
       }

@@ -292,6 +292,8 @@ function loadBackgroundHarness({
         if (typeof details.func === 'function') {
           const tabId = (details.target as { tabId?: number } | undefined)?.tabId;
           const tab = tabs.find((candidate) => candidate.id === tabId);
+          if (tab?._visibilityNeverSettles) return new Promise(() => undefined);
+          if (tab?._visibilityHold) await tab._visibilityHold;
           const pendingReads = Number(tab?._visibilityAfterReads ?? 0);
           if (tab && pendingReads > 0) {
             tab._visibilityAfterReads = pendingReads - 1;
@@ -332,12 +334,12 @@ function loadBackgroundHarness({
     globalThis: undefined,
     CBC_TEST_HARNESS: true,
     importScripts: () => undefined,
-    setTimeout: (callback: () => void, delay = 0) => {
-      now += Number(delay);
-      callback();
-      return 0;
-    },
-    clearTimeout,
+    setTimeout: (callback: () => void, delay = 0) =>
+      globalThis.setTimeout(() => {
+        now += Number(delay) || 0;
+        callback();
+      }, 0),
+    clearTimeout: (id: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(id),
     fetch: async () => ({
       blob: async () => ({})
     }),
@@ -365,6 +367,9 @@ function loadBackgroundHarness({
     tabGetCount: () => tabGetCount,
     resetTabGetCount() {
       tabGetCount = 0;
+    },
+    currentTime() {
+      return now;
     },
     advanceTime(ms: number) {
       now += ms;
@@ -4088,7 +4093,8 @@ describe('extension background origin enforcement', () => {
       focused: true,
       visibilityState: 'hidden',
       visible: false,
-      warning: 'Document is not visible. Writes will fail with DOCUMENT_HIDDEN unless you pass allowHidden=true.'
+      reason: 'hidden',
+      warning: 'Document is hidden. Writes will fail with DOCUMENT_HIDDEN unless you pass allowHidden=true.'
     });
     expect(background.windowUpdates).toEqual([{ windowId: 4, update: { focused: true } }]);
   });
@@ -4116,15 +4122,176 @@ describe('extension background origin enforcement', () => {
         typeof details.func === 'function' ? new Error('Could not inject script') : undefined
     });
 
-    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+    const result = await background.handleBridgeRequest('activate_tab', { tabId: 1 });
+    expect(result).toEqual({
       tabId: 1,
       windowId: 2,
       active: true,
       focused: true,
       visibilityState: 'unknown',
       visible: false,
-      warning: 'Document is not visible. Writes will fail with DOCUMENT_HIDDEN unless you pass allowHidden=true.'
+      reason: 'unknown',
+      warning: 'Could not confirm document visibility. Retry activate_tab. allowHidden will not help.'
     });
+    expect(result.warning).not.toMatch(/unless you pass allowHidden/);
+  });
+
+  it('activate_tab bounds a visibility probe that never settles', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Stalled',
+        url: 'https://allowed.example/docs',
+        windowId: 5,
+        status: 'complete',
+        _visibilityNeverSettles: true
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    const started = Date.now();
+    await expect(background.handleBridgeRequest('activate_tab', { tabId: 1 })).resolves.toEqual({
+      tabId: 1,
+      windowId: 5,
+      active: true,
+      focused: true,
+      visibilityState: 'unknown',
+      visible: false,
+      reason: 'unknown',
+      warning: 'Could not confirm document visibility. Retry activate_tab. allowHidden will not help.'
+    });
+    expect(background.currentTime()).toBeLessThanOrEqual(1500);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('activate_tab ignores a visibility probe that settles after the deadline', async () => {
+    let release: () => void = () => undefined;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Late',
+        url: 'https://allowed.example/docs',
+        windowId: 6,
+        status: 'complete',
+        _visibilityHold: hold,
+        _visibilityState: 'visible'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs
+    });
+
+    const started = Date.now();
+    const resultPromise = background.handleBridgeRequest('activate_tab', { tabId: 1 });
+    await expect(resultPromise).resolves.toEqual({
+      tabId: 1,
+      windowId: 6,
+      active: true,
+      focused: true,
+      visibilityState: 'unknown',
+      visible: false,
+      reason: 'unknown',
+      warning: 'Could not confirm document visibility. Retry activate_tab. allowHidden will not help.'
+    });
+    expect(background.currentTime()).toBeLessThanOrEqual(1500);
+    expect(Date.now() - started).toBeLessThan(500);
+    release();
+  });
+
+  it('activate_tab reports host permission denial without recommending allowHidden', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Denied',
+        url: 'https://allowed.example/docs',
+        windowId: 8,
+        status: 'complete'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      grantedOrigins: [],
+      executeScriptError: (details) =>
+        typeof details.func === 'function' ? new Error('Cannot access contents of the page') : undefined
+    });
+
+    const result = await background.handleBridgeRequest('activate_tab', { tabId: 1 });
+    expect(result).toEqual({
+      tabId: 1,
+      windowId: 8,
+      active: true,
+      focused: true,
+      visibilityState: 'unknown',
+      visible: false,
+      reason: 'host_permission_denied',
+      warning:
+        'DOCUMENT_HOST_PERMISSION_DENIED: Chrome host permission is not granted for this tab. Grant it in the extension popup, then retry activate_tab. allowHidden will not help.'
+    });
+    expect(result.warning).not.toMatch(/unless you pass allowHidden/);
+  });
+
+  it('activate_tab reports an unavailable document without recommending allowHidden', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Loading',
+        url: 'https://allowed.example/docs',
+        windowId: 9,
+        status: 'loading'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      executeScriptError: (details) =>
+        typeof details.func === 'function' ? new Error('Could not establish connection. Receiving end does not exist.') : undefined
+    });
+
+    const result = await background.handleBridgeRequest('activate_tab', { tabId: 1 });
+    expect(result).toEqual({
+      tabId: 1,
+      windowId: 9,
+      active: true,
+      focused: true,
+      visibilityState: 'unknown',
+      visible: false,
+      reason: 'document_unavailable',
+      warning:
+        'Document is unavailable (discarded, still loading, or restricted). Reload the tab and retry activate_tab. allowHidden will not help.'
+    });
+    expect(result.warning).not.toMatch(/unless you pass allowHidden/);
   });
 
   it('activate_tab focuses an already-active tab window without treating it as a no-op', async () => {
