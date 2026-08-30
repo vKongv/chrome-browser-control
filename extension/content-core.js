@@ -30,6 +30,7 @@ const MAX_EXCLUDE_SELECTORS = 20;
 const MAX_EXCLUDE_SELECTOR_LENGTH = 500;
 const MAX_IGNORE_ROLES = 20;
 const DEFAULT_IGNORE_ROLES = ['dialog'];
+const DIALOG_SELECTOR = 'dialog, [role="dialog"], [role="alertdialog"]';
 const MIN_CONTENT_STABLE_TEXT_LENGTH = 50;
 
 let refTtlMs = DEFAULT_REF_TTL_MS;
@@ -248,7 +249,7 @@ function isGenuinelyModalDialog(element) {
 }
 
 function findVisibleModalDialog(documentRef) {
-  const modals = [...documentRef.querySelectorAll('dialog, [role="dialog"], [role="alertdialog"]')].filter(
+  const modals = [...documentRef.querySelectorAll(DIALOG_SELECTOR)].filter(
     isGenuinelyModalDialog
   );
   if (!modals.length) return null;
@@ -268,7 +269,7 @@ function findVisibleModalDialog(documentRef) {
 }
 
 function hasVisibleDialogRole(documentRef) {
-  for (const element of documentRef.querySelectorAll('dialog, [role="dialog"]')) {
+  for (const element of documentRef.querySelectorAll(DIALOG_SELECTOR)) {
     if (isDialogSubtreeVisible(element) && roleFor(element).toLowerCase() === 'dialog') return true;
   }
   return false;
