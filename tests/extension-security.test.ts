@@ -93,11 +93,14 @@ function loadBackgroundHarness({
   const debuggerAttached = new Set<number>();
   let debuggerAttachCount = 0;
   let debuggerDetachCount = 0;
+  const localStorageWrites: Array<Record<string, unknown>> = [];
+  const localStorageRemovals: string[] = [];
   const storageChangedListeners: Array<(changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, area: string) => void> =
     [];
   const runtimeMessageListeners: Array<
     (message: Record<string, unknown>, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void
   > = [];
+  const runtimeMessageReturns: Array<boolean | void> = [];
   const sessionData: Record<string, unknown> = { ...(sessionStore ?? {}) };
   const FakeDate = class extends Date {
     static now() {
@@ -137,7 +140,12 @@ function loadBackgroundHarness({
     storage: {
       local: {
         get: async (defaults: Record<string, unknown>) => ({ ...defaults, ...settings }),
-        set: async () => undefined
+        set: async (items: Record<string, unknown>) => {
+          localStorageWrites.push(items);
+        },
+        remove: async (key: string) => {
+          localStorageRemovals.push(key);
+        }
       },
       session: {
         get: readSessionStore,
@@ -435,6 +443,9 @@ function loadBackgroundHarness({
       for (const listener of tabRemovedListeners) listener(tabId);
     },
     sessionStore: sessionData,
+    localStorageWrites,
+    localStorageRemovals,
+    runtimeMessageReturns,
     debuggerCommands,
     debuggerAttached,
     debuggerAttachCount() {
@@ -466,7 +477,9 @@ function loadBackgroundHarness({
         };
         let asyncResponse = false;
         for (const listener of runtimeMessageListeners) {
-          if (listener(message, {}, sendResponse) === true) asyncResponse = true;
+          const listenerResult = listener(message, {}, sendResponse);
+          runtimeMessageReturns.push(listenerResult);
+          if (listenerResult === true) asyncResponse = true;
         }
         if (!asyncResponse && !settled) resolve(undefined);
       });
@@ -591,6 +604,7 @@ describe('extension security helpers', () => {
     ]);
   });
 });
+
 
 describe('extension background origin enforcement', () => {
   const token = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
@@ -4545,6 +4559,48 @@ describe('extension background origin enforcement', () => {
   });
 });
 
+describe('extension background adapter status storage', () => {
+  const token = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
+
+  it('T6: the adapter-status branch writes a payload and removes it on null', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: []
+      },
+      tabs: []
+    });
+    const adapterStatus = {
+      adapterProtocolVersion: 7,
+      registeredToolCount: 12,
+      mcpClientCount: 3,
+      updatedAt: 4321
+    };
+
+    await expect(
+      background.sendRuntimeMessage({
+        target: 'cbc-background',
+        kind: 'adapter-status',
+        adapterStatus
+      })
+    ).resolves.toEqual({ ok: true });
+    expect(background.localStorageWrites).toContainEqual({ adapterStatus });
+    expect(background.localStorageRemovals).toEqual([]);
+    expect(background.runtimeMessageReturns.at(-1)).toBe(true);
+
+    await expect(
+      background.sendRuntimeMessage({
+        target: 'cbc-background',
+        kind: 'adapter-status',
+        adapterStatus: null
+      })
+    ).resolves.toEqual({ ok: true });
+    expect(background.localStorageRemovals).toContain('adapterStatus');
+    expect(background.runtimeMessageReturns.at(-1)).toBe(true);
+  });
+});
+
 describe('trusted chrome.debugger tier', () => {
   const token = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
   const allowedTab = {
@@ -5019,4 +5075,3 @@ describe('trusted chrome.debugger tier', () => {
     expect(background.debuggerCommands).toEqual([]);
   });
 });
-

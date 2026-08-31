@@ -125,7 +125,9 @@ async function connect(options = {}) {
     if (socket !== ws) return;
     socket = null;
     clearConnectTimeout();
-    chrome.storage.local.remove('adapterStatus').catch(() => undefined);
+    chrome.runtime
+      .sendMessage({ target: 'cbc-background', kind: 'adapter-status', adapterStatus: null })
+      .catch(() => undefined);
     if (event.code === 1008) {
       setStatus(`auth_failed: ${event.reason || 'bridge rejected pairing'}`).catch(() => undefined);
     } else if (!opened && event.code === 1006) {
@@ -163,17 +165,16 @@ async function connect(options = {}) {
         return;
       }
       if (message?.kind === 'adapter_status') {
-        chrome.storage.local
-          .set({
-            adapterStatus: {
-              adapterProtocolVersion:
-                typeof message.adapterProtocolVersion === 'number' ? message.adapterProtocolVersion : null,
-              registeredToolCount:
-                typeof message.registeredToolCount === 'number' ? message.registeredToolCount : 0,
-              mcpClientCount: typeof message.mcpClientCount === 'number' ? message.mcpClientCount : 0,
-              updatedAt: typeof message.updatedAt === 'number' ? message.updatedAt : Date.now()
-            }
-          })
+        const adapterStatus = {
+          adapterProtocolVersion:
+            typeof message.adapterProtocolVersion === 'number' ? message.adapterProtocolVersion : null,
+          registeredToolCount:
+            typeof message.registeredToolCount === 'number' ? message.registeredToolCount : 0,
+          mcpClientCount: typeof message.mcpClientCount === 'number' ? message.mcpClientCount : 0,
+          updatedAt: typeof message.updatedAt === 'number' ? message.updatedAt : Date.now()
+        };
+        chrome.runtime
+          .sendMessage({ target: 'cbc-background', kind: 'adapter-status', adapterStatus })
           .catch(() => undefined);
         return;
       }
