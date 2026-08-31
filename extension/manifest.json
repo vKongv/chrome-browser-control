@@ -10,7 +10,8 @@
     "storage",
     "activeTab",
     "offscreen",
-    "webNavigation"
+    "webNavigation",
+    "debugger"
   ],
   "optional_host_permissions": [
     "http://*/*",

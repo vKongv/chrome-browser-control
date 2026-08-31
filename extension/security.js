@@ -136,6 +136,22 @@
     return isWildcardOriginPatterns(patterns) ? [SCREENSHOT_ALL_URLS_PERMISSION] : [];
   }
 
+  function uniqueStrings(values) {
+    const seen = new Set();
+    const result = [];
+    for (const value of values || []) {
+      const item = String(value || '');
+      if (!item || seen.has(item)) continue;
+      seen.add(item);
+      result.push(item);
+    }
+    return result;
+  }
+
+  function collectOptionalPermissionOrigins(patterns) {
+    return uniqueStrings([...getHostPermissionOrigins(patterns), ...getScreenshotPermissionOrigins(patterns)]);
+  }
+
   function patternOrigin(pattern) {
     return String(pattern || '').endsWith('/*') ? String(pattern).slice(0, -2) : String(pattern || '');
   }
@@ -182,6 +198,7 @@
     describeAllowedOrigins,
     getHostPermissionOrigins,
     getScreenshotPermissionOrigins,
+    collectOptionalPermissionOrigins,
     isWildcardOriginPatterns,
     isUrlAllowed,
     urlsEquivalent

@@ -41,7 +41,7 @@
     "broker": "tsx server/broker-main.ts",
     "mcp": "tsx server/index.ts",
     "start": "tsx server/index.ts",
-    "build": "tsc -p tsconfig.build.json && node --check extension/security.js && node --check extension/background.js && node --check extension/content-core.js && node --check extension/content.js && node --check extension/offscreen.js && node --check extension/popup.js",
+    "build": "tsc -p tsconfig.build.json && node --check extension/security.js && node --check extension/cdp.js && node --check extension/background.js && node --check extension/content-core.js && node --check extension/content.js && node --check extension/offscreen.js && node --check extension/popup.js",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
     "test": "vitest run",

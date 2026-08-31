@@ -43,7 +43,9 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
     await brokerClient.connect();
   };
 
-  console.error('[chrome-browser-control] CDP fallback is unsupported in the MCP adapter; use the extension bridge.');
+  console.error(
+    '[chrome-browser-control] Trusted CDP input is gated by the extension popup toggle; the MCP adapter does not open a raw CDP socket.'
+  );
 
   const ownerId = crypto.randomUUID();
 

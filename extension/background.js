@@ -1,4 +1,7 @@
-if (typeof importScripts === 'function') importScripts('security.js');
+if (typeof importScripts === 'function') {
+  importScripts('security.js');
+  importScripts('cdp.js');
+}
 
 const {
   DEFAULT_BRIDGE_URL,
@@ -16,12 +19,14 @@ const {
 const DEFAULTS = {
   bridgeUrl: DEFAULT_BRIDGE_URL,
   token: '',
-  allowedOrigins: DEFAULT_ALLOWED_ORIGINS
+  allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
+  enableCdp: false
 };
 
 const EXTENSION_PROTOCOL_MARKER = {
-  protocolVersion: 6,
+  protocolVersion: 7,
   features: [
+    'cdp-trusted-input',
     'document-targeting',
     'act-observe-budget',
     'act-observe',
@@ -56,6 +61,10 @@ const PERFORM_ACTION_STEP_ALLOWLIST = ['click', 'type', 'scroll', 'keypress'];
 const DEFAULT_EXCLUSIVE_LEASE_TTL_MS = 300_000;
 const MAX_EXCLUSIVE_LEASE_TTL_MS = 3_600_000;
 const CLAIM_STATE_STORAGE_KEY = 'cbcClaimState';
+const CDP_STATE_STORAGE_KEY = 'cbcCdpAttachState';
+const CDP_INPUT_ACTIONS = new Set(['click', 'type', 'keypress', 'click_at']);
+const { assertCdpMethod, boundedAttachTtl, clickCommands, typeTextCommands, keypressCommands } =
+  globalThis.BrowserControlCdp;
 
 let status = 'disconnected';
 let sessionName = '';
@@ -63,6 +72,10 @@ let nextClaimId = 1;
 let currentSessionTabId = '';
 const claimedTabs = new Map();
 const tabLeases = new Map();
+const cdpAttachments = new Map();
+const cdpFailClosed = new Map();
+const cdpTtlTimers = new Map();
+const cdpExpectedDetach = new Set();
 
 function serializeClaimState() {
   return {
@@ -131,12 +144,313 @@ async function hydrateClaimState() {
 
 const claimStateReady = hydrateClaimState();
 
+function serializeCdpState() {
+  return {
+    attachments: [...cdpAttachments.entries()],
+    failClosed: [...cdpFailClosed.entries()]
+  };
+}
+
+function persistCdpState() {
+  if (!chrome.storage?.session?.set) return Promise.resolve();
+  return chrome.storage.session.set({ [CDP_STATE_STORAGE_KEY]: serializeCdpState() }).catch(() => undefined);
+}
+
+function applyStoredCdpState(stored) {
+  if (!stored || typeof stored !== 'object') return;
+  cdpAttachments.clear();
+  if (Array.isArray(stored.attachments)) {
+    for (const entry of stored.attachments) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const tabId = Number(entry[0]);
+      const attachment = entry[1];
+      if (!Number.isFinite(tabId) || !attachment || typeof attachment !== 'object') continue;
+      cdpAttachments.set(tabId, { ...attachment, tabId });
+    }
+  }
+  cdpFailClosed.clear();
+  if (Array.isArray(stored.failClosed)) {
+    for (const entry of stored.failClosed) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const tabId = Number(entry[0]);
+      const reason = entry[1];
+      if (!Number.isFinite(tabId) || !reason || typeof reason !== 'object') continue;
+      cdpFailClosed.set(tabId, reason);
+    }
+  }
+}
+
+function clearCdpTtlTimer(tabId) {
+  const timer = cdpTtlTimers.get(tabId);
+  if (timer) clearTimeout(timer);
+  cdpTtlTimers.delete(tabId);
+}
+
+function markCdpFailClosed(tabId, prefix, detail) {
+  cdpFailClosed.set(tabId, { prefix, detail });
+}
+
+function clearCdpFailClosed(tabId) {
+  if (tabId === undefined) {
+    cdpFailClosed.clear();
+    return;
+  }
+  cdpFailClosed.delete(tabId);
+}
+
+function attachedTabsReport() {
+  return [...cdpAttachments.values()].map((attachment) => ({
+    tabId: attachment.tabId,
+    sessionTabId: attachment.sessionTabId,
+    expiresAt: attachment.expiresAt
+  }));
+}
+
+function cdpError(prefix, detail) {
+  return new Error(`${prefix}: ${detail}`);
+}
+
+async function debuggerAttach(tabId) {
+  if (!chrome.debugger?.attach) {
+    throw cdpError('CDP_ATTACH_REFUSED', 'chrome.debugger is unavailable in this context');
+  }
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+  } catch (error) {
+    const message = error?.message || String(error || 'attach failed');
+    throw cdpError('CDP_ATTACH_REFUSED', message);
+  }
+}
+
+async function debuggerDetach(tabId) {
+  if (!chrome.debugger?.detach) return;
+  cdpExpectedDetach.add(tabId);
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch (_error) {
+    cdpExpectedDetach.delete(tabId);
+  }
+}
+
+async function sendCdpCommand(tabId, method, params) {
+  assertCdpMethod(method);
+  if (!chrome.debugger?.sendCommand) {
+    throw cdpError('CDP_ATTACH_REFUSED', 'chrome.debugger is unavailable in this context');
+  }
+  return await chrome.debugger.sendCommand({ tabId }, method, params || {});
+}
+
+async function sendCdpCommands(tabId, commands) {
+  for (const command of commands) {
+    await sendCdpCommand(tabId, command.method, command.params);
+  }
+}
+
+function dropCdpAttachment(tabId) {
+  clearCdpTtlTimer(tabId);
+  cdpAttachments.delete(tabId);
+}
+
+async function detachCdp(tabId, { failClosed = false, prefix, detail, skipDebugger = false } = {}) {
+  const attachment = cdpAttachments.get(tabId);
+  dropCdpAttachment(tabId);
+  if (!skipDebugger) await debuggerDetach(tabId);
+  if (failClosed && prefix) markCdpFailClosed(tabId, prefix, detail || 'debugger detached');
+  else clearCdpFailClosed(tabId);
+  await persistCdpState();
+  return attachment;
+}
+
+function scheduleCdpTtl(tabId) {
+  const attachment = cdpAttachments.get(tabId);
+  if (!attachment?.expiresAt) return;
+  clearCdpTtlTimer(tabId);
+  const delay = Math.max(0, attachment.expiresAt - Date.now());
+  const timer = setTimeout(() => {
+    if (!cdpAttachments.has(tabId)) return;
+    console.warn('[chrome-browser-control] CDP auto-detached tab', tabId, 'ttl expired');
+    void detachCdp(tabId, { failClosed: false });
+  }, delay);
+  cdpTtlTimers.set(tabId, timer);
+}
+
+function sweepExpiredCdpAttachments(now = Date.now()) {
+  let changed = false;
+  for (const [tabId, attachment] of [...cdpAttachments.entries()]) {
+    if (!attachment?.expiresAt || attachment.expiresAt > now) continue;
+    console.warn('[chrome-browser-control] CDP auto-detached tab', tabId, 'ttl expired');
+    dropCdpAttachment(tabId);
+    clearCdpFailClosed(tabId);
+    changed = true;
+    void debuggerDetach(tabId);
+  }
+  if (changed) void persistCdpState();
+}
+
+function getCdpRoutingState(tabId) {
+  sweepExpiredLeases();
+  sweepExpiredCdpAttachments();
+  const attachment = cdpAttachments.get(tabId);
+  if (attachment) return { mode: 'attached', attachment };
+  const failed = cdpFailClosed.get(tabId);
+  if (failed) return { mode: 'fail-closed', error: `${failed.prefix}: ${failed.detail}` };
+  return { mode: 'content' };
+}
+
+async function hydrateCdpState() {
+  if (!chrome.storage?.session?.get) return;
+  const stored = await chrome.storage.session.get(CDP_STATE_STORAGE_KEY).catch(() => undefined);
+  applyStoredCdpState(stored?.[CDP_STATE_STORAGE_KEY]);
+  const now = Date.now();
+  let changed = false;
+  for (const [tabId, attachment] of [...cdpAttachments.entries()]) {
+    const expired = Boolean(attachment?.expiresAt && attachment.expiresAt <= now);
+    dropCdpAttachment(tabId);
+    changed = true;
+    if (expired) {
+      clearCdpFailClosed(tabId);
+    } else {
+      // getTargets() reports attached:true without an owner. A live target after
+      // restart may be DevTools or another debugger; never resume stored privilege.
+      markCdpFailClosed(
+        tabId,
+        'CDP_DETACHED_BY_SUSPENSION',
+        'the debugger was detached when the service worker suspended. Call cdp_attach again.'
+      );
+    }
+    await debuggerDetach(tabId);
+  }
+  if (changed) await persistCdpState();
+}
+
+const cdpStateReady = hydrateCdpState();
+
+async function attachCdpForClaim(sessionTabId, ttlMs) {
+  sweepExpiredLeases();
+  const settings = await getSettings();
+  if (settings.enableCdp !== true) {
+    throw cdpError(
+      'CDP_NOT_ENABLED',
+      'trusted input is disabled. Enable it in the extension popup, then call cdp_attach.'
+    );
+  }
+  if (!sessionTabId || !claimedTabs.has(sessionTabId)) {
+    throw cdpError('CDP_TAB_NOT_CLAIMED', 'cdp_attach requires a claimed sessionTabId');
+  }
+  const claim = claimedTabs.get(sessionTabId);
+  const tab = await getTabIfExists(claim.tabId);
+  if (!tab) {
+    throw cdpError('CDP_TAB_NOT_CLAIMED', `claimed tab is no longer available for sessionTabId: ${sessionTabId}`);
+  }
+  if (!isInjectableUrl(tab.url || '') || !isUrlAllowed(tab.url || '', settings.allowedOrigins)) {
+    throw cdpError('CDP_ORIGIN_NOT_ALLOWED', `tab origin is outside Allowed Origins: ${tab.url || 'unknown URL'}`);
+  }
+  const ttl = boundedAttachTtl(ttlMs);
+  if (cdpAttachments.has(tab.id)) {
+    const existing = cdpAttachments.get(tab.id);
+    existing.sessionTabId = sessionTabId;
+    existing.expiresAt = Date.now() + ttl;
+    existing.ttlMs = ttl;
+    scheduleCdpTtl(tab.id);
+    clearCdpFailClosed(tab.id);
+    await persistCdpState();
+    return {
+      attached: true,
+      tabId: tab.id,
+      sessionTabId,
+      expiresAt: existing.expiresAt,
+      ttlMs: ttl,
+      inputPath: 'cdp'
+    };
+  }
+  await debuggerAttach(tab.id);
+  const attachment = {
+    tabId: tab.id,
+    sessionTabId,
+    attachedAt: Date.now(),
+    expiresAt: Date.now() + ttl,
+    ttlMs: ttl
+  };
+  cdpAttachments.set(tab.id, attachment);
+  clearCdpFailClosed(tab.id);
+  scheduleCdpTtl(tab.id);
+  await persistCdpState();
+  return {
+    attached: true,
+    tabId: tab.id,
+    sessionTabId,
+    expiresAt: attachment.expiresAt,
+    ttlMs: ttl,
+    inputPath: 'cdp'
+  };
+}
+
+async function detachCdpForTarget(params = {}) {
+  let tabId = params.tabId;
+  if (!tabId && params.sessionTabId) {
+    const claim = claimedTabs.get(params.sessionTabId);
+    tabId = claim?.tabId;
+  }
+  if (!tabId) {
+    const current = currentSessionTabId ? claimedTabs.get(currentSessionTabId) : undefined;
+    tabId = current?.tabId || cdpAttachments.keys().next().value;
+  }
+  if (!tabId || (!cdpAttachments.has(tabId) && !cdpFailClosed.has(tabId))) {
+    throw new Error('No CDP attachment matches the requested tab');
+  }
+  await detachCdp(tabId, { failClosed: false });
+  return { attached: false, tabId, inputPath: 'content' };
+}
+
+async function detachCdpForClaim(claim) {
+  if (!claim?.tabId) return;
+  if (!cdpAttachments.has(claim.tabId) && !cdpFailClosed.has(claim.tabId)) return;
+  await detachCdp(claim.tabId, { failClosed: false });
+}
+
+async function runCdpInputAction(tabId, action, params, allowedOrigins, options = {}) {
+  const prepareAction =
+    action === 'click'
+      ? 'cdp_prepare_click'
+      : action === 'type'
+        ? 'cdp_prepare_type'
+        : action === 'click_at'
+          ? 'cdp_prepare_click_at'
+          : 'cdp_prepare_keypress';
+  const prepared = await sendToContent(tabId, prepareAction, params, allowedOrigins, options);
+  if (action === 'click' || action === 'click_at') {
+    await sendCdpCommands(tabId, clickCommands(prepared.x, prepared.y));
+    return { ...prepared, inputPath: 'cdp' };
+  }
+  if (action === 'type') {
+    await sendCdpCommands(tabId, typeTextCommands(params.text ?? ''));
+    return { ...prepared, typed: String(params.text ?? '').length, ref: params.ref, inputPath: 'cdp' };
+  }
+  const keys = Array.isArray(params.keys) ? params.keys : [params.keys];
+  await sendCdpCommands(tabId, keypressCommands(keys));
+  return { pressed: keys.map((key) => String(key)), inputPath: 'cdp' };
+}
+
+async function runRoutedPageAction(tabId, action, params, allowedOrigins, options = {}) {
+  if (!CDP_INPUT_ACTIONS.has(action)) {
+    return await sendToContent(tabId, action, params, allowedOrigins, options);
+  }
+  const routing = getCdpRoutingState(tabId);
+  if (routing.mode === 'fail-closed') throw new Error(routing.error);
+  if (routing.mode === 'attached') {
+    return await runCdpInputAction(tabId, action, params, allowedOrigins, options);
+  }
+  return await sendToContent(tabId, action, params, allowedOrigins, options);
+}
+
 function sweepExpiredLeases(now = Date.now()) {
   let changed = false;
+  const releasedTabIds = [];
   for (const [tabId, lease] of tabLeases) {
     if (!lease?.expiresAt || lease.expiresAt <= now) {
       tabLeases.delete(tabId);
       changed = true;
+      releasedTabIds.push(tabId);
       for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
         if (claim.tabId !== tabId || !claim.exclusive || claim.ownerId !== lease.ownerId) continue;
         claimedTabs.delete(sessionTabId);
@@ -144,7 +458,14 @@ function sweepExpiredLeases(now = Date.now()) {
       }
     }
   }
-  if (changed) void persistClaimState();
+  if (changed) {
+    for (const tabId of releasedTabIds) {
+      if (cdpAttachments.has(tabId) || cdpFailClosed.has(tabId)) {
+        void detachCdp(tabId, { failClosed: false });
+      }
+    }
+    void persistClaimState();
+  }
 }
 
 function getLeaseForTab(tabId) {
@@ -187,7 +508,8 @@ async function getSettings() {
   return {
     bridgeUrl: normalizeBridgeUrl(settings.bridgeUrl),
     token: validatePairingToken(settings.token),
-    allowedOrigins: normalizeAllowedOriginPatterns(settings.allowedOrigins)
+    allowedOrigins: normalizeAllowedOriginPatterns(settings.allowedOrigins),
+    enableCdp: settings.enableCdp === true
   };
 }
 
@@ -699,7 +1021,7 @@ async function runPageActionWithAfter(action, params, allowedOrigins) {
   validateAfterRequest(after);
   const tabId = await resolvePageActionTabId(baseParams, allowedOrigins);
   const documentId = baseParams.documentId;
-  const result = await sendToContent(tabId, action, baseParams, allowedOrigins, { documentId });
+  const result = await runRoutedPageAction(tabId, action, baseParams, allowedOrigins, { documentId });
   return await withAfterResult(result, tabId, after, allowedOrigins, { startedAt, documentId });
 }
 
@@ -754,7 +1076,7 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
       }
     }
     try {
-      const result = await sendToContent(tabId, stepAction, performActionStepParams(step), allowedOrigins, {
+      const result = await runRoutedPageAction(tabId, stepAction, performActionStepParams(step), allowedOrigins, {
         waitForLoad: index === 0,
         documentId
       });
@@ -1178,16 +1500,21 @@ async function listFrames(tabId, allowedOrigins) {
 
 async function handleBridgeRequest(action, params = {}) {
   await claimStateReady;
+  await cdpStateReady;
+  sweepExpiredLeases();
   const settings = await getSettings();
   switch (action) {
     case 'ping': {
       const refreshed = await getBridgeStatus();
       const liveStatus = refreshed?.ok && refreshed.status ? refreshed.status : status;
+      sweepExpiredCdpAttachments();
       return {
         pong: true,
         status: liveStatus,
         allowedOrigins: describeAllowedOrigins(settings.allowedOrigins),
         session: sessionState(),
+        cdpEnabled: settings.enableCdp === true,
+        attachedTabs: attachedTabsReport(),
         ...EXTENSION_PROTOCOL_MARKER
       };
     }
@@ -1300,6 +1627,7 @@ async function handleBridgeRequest(action, params = {}) {
       const claim = claimedTabs.get(sessionTabId);
       claimedTabs.delete(sessionTabId);
       clearLeaseIfHeldByClaim(claim);
+      await detachCdpForClaim(claim);
       if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
       await persistClaimState();
       return { released: true, sessionTabId, tabId: claim?.tabId };
@@ -1317,8 +1645,9 @@ async function handleBridgeRequest(action, params = {}) {
       }
       let released = 0;
       for (const sessionTabId of [...claimedTabs.keys()]) {
-        if (keepIds.has(sessionTabId)) continue;
         const claim = claimedTabs.get(sessionTabId);
+        await detachCdpForClaim(claim);
+        if (keepIds.has(sessionTabId)) continue;
         clearLeaseIfHeldByClaim(claim);
         claimedTabs.delete(sessionTabId);
         released += 1;
@@ -1326,6 +1655,13 @@ async function handleBridgeRequest(action, params = {}) {
       if (!claimedTabs.has(currentSessionTabId)) currentSessionTabId = keepIds.values().next().value || '';
       await persistClaimState();
       return { released, kept: claimedTabs.size };
+    }
+    case 'cdp_attach': {
+      if (!params.sessionTabId) throw cdpError('CDP_TAB_NOT_CLAIMED', 'cdp_attach requires sessionTabId');
+      return await attachCdpForClaim(params.sessionTabId, params.ttlMs);
+    }
+    case 'cdp_detach': {
+      return await detachCdpForTarget(params);
     }
     case 'navigate': {
       const startedAt = Date.now();
@@ -1422,8 +1758,82 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       }
       if (hadLease || hadClaim) return persistClaimState();
     })
+    .then(() => {
+      if (cdpAttachments.has(tabId) || cdpFailClosed.has(tabId)) {
+        return detachCdp(tabId, { failClosed: false, skipDebugger: true });
+      }
+    })
     .catch(() => undefined);
 });
+
+if (chrome.debugger?.onDetach?.addListener) {
+  chrome.debugger.onDetach.addListener((source, reason) => {
+    const tabId = source?.tabId;
+    if (!Number.isFinite(tabId)) return;
+    if (cdpExpectedDetach.has(tabId)) {
+      cdpExpectedDetach.delete(tabId);
+      return;
+    }
+    if (!cdpAttachments.has(tabId) && !cdpFailClosed.has(tabId)) return;
+    if (reason === 'canceled_by_user') {
+      void detachCdp(tabId, {
+        failClosed: true,
+        skipDebugger: true,
+        prefix: 'CDP_DETACHED_BY_USER',
+        detail: 'DevTools took the debugger socket. Call cdp_attach again if you still want trusted input.'
+      });
+      return;
+    }
+    void detachCdp(tabId, { failClosed: false, skipDebugger: true });
+  });
+}
+
+if (chrome.webNavigation?.onCommitted?.addListener) {
+  chrome.webNavigation.onCommitted.addListener((details) => {
+    if (!details || details.frameId !== 0 || !Number.isFinite(details.tabId)) return;
+    if (!cdpAttachments.has(details.tabId)) return;
+    void getSettings().then((settings) => {
+      if (isUrlAllowed(details.url || '', settings.allowedOrigins)) return;
+      return detachCdp(details.tabId, {
+        failClosed: true,
+        prefix: 'CDP_ORIGIN_NOT_ALLOWED',
+        detail: `navigated to an origin outside Allowed Origins: ${details.url || 'unknown URL'}`
+      });
+    });
+  });
+}
+
+if (chrome.storage?.onChanged?.addListener) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    void (async () => {
+      if (changes?.enableCdp && changes.enableCdp.newValue !== true) {
+        await Promise.all(
+          [...cdpAttachments.keys()].map((tabId) =>
+            detachCdp(tabId, {
+              failClosed: true,
+              prefix: 'CDP_NOT_ENABLED',
+              detail: 'trusted input is disabled in the extension popup. Enable it there, then call cdp_attach again.'
+            })
+          )
+        );
+      }
+      if (!changes?.allowedOrigins) return;
+      const settings = await getSettings();
+      for (const tabId of [...cdpAttachments.keys()]) {
+        const tab = await getTabIfExists(tabId);
+        const url = tab?.url || '';
+        if (tab && isInjectableUrl(url) && isUrlAllowed(url, settings.allowedOrigins)) continue;
+        await detachCdp(tabId, {
+          failClosed: true,
+          prefix: 'CDP_ORIGIN_NOT_ALLOWED',
+          detail: `Allowed Origins changed; tab is outside the new list: ${url || 'unknown URL'}`
+        });
+      }
+    })().catch(() => undefined);
+  });
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target === 'cbc-background' && message?.kind === 'status-update') {
     setStatus(message.status || 'unknown');
@@ -1469,7 +1879,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 if (globalThis.CBC_TEST_HARNESS) {
   globalThis.BrowserControlBackground = {
     handleBridgeRequest,
-    claimStateReady
+    claimStateReady,
+    cdpStateReady,
+    sendCdpCommand
   };
 }
 

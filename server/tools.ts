@@ -415,7 +415,9 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
             status: bridgeStatus,
             ...marker,
             ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {}),
-            ...(ping.session !== undefined ? { session: ping.session } : {})
+            ...(ping.session !== undefined ? { session: ping.session } : {}),
+            ...(typeof ping.cdpEnabled === 'boolean' ? { cdpEnabled: ping.cdpEnabled } : {}),
+            ...(Array.isArray(ping.attachedTabs) ? { attachedTabs: ping.attachedTabs } : {})
           },
           ping: normalizedPing
         },
@@ -470,7 +472,7 @@ export function registerBrowserTools(
     {
       title: 'Browser bridge status',
       description:
-        'Check whether the MCP adapter can reach the local broker and whether the Chrome extension answers ping. Read nextAction for onboarding coaching.',
+        'Check whether the MCP adapter can reach the local broker and whether the Chrome extension answers ping. Read nextAction for onboarding coaching. When the extension answers, also read cdpEnabled and attachedTabs for the trusted-input tier.',
       inputSchema: {}
     },
     async () => browserStatus(bridge, options.getStatusContext?.() ?? {})
@@ -559,11 +561,45 @@ export function registerBrowserTools(
   );
 
   registerTool(
+    'cdp_attach',
+    {
+      title: 'Attach trusted CDP input',
+      description:
+        'Attach trusted CDP input to a claimed tab. While attached, click, type, keypress, click_at, and matching perform_actions steps use trusted CDP input. Requires the popup enableCdp toggle, a claimed tab, and an allowed origin. The debugger permission is required in the manifest. Chrome shows a debugging banner on the tab. Repeating attach on the same tab refreshes the TTL without tearing down the socket.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).describe('Claimed tab session id returned by claim_tab.'),
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .max(3_600_000)
+          .optional()
+          .describe('Auto-detach TTL in milliseconds. Defaults to 600000 (10 minutes).')
+      }
+    },
+    async (args) => forward(bridge, 'cdp_attach', args)
+  );
+
+  registerTool(
+    'cdp_detach',
+    {
+      title: 'Detach trusted CDP input',
+      description:
+        'Detach trusted CDP input from a claimed tab and return click/type/keypress to the content-script path. release_tab and finalize_tabs also detach, including kept finalize claims.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).optional(),
+        tabId: OptionalTabId
+      }
+    },
+    async (args) => forward(bridge, 'cdp_detach', args)
+  );
+
+  registerTool(
     'finalize_tabs',
     {
       title: 'Finalize claimed tabs',
       description:
-        'Release browser-control ownership state for claimed tabs. This does not close user tabs; pass keep entries to preserve handoff/deliverable claims.',
+        'Release browser-control ownership state for claimed tabs. This does not close user tabs; pass keep entries to preserve handoff/deliverable claims. Detaches CDP attachments on every claimed tab, including kept claims.',
       inputSchema: {
         keep: z
           .array(

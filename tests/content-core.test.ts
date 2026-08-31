@@ -17,6 +17,8 @@ import {
   performClick,
   performClickAt,
   performKeypress,
+  prepareTrustedClickAt,
+  prepareTrustedKeypress,
   queryElements,
   waitForCondition,
   performType
@@ -368,6 +370,61 @@ describe('extension content core', () => {
 
     expect(performKeypress({ keys: ['Tab', 'Control+Enter'] }, document as unknown as Document)).toEqual({ pressed: ['Tab', 'Control+Enter'] });
     expect(keys).toEqual(['Tab', 'Enter']);
+  });
+
+  it('fails trusted iframe coordinate mapping with CDP_CROSS_ORIGIN_FRAME', () => {
+    const document = makeDocument('<button id="save">Save</button>');
+    const view = document.defaultView as unknown as { top: unknown; frameElement: unknown };
+    Object.defineProperty(view, 'top', { configurable: true, value: {} });
+    Object.defineProperty(view, 'frameElement', { configurable: true, value: null });
+
+    expect(() => prepareTrustedClickAt({ x: 12, y: 18 }, document as unknown as Document)).toThrow('CDP_CROSS_ORIGIN_FRAME');
+  });
+
+  it('focuses the targeted document before a trusted keypress', () => {
+    const parent = makeDocument('<input id="parent-input" />');
+    const child = makeDocument('<input id="child-input" />');
+    const parentInput = parent.querySelector('#parent-input') as unknown as HTMLElement;
+    const childInput = child.querySelector('#child-input') as unknown as HTMLElement;
+    parentInput.focus();
+    childInput.focus();
+
+    const parentFocus = vi.spyOn(parentInput, 'focus');
+    const childFocus = vi.spyOn(childInput, 'focus');
+    const childWindowFocus = vi.spyOn(child.defaultView as unknown as { focus: () => void }, 'focus');
+
+    expect(prepareTrustedKeypress({ keys: 'Enter' }, child as unknown as Document)).toEqual({
+      prepared: true,
+      keys: ['Enter']
+    });
+    expect(childWindowFocus).toHaveBeenCalled();
+    expect(child.activeElement).toBe(childInput);
+    expect(childFocus).not.toHaveBeenCalled();
+    expect(parentFocus).not.toHaveBeenCalled();
+  });
+
+  it('does not move trusted-keypress focus off an inner shadow control', () => {
+    const document = makeDocument('<div id="host"></div>');
+    const host = document.querySelector('#host') as unknown as HTMLElement;
+    host.tabIndex = 0;
+    const shadow = host.attachShadow({ mode: 'open' });
+    const first = document.createElement('input');
+    first.id = 'first';
+    const second = document.createElement('input');
+    second.id = 'second';
+    shadow.append(first, second);
+    second.focus();
+
+    expect(document.activeElement).toBe(host);
+    expect(shadow.activeElement).toBe(second);
+
+    expect(prepareTrustedKeypress({ keys: 'Enter' }, document as unknown as Document)).toEqual({
+      prepared: true,
+      keys: ['Enter']
+    });
+
+    expect(shadow.activeElement).toBe(second);
+    expect(document.activeElement).toBe(host);
   });
 
   it('fails click, type, click_at, and keypress on hidden documents unless allowHidden is true', () => {

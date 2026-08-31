@@ -40,7 +40,7 @@ Use this file to resume work without relying on chat history.
 - Use `wait_for`, `page_status`, `console_logs`, and `collect_scroll` for bounded diagnostics and lazy feeds. Set `maxItems` when a feed can produce many unique entries. Prefer `collect_scroll` `until` / nested `scroll` over manual step loops; read `stoppedReason`.
 - Use `screenshot` with optional `ref`/`bounds` crop for visual proof; prefer DOM extraction for structured data. Canvas/chart pixels are invisible to snapshot/extract tools.
 - Use `perform_actions` for up to 10 sequential `click`/`type`/`scroll`/`keypress` steps in one broker round-trip; terminal `after` runs only on full success. Refresh snapshot refs before a batch — stale refs fail fast mid-batch. Coordinate clicks stay on `click_at`.
-- MCP registers 25 browser tools; `browser_status.adapter.registeredToolCount` should be 25 after upgrade (restart MCP host if stale).
+- MCP registers 27 browser tools; `browser_status.adapter.registeredToolCount` should be 27 after upgrade (restart MCP host if stale).
 - Use `list_frames` to discover operable active HTTP(S) frame documents. Pass its `documentId` to DOM/content tools for exact-document iframe routing; omitted `documentId` keeps current top-frame behavior. Blocked and unsupported rows redact URLs and document identity.
 - Content results include background-attested `documentId`, `frameId`, `isTopFrame`, and `coordinateSpace`. Iframe coordinates are `frameViewport`; `navigate`, `activate_tab`, and `screenshot` remain tab-only, and iframe bounds are not screenshot crop coordinates.
 - Exact document targets fail with stable `DOCUMENT_STALE`, `DOCUMENT_POLICY_DENIED`, `DOCUMENT_HOST_PERMISSION_DENIED`, or `DOCUMENT_UNSUPPORTED` prefixes and never fall back to a replacement frame document. Hidden-document writes fail with `DOCUMENT_HIDDEN`.
@@ -128,7 +128,7 @@ Host formats:
 - Password-like fields are blocked unless `force=true`.
 - Refresh snapshots after navigation, reload, stale refs, or major DOM changes.
 - `console_logs` only contains logs captured after content script injection, and `screenshot` is visible-viewport only. Chrome requires `<all_urls>` or `activeTab` for screenshot capture; this project requests optional `<all_urls>` as a host permission only in wildcard mode, so reload the extension and save settings in the popup to grant it after manifest changes.
-- CDP fallback is intentionally unsupported by the MCP adapter.
+- Trusted CDP input is opt-in. Enable the popup `enableCdp` toggle, `claim_tab`, then `cdp_attach({ sessionTabId })`. The `debugger` permission is required in the manifest; Chrome shows a warning at load, the extension always holds the capability, and it cannot be revoked without uninstalling. The tier is gated in code by that toggle plus a claimed tab plus an allowed origin. While attached, click/type/keypress/`click_at` and matching `perform_actions` steps use CDP. Detach with `cdp_detach`, or automatically on `release_tab` / `finalize_tabs` (including kept claims) / 10-minute TTL. Repeating `cdp_attach` on an already-attached tab refreshes the TTL without tearing down the socket. Typed errors: `CDP_NOT_ENABLED`, `CDP_ATTACH_REFUSED`, `CDP_DETACHED_BY_USER`, `CDP_ORIGIN_NOT_ALLOWED`, `CDP_TAB_NOT_CLAIMED`, `CDP_METHOD_NOT_PERMITTED`, `CDP_DETACHED_BY_SUSPENSION`, `CDP_CROSS_ORIGIN_FRAME`. Chrome shows a debugging banner on attached tabs. The MCP adapter does not open a raw CDP socket.
 
 ## Git workflow
 

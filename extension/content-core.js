@@ -941,6 +941,81 @@ function performKeypress({ keys, allowHidden = false } = {}, documentRef = docum
   return { pressed };
 }
 
+function toTabViewportPoint(x, y, documentRef = document) {
+  let px = Number(x);
+  let py = Number(y);
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return { ok: false };
+  let view = documentRef.defaultView || window;
+  try {
+    while (view && view !== view.top) {
+      const frame = view.frameElement;
+      if (!frame) return { ok: false };
+      const rect = frame.getBoundingClientRect();
+      px += rect.left || 0;
+      py += rect.top || 0;
+      view = view.parent;
+    }
+  } catch (_error) {
+    return { ok: false };
+  }
+  return { ok: true, x: Math.round(px), y: Math.round(py) };
+}
+
+function requireTabViewportPoint(x, y, documentRef = document) {
+  const point = toTabViewportPoint(x, y, documentRef);
+  if (!point.ok) {
+    throw new Error(
+      'CDP_CROSS_ORIGIN_FRAME: cannot map iframe coordinates for trusted input. Detach CDP, or use a same-origin frame or the top document.'
+    );
+  }
+  return point;
+}
+
+function prepareTrustedClick({ ref, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
+  const element = findByRef(ref, documentRef);
+  if (!element) throw new Error(`No element found for ref ${ref}. Refresh snapshot and try again.`);
+  element.scrollIntoView?.({ block: 'center', inline: 'center' });
+  const bounds = boundsForElement(element);
+  if (!bounds) throw new Error(`No viewport bounds available for ref ${ref}. Refresh snapshot and try again.`);
+  const point = requireTabViewportPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, documentRef);
+  return { clicked: ref, ref, x: point.x, y: point.y, bounds };
+}
+
+function prepareTrustedType({ ref, text, force = false, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
+  const element = findByRef(ref, documentRef);
+  if (!element) throw new Error(`No element found for ref ${ref}. Refresh snapshot and try again.`);
+  if (isPasswordLike(element) && !force) {
+    throw new Error(`Ref ${ref} appears to be a password/2FA field. Re-run with force=true only if explicitly approved.`);
+  }
+  element.scrollIntoView?.({ block: 'center', inline: 'center' });
+  element.focus?.();
+  if (typeof element.select === 'function') element.select();
+  else if (typeof element.setSelectionRange === 'function' && typeof element.value === 'string') {
+    element.setSelectionRange(0, element.value.length);
+  }
+  return { prepared: true, ref, typed: String(text ?? '').length };
+}
+
+function prepareTrustedClickAt({ x, y, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
+  if (typeof x !== 'number' || typeof y !== 'number') throw new Error('click_at requires numeric x and y');
+  const point = requireTabViewportPoint(x, y, documentRef);
+  return { clicked: true, x: point.x, y: point.y };
+}
+
+function prepareTrustedKeypress({ keys, allowHidden = false } = {}, documentRef = document) {
+  assertDocumentVisible(documentRef, allowHidden);
+  const keyList = Array.isArray(keys) ? keys : [keys];
+  if (!keyList.length || keyList.some((key) => !key)) throw new Error('keypress requires keys');
+  documentRef.defaultView?.focus?.();
+  if (!documentRef.activeElement) {
+    (documentRef.body || documentRef.documentElement)?.focus?.();
+  }
+  return { prepared: true, keys: keyList.map((key) => String(key)) };
+}
+
 function pageStatus(documentRef = document) {
   const windowRef = documentRef.defaultView || window;
   const resources = windowRef.performance?.getEntriesByType?.('resource') || [];
@@ -1344,6 +1419,10 @@ globalThis.BrowserControlContentCore = {
   extractFeedPosts,
   performClickAt,
   performKeypress,
+  prepareTrustedClick,
+  prepareTrustedType,
+  prepareTrustedClickAt,
+  prepareTrustedKeypress,
   waitForCondition,
   pageStatus,
   installConsoleCapture,

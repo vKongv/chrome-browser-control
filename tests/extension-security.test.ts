@@ -52,7 +52,9 @@ function loadBackgroundHarness({
   executeScriptError,
   sessionStore,
   sessionGetHold,
-  sessionGetError
+  sessionGetError,
+  debuggerAttachError,
+  debuggerTargets
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
@@ -71,6 +73,8 @@ function loadBackgroundHarness({
   sessionStore?: Record<string, unknown>;
   sessionGetHold?: Promise<void>;
   sessionGetError?: Error;
+  debuggerAttachError?: Error;
+  debuggerTargets?: Array<Record<string, unknown>>;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
@@ -82,6 +86,15 @@ function loadBackgroundHarness({
   const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
   const windowUpdates: Array<{ windowId: number; update: Record<string, unknown> }> = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
+  const debuggerDetachListeners: Array<(source: { tabId?: number }, reason: string) => void> = [];
+  const navigationCommittedListeners: Array<(details: Record<string, unknown>) => void> = [];
+  const permissionRemovedListeners: Array<(removed: { permissions?: string[]; origins?: string[] }) => void> = [];
+  const debuggerCommands: Array<{ tabId: number; method: string; params: Record<string, unknown> }> = [];
+  const debuggerAttached = new Set<number>();
+  let debuggerAttachCount = 0;
+  let debuggerDetachCount = 0;
+  const storageChangedListeners: Array<(changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, area: string) => void> =
+    [];
   const runtimeMessageListeners: Array<
     (message: Record<string, unknown>, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void
   > = [];
@@ -131,6 +144,11 @@ function loadBackgroundHarness({
         set: async (items: Record<string, unknown>) => {
           Object.assign(sessionData, items);
         }
+      },
+      onChanged: {
+        addListener: (listener: (changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, area: string) => void) => {
+          storageChangedListeners.push(listener);
+        }
       }
     },
     runtime: {
@@ -168,6 +186,37 @@ function loadBackgroundHarness({
         const granted = originsGranted && permissionsGranted;
         callback?.(granted);
         return Promise.resolve(granted);
+      },
+      onRemoved: {
+        addListener: (listener: (removed: { permissions?: string[]; origins?: string[] }) => void) => {
+          permissionRemovedListeners.push(listener);
+        }
+      }
+    },
+    debugger: {
+      attach: async (target: { tabId: number }) => {
+        if (debuggerAttachError) throw debuggerAttachError;
+        debuggerAttachCount += 1;
+        debuggerAttached.add(target.tabId);
+      },
+      detach: async (target: { tabId: number }) => {
+        debuggerDetachCount += 1;
+        debuggerAttached.delete(target.tabId);
+      },
+      sendCommand: async (target: { tabId: number }, method: string, params: Record<string, unknown> = {}) => {
+        debuggerCommands.push({ tabId: target.tabId, method, params });
+        return {};
+      },
+      getTargets: async () =>
+        debuggerTargets ??
+        [...debuggerAttached].map((tabId) => ({
+          tabId,
+          attached: true
+        })),
+      onDetach: {
+        addListener: (listener: (source: { tabId?: number }, reason: string) => void) => {
+          debuggerDetachListeners.push(listener);
+        }
       }
     },
     tabs: {
@@ -267,6 +316,11 @@ function loadBackgroundHarness({
       }
     },
     webNavigation: {
+      onCommitted: {
+        addListener: (listener: (details: Record<string, unknown>) => void) => {
+          navigationCommittedListeners.push(listener);
+        }
+      },
       getAllFrames: async ({ tabId }: { tabId: number }) =>
         configuredFrames
           .filter((frame) => frame.tabId === tabId)
@@ -354,6 +408,7 @@ function loadBackgroundHarness({
   });
   (context as any).globalThis = context;
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8'), context);
+  vm.runInContext(readFileSync(join(process.cwd(), 'extension/cdp.js'), 'utf8'), context);
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/background.js'), 'utf8'), context);
   return Object.assign((context as any).BrowserControlBackground, {
     sentMessages,
@@ -380,6 +435,27 @@ function loadBackgroundHarness({
       for (const listener of tabRemovedListeners) listener(tabId);
     },
     sessionStore: sessionData,
+    debuggerCommands,
+    debuggerAttached,
+    debuggerAttachCount() {
+      return debuggerAttachCount;
+    },
+    debuggerDetachCount() {
+      return debuggerDetachCount;
+    },
+    fireStorageChanged(changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, area = 'local') {
+      for (const listener of storageChangedListeners) listener(changes, area);
+    },
+    fireDebuggerDetach(tabId: number, reason: string) {
+      debuggerAttached.delete(tabId);
+      for (const listener of debuggerDetachListeners) listener({ tabId }, reason);
+    },
+    fireNavigationCommitted(details: Record<string, unknown>) {
+      for (const listener of navigationCommittedListeners) listener(details);
+    },
+    firePermissionsRemoved(removed: { permissions?: string[]; origins?: string[] }) {
+      for (const listener of permissionRemovedListeners) listener(removed);
+    },
     sendRuntimeMessage(message: Record<string, unknown>) {
       return new Promise((resolve) => {
         let settled = false;
@@ -446,6 +522,13 @@ describe('extension security helpers', () => {
     expect(manifest.optional_host_permissions).toContain('<all_urls>');
   });
 
+  it('declares debugger as a required permission, never optional', () => {
+    const manifest = JSON.parse(readFileSync(join(process.cwd(), 'extension/manifest.json'), 'utf8'));
+
+    expect(manifest.permissions).toContain('debugger');
+    expect(manifest.optional_permissions || []).not.toContain('debugger');
+  });
+
   it('allows only loopback ws bridge URLs without paths', () => {
     expect(security.normalizeBridgeUrl('ws://127.0.0.1:8765')).toBe('ws://127.0.0.1:8765');
     expect(security.normalizeBridgeUrl('ws://localhost')).toBe('ws://localhost');
@@ -490,6 +573,12 @@ describe('extension security helpers', () => {
     expect(security.isUrlAllowed('chrome://extensions', ['*'])).toBe(false);
     expect(security.isUrlAllowed('file:///tmp/page.html', ['*'])).toBe(false);
     expect(security.isUrlAllowed('chrome-extension://abc/popup.html', ['*'])).toBe(false);
+    expect(security.collectOptionalPermissionOrigins(['http://*/*', 'https://*/*'])).toEqual([
+      'http://*/*',
+      'https://*/*',
+      '<all_urls>'
+    ]);
+    expect(security.collectOptionalPermissionOrigins(['https://example.com/*'])).toEqual(['https://example.com/*']);
   });
 
   it('deduplicates mixed wildcard and explicit origin inputs', () => {
@@ -585,8 +674,11 @@ describe('extension background origin enforcement', () => {
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      protocolVersion: 6,
+      cdpEnabled: false,
+      attachedTabs: [],
+      protocolVersion: 7,
       features: expect.arrayContaining([
+        'cdp-trusted-input',
         'document-targeting',
         'act-observe',
         'navigate-pending-warning',
@@ -4452,3 +4544,479 @@ describe('extension background origin enforcement', () => {
     });
   });
 });
+
+describe('trusted chrome.debugger tier', () => {
+  const token = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
+  const allowedTab = {
+    id: 2,
+    active: true,
+    highlighted: true,
+    title: 'Allowed',
+    url: 'https://allowed.example/docs',
+    windowId: 1,
+    status: 'complete'
+  };
+
+  function loadCdpBackground(
+    overrides: Record<string, unknown> = {},
+    contentResult: Record<string, unknown> | ((tabId: number, message: Record<string, unknown>, options: { documentId?: string }) => Record<string, unknown>) = {
+      x: 12,
+      y: 34,
+      clicked: 'h1',
+      ref: 'h1'
+    }
+  ) {
+    return loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        enableCdp: true
+      },
+      tabs: [allowedTab],
+      grantedPermissions: ['debugger'],
+      contentResult,
+      ...overrides
+    });
+  }
+
+  async function claimAndAttach(background: ReturnType<typeof loadBackgroundHarness>, ttlMs = 60_000) {
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    const attached = await background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId, ttlMs });
+    return { claim, attached };
+  }
+
+  it('refuses attach with CDP_NOT_ENABLED when the stored flag is off', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        enableCdp: false
+      }
+    });
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).rejects.toThrow(
+      'CDP_NOT_ENABLED'
+    );
+  });
+
+  it('attaches when the stored flag is on even if chrome.permissions has no debugger grant', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        enableCdp: true
+      },
+      grantedPermissions: []
+    });
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).resolves.toMatchObject({
+      attached: true,
+      tabId: 2,
+      sessionTabId: claim.sessionTabId,
+      inputPath: 'cdp'
+    });
+  });
+
+  it('refuses attach on an unclaimed tab', async () => {
+    const background = loadCdpBackground();
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: 'tab-missing' })).rejects.toThrow(
+      'CDP_TAB_NOT_CLAIMED'
+    );
+  });
+
+  it('refuses attach when Chrome rejects the debugger socket', async () => {
+    const background = loadCdpBackground({
+      debuggerAttachError: new Error('Cannot access a chrome:// URL')
+    });
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).rejects.toThrow(
+      'CDP_ATTACH_REFUSED'
+    );
+  });
+
+  it('attaches on a claimed allowed tab and reports it from ping', async () => {
+    const background = loadCdpBackground();
+    const { claim, attached } = await claimAndAttach(background);
+    expect(attached).toMatchObject({
+      attached: true,
+      tabId: 2,
+      sessionTabId: claim.sessionTabId,
+      inputPath: 'cdp'
+    });
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
+      cdpEnabled: true,
+      attachedTabs: [expect.objectContaining({ tabId: 2, sessionTabId: claim.sessionTabId })]
+    });
+  });
+
+  it('types a space as an insertable CDP character', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    await expect(
+      background.handleBridgeRequest('type', { ref: 'h1', text: 'hello world', tabId: 2 })
+    ).resolves.toMatchObject({ typed: 11, inputPath: 'cdp' });
+    const spaceChars = background.debuggerCommands.filter(
+      (command) =>
+        command.method === 'Input.dispatchKeyEvent' && command.params?.type === 'char' && command.params?.text === ' '
+    );
+    expect(spaceChars).toHaveLength(1);
+  });
+
+  it('routes click through CDP while attached and through the content script after detach', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      clicked: 'h1',
+      inputPath: 'cdp'
+    });
+    expect(background.debuggerCommands.map((command) => command.method)).toEqual([
+      'Input.dispatchMouseEvent',
+      'Input.dispatchMouseEvent',
+      'Input.dispatchMouseEvent'
+    ]);
+    await background.handleBridgeRequest('cdp_detach', { tabId: 2 });
+    background.debuggerCommands.length = 0;
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      x: 12,
+      y: 34
+    });
+    expect(background.debuggerCommands).toEqual([]);
+    expect(background.sentMessages.some((entry) => entry.message.action === 'click')).toBe(true);
+  });
+
+  it('rejects an unlisted CDP method before sendCommand', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    await expect(background.sendCdpCommand(2, 'Network.enable', {})).rejects.toThrow('CDP_METHOD_NOT_PERMITTED');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
+  it('detaches on release_tab and finalize_tabs', async () => {
+    const first = loadCdpBackground();
+    const claimed = await claimAndAttach(first);
+    await expect(first.handleBridgeRequest('release_tab', { sessionTabId: claimed.claim.sessionTabId })).resolves.toMatchObject({
+      released: true
+    });
+    expect(first.debuggerAttached.has(2)).toBe(false);
+
+    const second = loadCdpBackground();
+    await second.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await second.handleBridgeRequest('cdp_attach', {
+      sessionTabId: (await second.handleBridgeRequest('claim_tab', { tabId: 2 })).sessionTabId
+    });
+    await second.handleBridgeRequest('finalize_tabs');
+    expect(second.debuggerAttached.has(2)).toBe(false);
+  });
+
+  it('auto-detaches when the attach TTL expires', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background, 1_000);
+    expect(background.debuggerAttached.has(2)).toBe(true);
+    background.advanceTime(1_000);
+    await background.handleBridgeRequest('ping');
+    expect(background.debuggerAttached.has(2)).toBe(false);
+  });
+
+  it('fails closed after DevTools eviction and does not auto re-attach', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    background.fireDebuggerDetach(2, 'canceled_by_user');
+    await flushMicrotasks();
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_DETACHED_BY_USER');
+    expect(background.debuggerAttached.has(2)).toBe(false);
+  });
+
+  it('detaches immediately on navigation to a disallowed origin', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://blocked.example/' });
+    await flushMicrotasks(12);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_ORIGIN_NOT_ALLOWED');
+  });
+
+  it('refuses cdp_attach and CDP input after exclusive claim expiry without a sweep-triggering claim_tab', async () => {
+    const background = loadCdpBackground();
+    const claim = await background.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      ttlMs: 1000
+    });
+    await background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId, ttlMs: 60_000 });
+    expect(background.debuggerAttached.has(2)).toBe(true);
+
+    background.advanceTime(1001);
+
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).rejects.toThrow(
+      'CDP_TAB_NOT_CLAIMED'
+    );
+    expect(background.debuggerAttached.has(2)).toBe(false);
+
+    background.debuggerCommands.length = 0;
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      clicked: 'h1'
+    });
+    expect(background.debuggerCommands).toEqual([]);
+    expect(background.sentMessages.some((entry: { message: { action?: string } }) => entry.message.action === 'click')).toBe(
+      true
+    );
+  });
+
+  it('detaches CDP from kept finalize_tabs claims', async () => {
+    const background = loadCdpBackground();
+    const { claim } = await claimAndAttach(background);
+    await expect(
+      background.handleBridgeRequest('finalize_tabs', { keep: [{ sessionTabId: claim.sessionTabId, status: 'handoff' }] })
+    ).resolves.toMatchObject({ released: 0, kept: 1 });
+    expect(background.debuggerAttached.has(2)).toBe(false);
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
+      attachedTabs: []
+    });
+  });
+
+  it('fails closed with CDP_NOT_ENABLED after the stored flag is turned off', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    background.fireStorageChanged({ enableCdp: { newValue: false, oldValue: true } });
+    await flushMicrotasks();
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_NOT_ENABLED');
+    expect(background.debuggerAttached.has(2)).toBe(false);
+  });
+
+  it('hydrates a dropped debugger socket as suspension and never auto-attaches', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [allowedTab],
+      grantedPermissions: ['debugger'],
+      debuggerTargets: [],
+      contentResult: { x: 12, y: 34, clicked: 'h1' },
+      sessionStore: {
+        cbcCdpAttachState: {
+          attachments: [
+            [
+              2,
+              {
+                tabId: 2,
+                sessionTabId: 'tab-1',
+                attachedAt: 0,
+                expiresAt: 600_000,
+                ttlMs: 600_000
+              }
+            ]
+          ],
+          failClosed: []
+        }
+      }
+    });
+    await background.cdpStateReady;
+    expect(background.debuggerAttached.size).toBe(0);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow(
+      'CDP_DETACHED_BY_SUSPENSION'
+    );
+  });
+
+  it('does not treat another debugger\'s attached target as this extension during hydration', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [allowedTab],
+      grantedPermissions: ['debugger'],
+      debuggerTargets: [{ tabId: 2, attached: true, type: 'page' }],
+      contentResult: { x: 12, y: 34, clicked: 'h1' },
+      sessionStore: {
+        cbcCdpAttachState: {
+          attachments: [
+            [
+              2,
+              {
+                tabId: 2,
+                sessionTabId: 'tab-1',
+                attachedAt: 0,
+                expiresAt: 600_000,
+                ttlMs: 600_000
+              }
+            ]
+          ],
+          failClosed: []
+        }
+      }
+    });
+    await background.cdpStateReady;
+    expect(background.debuggerAttachCount()).toBe(0);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow(
+      'CDP_DETACHED_BY_SUSPENSION'
+    );
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
+  it('detaches an expired stored attachment on hydration without a fail-closed marker', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [allowedTab],
+      grantedPermissions: ['debugger'],
+      debuggerTargets: [],
+      contentResult: { x: 12, y: 34, clicked: 'h1' },
+      sessionStore: {
+        cbcCdpAttachState: {
+          attachments: [
+            [
+              2,
+              {
+                tabId: 2,
+                sessionTabId: 'tab-1',
+                attachedAt: 0,
+                expiresAt: -1,
+                ttlMs: 600_000
+              }
+            ]
+          ],
+          failClosed: []
+        }
+      }
+    });
+    await background.cdpStateReady;
+    expect(background.debuggerDetachCount()).toBe(1);
+    expect(background.debuggerAttachCount()).toBe(0);
+    expect(background.sessionStore.cbcCdpAttachState).toMatchObject({
+      attachments: [],
+      failClosed: []
+    });
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
+      attachedTabs: []
+    });
+    background.debuggerCommands.length = 0;
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      clicked: 'h1'
+    });
+    expect(background.debuggerCommands).toEqual([]);
+    expect(background.sentMessages.some((entry: { message: { action?: string } }) => entry.message.action === 'click')).toBe(
+      true
+    );
+  });
+
+  it('refreshes an already-attached tab TTL without tearing down the live socket', async () => {
+    const background = loadCdpBackground();
+    const { claim, attached } = await claimAndAttach(background, 60_000);
+    expect(background.debuggerAttachCount()).toBe(1);
+    expect(attached.expiresAt).toBe(60_000);
+    background.advanceTime(5_000);
+    const refreshed = await background.handleBridgeRequest('cdp_attach', {
+      sessionTabId: claim.sessionTabId,
+      ttlMs: 60_000
+    });
+    expect(background.debuggerAttachCount()).toBe(1);
+    expect(background.debuggerDetachCount()).toBe(0);
+    expect(background.debuggerAttached.has(2)).toBe(true);
+    expect(refreshed).toMatchObject({ attached: true, tabId: 2, inputPath: 'cdp', ttlMs: 60_000 });
+    expect(refreshed.expiresAt).toBe(65_000);
+  });
+
+  it('detaches live sockets immediately when Allowed Origins no longer include the tab', async () => {
+    const settings = {
+      bridgeUrl: 'ws://127.0.0.1:8765',
+      token,
+      allowedOrigins: ['https://allowed.example/*'],
+      enableCdp: true
+    };
+    const background = loadCdpBackground({ settings });
+    await claimAndAttach(background);
+    expect(background.debuggerAttached.has(2)).toBe(true);
+    settings.allowedOrigins = ['https://other.example/*'];
+    background.fireStorageChanged(
+      { allowedOrigins: { oldValue: ['https://allowed.example/*'], newValue: ['https://other.example/*'] } },
+      'local'
+    );
+    await flushMicrotasks(12);
+    expect(background.debuggerAttached.has(2)).toBe(false);
+    settings.allowedOrigins = ['https://allowed.example/*'];
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_ORIGIN_NOT_ALLOWED');
+  });
+
+  it('keeps the socket when Allowed Origins still include the attached tab', async () => {
+    const settings = {
+      bridgeUrl: 'ws://127.0.0.1:8765',
+      token,
+      allowedOrigins: ['https://allowed.example/*', 'https://other.example/*'],
+      enableCdp: true
+    };
+    const background = loadCdpBackground({ settings });
+    await claimAndAttach(background);
+    settings.allowedOrigins = ['https://allowed.example/*'];
+    background.fireStorageChanged(
+      {
+        allowedOrigins: {
+          oldValue: ['https://allowed.example/*', 'https://other.example/*'],
+          newValue: ['https://allowed.example/*']
+        }
+      },
+      'local'
+    );
+    await flushMicrotasks(12);
+    expect(background.debuggerAttached.has(2)).toBe(true);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      inputPath: 'cdp'
+    });
+  });
+
+  it('returns a typed CDP_CROSS_ORIGIN_FRAME error for trusted clicks in a cross-origin iframe', async () => {
+    const background = loadCdpBackground(
+      {
+        frames: [
+          {
+            tabId: 2,
+            frameId: 0,
+            parentFrameId: -1,
+            documentId: 'top-doc',
+            url: 'https://allowed.example/docs',
+            documentLifecycle: 'active',
+            frameType: 'outermost_frame'
+          },
+          {
+            tabId: 2,
+            frameId: 7,
+            parentFrameId: 0,
+            documentId: 'child-doc',
+            parentDocumentId: 'top-doc',
+            url: 'https://cross.example/frame',
+            documentLifecycle: 'active',
+            frameType: 'sub_frame'
+          }
+        ],
+        settings: {
+          bridgeUrl: 'ws://127.0.0.1:8765',
+          token,
+          allowedOrigins: ['https://allowed.example/*', 'https://cross.example/*'],
+          enableCdp: true
+        }
+      },
+      (_tabId, message, options) => {
+        if (message.action === 'cdp_prepare_click' && options.documentId === 'child-doc') {
+          throw new Error(
+            'CDP_CROSS_ORIGIN_FRAME: cannot map iframe coordinates for trusted input. Detach CDP, or use a same-origin frame or the top document.'
+          );
+        }
+        return { x: 12, y: 34, clicked: 'h1', ref: 'h1' };
+      }
+    );
+    await claimAndAttach(background);
+    await expect(
+      background.handleBridgeRequest('click', { ref: 'h1', tabId: 2, documentId: 'child-doc' })
+    ).rejects.toThrow('CDP_CROSS_ORIGIN_FRAME');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+});
+
