@@ -1843,7 +1843,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.target === 'cbc-background' && message?.kind === 'adapter-status') {
     const storageOperation =
-      message.adapterStatus === null
+      message.adapterStatus == null
         ? chrome.storage.local.remove('adapterStatus')
         : chrome.storage.local.set({ adapterStatus: message.adapterStatus });
     storageOperation.catch(() => undefined);

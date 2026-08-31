@@ -145,6 +145,18 @@ describe('offscreen adapter status routing', () => {
     ]);
   });
 
+  it('R1: a synchronous sendMessage failure does not stop reconnect scheduling', async () => {
+    const harness = loadOffscreenHarness();
+    await connect(harness);
+
+    harness.chrome.runtime.sendMessage = () => {
+      throw new Error('runtime unavailable');
+    };
+
+    expect(() => harness.sockets[0].emit('close', { code: 1000, reason: 'normal' })).not.toThrow();
+    expect(harness.timers.some((timer) => timer.active && timer.delay === 2000)).toBe(true);
+  });
+
   it('T2: closing the socket arms the reconnect timer', async () => {
     const harness = loadOffscreenHarness();
     await connect(harness);
@@ -163,6 +175,7 @@ describe('offscreen adapter status routing', () => {
       kind: 'status-update',
       status: 'auth_failed: invalid token'
     });
+    expect(harness.timers.some((timer) => timer.active && timer.delay === 2000)).toBe(true);
   });
 
   it('T4: close code 1006 before open reports the broker-not-running status', async () => {
@@ -175,6 +188,7 @@ describe('offscreen adapter status routing', () => {
       kind: 'status-update',
       status: 'error: broker not running — start npm run broker'
     });
+    expect(harness.timers.some((timer) => timer.active && timer.delay === 2000)).toBe(true);
   });
 
   it('T5: adapter_status sends the normalised payload to the worker', async () => {
@@ -185,8 +199,17 @@ describe('offscreen adapter status routing', () => {
       data: JSON.stringify({
         kind: 'adapter_status',
         adapterProtocolVersion: 7,
-        registeredToolCount: '12',
+        registeredToolCount: 12,
         mcpClientCount: 3,
+        updatedAt: 9876
+      })
+    });
+    harness.sockets[0].emit('message', {
+      data: JSON.stringify({
+        kind: 'adapter_status',
+        adapterProtocolVersion: '7',
+        registeredToolCount: '12',
+        mcpClientCount: '3',
         updatedAt: 'not-a-timestamp'
       })
     });
@@ -197,8 +220,18 @@ describe('offscreen adapter status routing', () => {
         kind: 'adapter-status',
         adapterStatus: {
           adapterProtocolVersion: 7,
-          registeredToolCount: 0,
+          registeredToolCount: 12,
           mcpClientCount: 3,
+          updatedAt: 9876
+        }
+      },
+      {
+        target: 'cbc-background',
+        kind: 'adapter-status',
+        adapterStatus: {
+          adapterProtocolVersion: null,
+          registeredToolCount: 0,
+          mcpClientCount: 0,
           updatedAt: 4321
         }
       }
@@ -226,8 +259,28 @@ describe('offscreen adapter status routing', () => {
     expect(Object.keys(harness.chrome)).toEqual(['runtime']);
     expect(() => {
       harness.sockets[0].emit('message', {
-        data: JSON.stringify({ kind: 'adapter_status' })
+        data: JSON.stringify({
+          kind: 'adapter_status',
+          adapterProtocolVersion: 7,
+          registeredToolCount: 12,
+          mcpClientCount: 3,
+          updatedAt: 9876
+        })
       });
+    }).not.toThrow();
+    expect(adapterStatusMessages(harness)).toEqual([
+      {
+        target: 'cbc-background',
+        kind: 'adapter-status',
+        adapterStatus: {
+          adapterProtocolVersion: 7,
+          registeredToolCount: 12,
+          mcpClientCount: 3,
+          updatedAt: 9876
+        }
+      }
+    ]);
+    expect(() => {
       harness.sockets[0].emit('close', { code: 1000, reason: 'normal' });
     }).not.toThrow();
   });

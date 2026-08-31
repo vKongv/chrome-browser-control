@@ -4599,6 +4599,37 @@ describe('extension background adapter status storage', () => {
     expect(background.localStorageRemovals).toContain('adapterStatus');
     expect(background.runtimeMessageReturns.at(-1)).toBe(true);
   });
+
+  it('R2: absent and undefined adapterStatus payloads remove the stored value', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: []
+      },
+      tabs: []
+    });
+
+    await expect(
+      background.sendRuntimeMessage({
+        target: 'cbc-background',
+        kind: 'adapter-status'
+      })
+    ).resolves.toEqual({ ok: true });
+    expect(background.localStorageRemovals).toEqual(['adapterStatus']);
+    expect(background.localStorageWrites).toEqual([]);
+
+    await expect(
+      background.sendRuntimeMessage({
+        target: 'cbc-background',
+        kind: 'adapter-status',
+        adapterStatus: undefined
+      })
+    ).resolves.toEqual({ ok: true });
+    expect(background.localStorageRemovals).toEqual(['adapterStatus', 'adapterStatus']);
+    expect(background.localStorageWrites).toEqual([]);
+    expect(background.runtimeMessageReturns.at(-1)).toBe(true);
+  });
 });
 
 describe('trusted chrome.debugger tier', () => {
