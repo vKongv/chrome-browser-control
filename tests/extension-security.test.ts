@@ -52,7 +52,9 @@ function loadBackgroundHarness({
   executeScriptError,
   sessionStore,
   sessionGetHold,
-  sessionGetError
+  sessionGetError,
+  debuggerAttachError,
+  debuggerTargets
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
@@ -71,6 +73,8 @@ function loadBackgroundHarness({
   sessionStore?: Record<string, unknown>;
   sessionGetHold?: Promise<void>;
   sessionGetError?: Error;
+  debuggerAttachError?: Error;
+  debuggerTargets?: Array<Record<string, unknown>>;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
@@ -82,6 +86,11 @@ function loadBackgroundHarness({
   const captures: Array<{ windowId: number; options: Record<string, unknown> }> = [];
   const windowUpdates: Array<{ windowId: number; update: Record<string, unknown> }> = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
+  const debuggerDetachListeners: Array<(source: { tabId?: number }, reason: string) => void> = [];
+  const navigationCommittedListeners: Array<(details: Record<string, unknown>) => void> = [];
+  const permissionRemovedListeners: Array<(removed: { permissions?: string[]; origins?: string[] }) => void> = [];
+  const debuggerCommands: Array<{ tabId: number; method: string; params: Record<string, unknown> }> = [];
+  const debuggerAttached = new Set<number>();
   const runtimeMessageListeners: Array<
     (message: Record<string, unknown>, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void
   > = [];
@@ -168,6 +177,35 @@ function loadBackgroundHarness({
         const granted = originsGranted && permissionsGranted;
         callback?.(granted);
         return Promise.resolve(granted);
+      },
+      onRemoved: {
+        addListener: (listener: (removed: { permissions?: string[]; origins?: string[] }) => void) => {
+          permissionRemovedListeners.push(listener);
+        }
+      }
+    },
+    debugger: {
+      attach: async (target: { tabId: number }) => {
+        if (debuggerAttachError) throw debuggerAttachError;
+        debuggerAttached.add(target.tabId);
+      },
+      detach: async (target: { tabId: number }) => {
+        debuggerAttached.delete(target.tabId);
+      },
+      sendCommand: async (target: { tabId: number }, method: string, params: Record<string, unknown> = {}) => {
+        debuggerCommands.push({ tabId: target.tabId, method, params });
+        return {};
+      },
+      getTargets: async () =>
+        debuggerTargets ??
+        [...debuggerAttached].map((tabId) => ({
+          tabId,
+          attached: true
+        })),
+      onDetach: {
+        addListener: (listener: (source: { tabId?: number }, reason: string) => void) => {
+          debuggerDetachListeners.push(listener);
+        }
       }
     },
     tabs: {
@@ -267,6 +305,11 @@ function loadBackgroundHarness({
       }
     },
     webNavigation: {
+      onCommitted: {
+        addListener: (listener: (details: Record<string, unknown>) => void) => {
+          navigationCommittedListeners.push(listener);
+        }
+      },
       getAllFrames: async ({ tabId }: { tabId: number }) =>
         configuredFrames
           .filter((frame) => frame.tabId === tabId)
@@ -354,6 +397,7 @@ function loadBackgroundHarness({
   });
   (context as any).globalThis = context;
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8'), context);
+  vm.runInContext(readFileSync(join(process.cwd(), 'extension/cdp.js'), 'utf8'), context);
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/background.js'), 'utf8'), context);
   return Object.assign((context as any).BrowserControlBackground, {
     sentMessages,
@@ -380,6 +424,18 @@ function loadBackgroundHarness({
       for (const listener of tabRemovedListeners) listener(tabId);
     },
     sessionStore: sessionData,
+    debuggerCommands,
+    debuggerAttached,
+    fireDebuggerDetach(tabId: number, reason: string) {
+      debuggerAttached.delete(tabId);
+      for (const listener of debuggerDetachListeners) listener({ tabId }, reason);
+    },
+    fireNavigationCommitted(details: Record<string, unknown>) {
+      for (const listener of navigationCommittedListeners) listener(details);
+    },
+    firePermissionsRemoved(removed: { permissions?: string[]; origins?: string[] }) {
+      for (const listener of permissionRemovedListeners) listener(removed);
+    },
     sendRuntimeMessage(message: Record<string, unknown>) {
       return new Promise((resolve) => {
         let settled = false;
@@ -444,6 +500,13 @@ describe('extension security helpers', () => {
     expect(manifest.permissions).not.toContain('<all_urls>');
     expect(manifest.optional_permissions || []).not.toContain('<all_urls>');
     expect(manifest.optional_host_permissions).toContain('<all_urls>');
+  });
+
+  it('declares debugger only as an optional permission', () => {
+    const manifest = JSON.parse(readFileSync(join(process.cwd(), 'extension/manifest.json'), 'utf8'));
+
+    expect(manifest.permissions).not.toContain('debugger');
+    expect(manifest.optional_permissions).toEqual(['debugger']);
   });
 
   it('allows only loopback ws bridge URLs without paths', () => {
@@ -591,8 +654,11 @@ describe('extension background origin enforcement', () => {
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      protocolVersion: 6,
+      debuggerPermissionGranted: false,
+      attachedTabs: [],
+      protocolVersion: 7,
       features: expect.arrayContaining([
+        'cdp-trusted-input',
         'document-targeting',
         'act-observe',
         'navigate-pending-warning',
@@ -4458,3 +4524,193 @@ describe('extension background origin enforcement', () => {
     });
   });
 });
+
+describe('optional chrome.debugger tier', () => {
+  const token = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
+  const allowedTab = {
+    id: 2,
+    active: true,
+    highlighted: true,
+    title: 'Allowed',
+    url: 'https://allowed.example/docs',
+    windowId: 1,
+    status: 'complete'
+  };
+
+  function loadCdpBackground(
+    overrides: Record<string, unknown> = {},
+    contentResult: Record<string, unknown> | ((tabId: number, message: Record<string, unknown>) => Record<string, unknown>) = {
+      x: 12,
+      y: 34,
+      clicked: 'h1',
+      ref: 'h1'
+    }
+  ) {
+    return loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [allowedTab],
+      grantedPermissions: ['debugger'],
+      contentResult,
+      ...overrides
+    });
+  }
+
+  async function claimAndAttach(background: ReturnType<typeof loadBackgroundHarness>, ttlMs = 60_000) {
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    const attached = await background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId, ttlMs });
+    return { claim, attached };
+  }
+
+  it('refuses attach without the optional debugger permission', async () => {
+    const background = loadCdpBackground({ grantedPermissions: [] });
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).rejects.toThrow(
+      'CDP_PERMISSION_DENIED'
+    );
+  });
+
+  it('refuses attach on an unclaimed tab', async () => {
+    const background = loadCdpBackground();
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: 'tab-missing' })).rejects.toThrow(
+      'CDP_TAB_NOT_CLAIMED'
+    );
+  });
+
+  it('refuses attach when Chrome rejects the debugger socket', async () => {
+    const background = loadCdpBackground({
+      debuggerAttachError: new Error('Cannot access a chrome:// URL')
+    });
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).rejects.toThrow(
+      'CDP_ATTACH_REFUSED'
+    );
+  });
+
+  it('attaches on a claimed allowed tab and reports it from ping', async () => {
+    const background = loadCdpBackground();
+    const { claim, attached } = await claimAndAttach(background);
+    expect(attached).toMatchObject({
+      attached: true,
+      tabId: 2,
+      sessionTabId: claim.sessionTabId,
+      inputPath: 'cdp'
+    });
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
+      debuggerPermissionGranted: true,
+      attachedTabs: [expect.objectContaining({ tabId: 2, sessionTabId: claim.sessionTabId })]
+    });
+  });
+
+  it('routes click through CDP while attached and through the content script after detach', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      clicked: 'h1',
+      inputPath: 'cdp'
+    });
+    expect(background.debuggerCommands.map((command) => command.method)).toEqual([
+      'Input.dispatchMouseEvent',
+      'Input.dispatchMouseEvent',
+      'Input.dispatchMouseEvent'
+    ]);
+    await background.handleBridgeRequest('cdp_detach', { tabId: 2 });
+    background.debuggerCommands.length = 0;
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      x: 12,
+      y: 34
+    });
+    expect(background.debuggerCommands).toEqual([]);
+    expect(background.sentMessages.some((entry) => entry.message.action === 'click')).toBe(true);
+  });
+
+  it('rejects an unlisted CDP method before sendCommand', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    await expect(background.sendCdpCommand(2, 'Network.enable', {})).rejects.toThrow('CDP_METHOD_NOT_PERMITTED');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
+  it('detaches on release_tab and finalize_tabs', async () => {
+    const first = loadCdpBackground();
+    const claimed = await claimAndAttach(first);
+    await expect(first.handleBridgeRequest('release_tab', { sessionTabId: claimed.claim.sessionTabId })).resolves.toMatchObject({
+      released: true
+    });
+    expect(first.debuggerAttached.has(2)).toBe(false);
+
+    const second = loadCdpBackground();
+    await second.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await second.handleBridgeRequest('cdp_attach', {
+      sessionTabId: (await second.handleBridgeRequest('claim_tab', { tabId: 2 })).sessionTabId
+    });
+    await second.handleBridgeRequest('finalize_tabs');
+    expect(second.debuggerAttached.has(2)).toBe(false);
+  });
+
+  it('auto-detaches when the attach TTL expires', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background, 1_000);
+    expect(background.debuggerAttached.has(2)).toBe(true);
+    background.advanceTime(1_000);
+    await background.handleBridgeRequest('ping');
+    expect(background.debuggerAttached.has(2)).toBe(false);
+  });
+
+  it('fails closed after DevTools eviction and does not auto re-attach', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    background.fireDebuggerDetach(2, 'canceled_by_user');
+    await flushMicrotasks();
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_DETACHED_BY_USER');
+    expect(background.debuggerAttached.has(2)).toBe(false);
+  });
+
+  it('detaches immediately on navigation to a disallowed origin', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://blocked.example/' });
+    await flushMicrotasks(12);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_ORIGIN_NOT_ALLOWED');
+  });
+
+  it('hydrates a dropped debugger socket as suspension and never auto-attaches', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [allowedTab],
+      grantedPermissions: ['debugger'],
+      debuggerTargets: [],
+      contentResult: { x: 12, y: 34, clicked: 'h1' },
+      sessionStore: {
+        cbcCdpAttachState: {
+          attachments: [
+            [
+              2,
+              {
+                tabId: 2,
+                sessionTabId: 'tab-1',
+                attachedAt: 0,
+                expiresAt: 600_000,
+                ttlMs: 600_000
+              }
+            ]
+          ],
+          failClosed: []
+        }
+      }
+    });
+    await background.cdpStateReady;
+    expect(background.debuggerAttached.size).toBe(0);
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow(
+      'CDP_DETACHED_BY_SUSPENSION'
+    );
+  });
+});
+

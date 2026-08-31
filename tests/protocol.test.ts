@@ -69,6 +69,8 @@ describe('protocol validation', () => {
       'claim_tab',
       'release_tab',
       'finalize_tabs',
+      'cdp_attach',
+      'cdp_detach',
       'snapshot',
       'visible_snapshot',
       'navigate',

@@ -17,7 +17,7 @@ This repository is a local-only prototype. It is not production-ready unless you
 - Visible screenshots may activate an inactive target tab because Chrome MV3 captures the visible tab in a window. Chrome requires `<all_urls>` or `activeTab` for `captureVisibleTab`; this project requests optional `<all_urls>` as a host permission only for wildcard screenshot support. The extension background still rejects non-http(s) and unapproved URLs before capture.
 - The broker can optionally require `CHROME_BROWSER_CONTROL_EXTENSION_ID` to pin one installed extension.
 - Non-loopback binding is unsupported.
-- CDP fallback is unsupported in the MCP adapter because it bypasses extension pairing.
+- Trusted CDP input is opt-in behind the optional `debugger` permission. Attach requires a claimed tab and an allowed origin. Commands are constrained to `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent`. The socket fails closed on service-worker suspension, navigation to a disallowed origin, and DevTools eviction. `Fetch.*`, `Network.setRequestInterception`, `Network.continueInterceptedRequest`, and `Runtime.evaluate` are forbidden, not merely unimplemented. The MCP adapter does not open a raw CDP socket.
 
 ## Reporting Vulnerabilities
 

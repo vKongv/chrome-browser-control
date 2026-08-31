@@ -44,6 +44,18 @@
         case 'keypress':
           result = core.performKeypress(message.params || {}, document);
           break;
+        case 'cdp_prepare_click':
+          result = core.prepareTrustedClick(message.params || {}, document);
+          break;
+        case 'cdp_prepare_type':
+          result = core.prepareTrustedType(message.params || {}, document);
+          break;
+        case 'cdp_prepare_click_at':
+          result = core.prepareTrustedClickAt(message.params || {}, document);
+          break;
+        case 'cdp_prepare_keypress':
+          result = core.prepareTrustedKeypress(message.params || {}, document);
+          break;
         case 'wait_for':
           result = core.waitForCondition(message.params || {}, document);
           break;

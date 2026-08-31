@@ -6,6 +6,8 @@
       body { font-family: system-ui, sans-serif; min-width: 280px; padding: 12px; }
       label { display: block; margin: 8px 0 4px; font-weight: 600; }
       input { width: 100%; box-sizing: border-box; }
+      input[type="checkbox"] { width: auto; }
+      .hint { margin: 4px 0 0; font-size: 12px; color: #444; }
       textarea { width: 100%; min-height: 72px; box-sizing: border-box; }
       button { margin-top: 12px; width: 100%; }
       .secondary { margin-top: 6px; }
@@ -22,6 +24,11 @@
     <input id="token" type="password" autocomplete="off" placeholder="32+ random URL-safe characters" />
     <label for="allowedOrigins">Allowed origins</label>
     <textarea id="allowedOrigins" placeholder="https://example.com&#10;http://localhost:3000&#10;*"></textarea>
+    <label for="enableDebugger">
+      <input id="enableDebugger" type="checkbox" />
+      Enable trusted input (optional debugger permission)
+    </label>
+    <p class="hint">Off by default. Chrome shows a debugging banner on attached tabs after you grant this.</p>
     <button id="save">Save and reconnect</button>
     <label for="setupSnippet">MCP config helper</label>
     <textarea id="setupSnippet" readonly placeholder="Save settings, then copy a config snippet."></textarea>

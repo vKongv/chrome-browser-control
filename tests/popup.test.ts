@@ -20,7 +20,8 @@ function loadPopupHarness({
     save: { value: '' },
     copyJson: { value: '' },
     copyCursor: { value: '' },
-    copyYaml: { value: '' }
+    copyYaml: { value: '' },
+    enableDebugger: { value: '', checked: false }
   };
   const listeners = new Map<string, Array<(event?: unknown) => unknown>>();
 
@@ -43,10 +44,19 @@ function loadPopupHarness({
       }
     },
     permissions: {
+      contains: (request: { origins?: string[]; permissions?: string[] }, callback?: (granted: boolean) => void) => {
+        callback?.(false);
+        return Promise.resolve(false);
+      },
       request: (request: { origins?: string[]; permissions?: string[] }, callback?: (granted: boolean) => void) => {
         events.push({ type: 'permissions.request', payload: request });
         callback?.(grantedOnRequest);
         return Promise.resolve(grantedOnRequest);
+      },
+      remove: (request: { permissions?: string[] }, callback?: (removed: boolean) => void) => {
+        events.push({ type: 'permissions.remove', payload: request });
+        callback?.(true);
+        return Promise.resolve(true);
       }
     },
     runtime: {
@@ -78,6 +88,12 @@ function loadPopupHarness({
           const existing = listeners.get(key) || [];
           existing.push(handler);
           listeners.set(key, existing);
+        },
+        get checked() {
+          return Boolean(field.checked);
+        },
+        set checked(next: boolean) {
+          field.checked = Boolean(next);
         }
       };
     }
@@ -121,7 +137,7 @@ describe('popup save ordering', () => {
     await harness.clickSave();
 
     const types = harness.events.map((event) => event.type);
-    expect(types.slice(0, 3)).toEqual(['storage.set', 'permissions.request', 'runtime.sendMessage']);
+    expect(types.slice(0, 4)).toEqual(['storage.set', 'permissions.request', 'permissions.remove', 'runtime.sendMessage']);
     expect(harness.events[0]).toEqual({
       type: 'storage.set',
       payload: {
@@ -147,7 +163,7 @@ describe('popup save ordering', () => {
 
     await harness.clickSave();
 
-    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.request']);
+    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.request', 'permissions.remove']);
     expect(harness.events[1]).toEqual({
       type: 'permissions.request',
       payload: { origins: ['https://example.com/*'] }
@@ -156,6 +172,26 @@ describe('popup save ordering', () => {
     expect(harness.events.some((event) => event.type === 'runtime.sendMessage' && (event.payload as { action?: string }).action === 'connect')).toBe(
       false
     );
+  });
+
+  it('requests the debugger permission in the same call as origins when enabled', async () => {
+    const harness = loadPopupHarness();
+    await harness.flush();
+    harness.events.length = 0;
+    harness.fields.enableDebugger.checked = true;
+    harness.fields.allowedOrigins.value = 'https://example.com';
+
+    await harness.clickSave();
+
+    expect(harness.events[0]?.type).toBe('storage.set');
+    expect(harness.events[1]).toEqual({
+      type: 'permissions.request',
+      payload: {
+        origins: ['https://example.com/*'],
+        permissions: ['debugger']
+      }
+    });
+    expect(harness.events.some((event) => event.type === 'permissions.remove')).toBe(false);
   });
 
   it('exposes persist-then-request so a closed popup cannot drop the save', async () => {

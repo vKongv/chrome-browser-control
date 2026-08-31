@@ -415,7 +415,11 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
             status: bridgeStatus,
             ...marker,
             ...(Array.isArray(ping.allowedOrigins) ? { allowedOrigins: ping.allowedOrigins } : {}),
-            ...(ping.session !== undefined ? { session: ping.session } : {})
+            ...(ping.session !== undefined ? { session: ping.session } : {}),
+            ...(typeof ping.debuggerPermissionGranted === 'boolean'
+              ? { debuggerPermissionGranted: ping.debuggerPermissionGranted }
+              : {}),
+            ...(Array.isArray(ping.attachedTabs) ? { attachedTabs: ping.attachedTabs } : {})
           },
           ping: normalizedPing
         },
@@ -470,7 +474,7 @@ export function registerBrowserTools(
     {
       title: 'Browser bridge status',
       description:
-        'Check whether the MCP adapter can reach the local broker and whether the Chrome extension answers ping. Read nextAction for onboarding coaching.',
+        'Check whether the MCP adapter can reach the local broker and whether the Chrome extension answers ping. Read nextAction for onboarding coaching. When the extension answers, also read debuggerPermissionGranted and attachedTabs for the optional trusted-input tier.',
       inputSchema: {}
     },
     async () => browserStatus(bridge, options.getStatusContext?.() ?? {})
@@ -556,6 +560,40 @@ export function registerBrowserTools(
       }
     },
     async (args) => forward(bridge, 'release_tab', args)
+  );
+
+  registerTool(
+    'cdp_attach',
+    {
+      title: 'Attach trusted CDP input',
+      description:
+        'Attach the optional chrome.debugger tier to a claimed tab. While attached, click, type, keypress, click_at, and matching perform_actions steps use trusted CDP input. Requires the popup debugger permission and an allowed origin. Chrome shows a debugging banner on the tab.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).describe('Claimed tab session id returned by claim_tab.'),
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .max(3_600_000)
+          .optional()
+          .describe('Auto-detach TTL in milliseconds. Defaults to 600000 (10 minutes).')
+      }
+    },
+    async (args) => forward(bridge, 'cdp_attach', args)
+  );
+
+  registerTool(
+    'cdp_detach',
+    {
+      title: 'Detach trusted CDP input',
+      description:
+        'Detach the optional chrome.debugger tier from a claimed tab and return click/type/keypress to the content-script path. release_tab and finalize_tabs also detach.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).optional(),
+        tabId: OptionalTabId
+      }
+    },
+    async (args) => forward(bridge, 'cdp_detach', args)
   );
 
   registerTool(

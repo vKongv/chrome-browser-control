@@ -1,6 +1,7 @@
 const bridgeUrl = document.getElementById('bridgeUrl');
 const token = document.getElementById('token');
 const allowedOrigins = document.getElementById('allowedOrigins');
+const enableDebugger = document.getElementById('enableDebugger');
 const statusEl = document.getElementById('status');
 const save = document.getElementById('save');
 const setupSnippet = document.getElementById('setupSnippet');
@@ -104,6 +105,9 @@ async function refresh() {
   allowedOrigins.value = formatAllowedOriginPatternsForDisplay(settings.allowedOrigins).join('\n');
   setupSnippet.value = jsonConfigTemplate(settings.token || '<generated-token>');
   showStatus(settings.status);
+  if (enableDebugger) {
+    enableDebugger.checked = await containsPermission({ permissions: ['debugger'] });
+  }
   const response = await queryLiveStatus();
   if (response?.ok) showStatus(response.status);
 }
@@ -127,6 +131,20 @@ chrome.storage.onChanged.addListener((changes, area) => {
 copyJson.addEventListener('click', () => copySnippet('json'));
 copyCursor.addEventListener('click', () => copySnippet('cursor'));
 copyYaml.addEventListener('click', () => copySnippet('yaml'));
+
+function containsPermission(request) {
+  if (!chrome.permissions?.contains) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    chrome.permissions.contains(request, (granted) => resolve(Boolean(granted)));
+  });
+}
+
+function removePermissions(request) {
+  if (!chrome.permissions?.remove) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    chrome.permissions.remove(request, (removed) => resolve(Boolean(removed)));
+  });
+}
 
 function requestOptionalPermissions(request = {}) {
   const origins = Array.isArray(request.origins) ? request.origins : [];
@@ -157,7 +175,10 @@ save.addEventListener('click', async () => {
       allowedOrigins: nextAllowedOrigins
     };
     const origins = collectOptionalPermissionOrigins(nextAllowedOrigins);
-    const { granted } = await persistSettingsThenRequestPermissions({ settings, origins });
+    const wantDebugger = enableDebugger?.checked === true;
+    const permissions = wantDebugger ? ['debugger'] : [];
+    const { granted } = await persistSettingsThenRequestPermissions({ settings, origins, permissions });
+    if (!wantDebugger) await removePermissions({ permissions: ['debugger'] });
     bridgeUrl.value = nextBridgeUrl;
     allowedOrigins.value = formatAllowedOriginPatternsForDisplay(nextAllowedOrigins).join('\n');
     if (!granted) {

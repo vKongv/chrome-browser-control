@@ -12,6 +12,9 @@
     "offscreen",
     "webNavigation"
   ],
+  "optional_permissions": [
+    "debugger"
+  ],
   "optional_host_permissions": [
     "http://*/*",
     "https://*/*",

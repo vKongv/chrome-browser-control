@@ -150,13 +150,15 @@ If your MCP host uses a config file, keep it private and outside the repository.
 
 ## Tools
 
-- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `6` includes the `document-targeting` feature marker.
+- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, `extension.debuggerPermissionGranted` / `extension.attachedTabs` report the optional trusted-input tier, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `7` includes the `cdp-trusted-input` feature marker.
 - `name_session`: sets a human-readable session name for status/debugging.
 - `list_tabs`: lists tabs whose URL origin is allowed in the extension popup. When every open tab is filtered out, returns `{ tabs: [], detail, hiddenTabCount, allowedOrigins? }` instead of a bare `[]`. Wildcard mode is labeled clearly in `allowedOrigins`.
 - `list_frames`: lists current frame documents for an allowed tab using Chrome's frame registry. Operable active HTTP(S) documents include a `documentId`; policy-blocked, host-permission-denied, unsupported, fenced, and non-active rows retain hierarchy/status only and redact URL and document identity.
 - `claim_tab`: claims an allowed tab for this browser-control session and returns a `sessionTabId`. Claims are routing state, not exclusive browser locks.
 - `release_tab`: releases a claim by `sessionTabId` or `tabId` without closing the tab.
-- `finalize_tabs`: releases claim state for the session without closing tabs. Pass `keep` entries to preserve handoff/deliverable claims.
+- `finalize_tabs`: releases claim state for the session without closing tabs. Pass `keep` entries to preserve handoff/deliverable claims. Also detaches any CDP attachment on released tabs.
+- `cdp_attach`: attaches the optional trusted-input tier to a claimed tab (`sessionTabId` required). Off by default; grant the debugger permission in the popup first. Chrome shows a persistent debugging banner on the attached tab. While attached, `click`, `type`, `keypress`, `click_at`, and matching `perform_actions` steps use CDP.
+- `cdp_detach`: detaches trusted input and returns those tools to the content-script path without releasing the claim.
 - `snapshot`: returns a simplified DOM snapshot for an allowed document. By default this is a compact automation snapshot that includes concise actionable elements, a text preview (500 chars), omitted counts, and region summaries. Compact defaults to main-landmark scope when present; a visible modal dialog (`aria-modal="true"` or `<dialog>` opened with `showModal()`) takes that scope instead. Other visible `role="dialog"` nodes are included in the current scope and do not steal it. Hidden or closed dialogs have no effect. Pass `scope: "document"` for the full body (including the page behind a modal), `ignoreRoles: ["dialog"]` or `["alertdialog"]` to hide both `dialog` and `alertdialog`, `ignoreRoles: []` to include them in the current scope, or `mode: "full"` for the unscoped legacy snapshot. Pass `mode: "visible"` for viewport/intersection-aware elements with bounds and scroll metadata. Pass `textLimit` (up to `100000`) when you need more page body text — check `textBytesOmitted` to see if content was truncated.
 - `visible_snapshot`: convenience tool for `snapshot({ mode: "visible" })`.
 - `navigate`: navigates the active tab or a specified `tabId` to an allowed URL, then waits for the tab to finish loading when possible. By default focus is unchanged (background tabs stay in the background; the focused tab is not deactivated). Pass `active: true` only when the tab must become visible. If loading times out, the result includes `pending: true` and a `warning`. Supports `after` observations after the load wait.
@@ -270,7 +272,7 @@ npm audit
 
 `npm run benchmark:snapshots` is an alias for the same compact-vs-full benchmark. The benchmark prints compact bytes, full bytes, and reduction percentage; compact mode should stay at least 50% smaller on the dense fixture.
 
-After editing files under `extension/`, reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 25`, extension protocol version `6`, and the `document-targeting` feature marker when both sides are current.
+After editing files under `extension/`, reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 27`, extension protocol version `7`, and the `cdp-trusted-input` feature marker when both sides are current.
 
 ## Limitations
 
@@ -280,7 +282,7 @@ After editing files under `extension/`, reload the unpacked extension on `chrome
 - Refs are document-scoped in-memory handles. Run `snapshot` again after navigation, reloads, major DOM changes, or stale-ref errors.
 - Visible screenshots are viewport-only. Capturing an inactive tab may activate it because Chrome MV3 captures the visible tab in a window.
 - Chrome screenshot capture requires `<all_urls>` or `activeTab`. This project requests optional `<all_urls>` as a host permission only for wildcard screenshots. If `screenshot` reports that this permission is missing, reload the extension after manifest updates, open the popup, save settings, and grant the prompt.
-- `keypress` and `click_at` use DOM events, not CDP input dispatch. They are useful for page handlers but may not trigger privileged browser shortcuts or every framework-specific input path.
+- `keypress` and `click_at` use DOM events unless the tab is CDP-attached. After `cdp_attach`, they use trusted CDP input (`isTrusted: true`). They still do not guarantee privileged browser or OS shortcuts.
 - Console logs are captured only after content script injection and are bounded.
 - Resource summaries are counts from the Performance API only; request headers, response bodies, cookies, storage, history, bookmarks, and downloads are intentionally not exposed.
 - Browser history, bookmark, download, and cookie tools are intentionally not exposed.
@@ -294,7 +296,7 @@ After editing files under `extension/`, reload the unpacked extension on `chrome
 - Allowed-origin checks happen in the extension background before content actions, screenshots, and tab claims.
 - Password-like and OTP fields are detected by input type, autocomplete, names, IDs, labels, and placeholders. `type` blocks them unless `force=true`.
 - Optional `CHROME_BROWSER_CONTROL_EXTENSION_ID` pins the broker to one installed extension ID.
-- CDP fallback is not supported by the MCP adapter because it bypasses extension pairing.
+- Trusted CDP input is opt-in and off by default. Grant the optional `debugger` permission in the popup, claim the tab, then call `cdp_attach`. The debugging banner on attached tabs is expected. Attach is gated by that permission plus the existing allowed-origins list; the method allowlist is `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent`. The socket fails closed on service-worker suspension, navigation away from an allowed origin, and DevTools eviction. The MCP adapter does not open a raw CDP socket.
 
 Never bind the broker to a non-loopback interface or commit tokens, local config files, logs, or personal setup notes.
 

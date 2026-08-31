@@ -40,10 +40,12 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     const count = registerBrowserTools(server, bridge);
 
-    expect(count).toBe(25);
+    expect(count).toBe(27);
     expect([...server.tools.keys()].sort()).toEqual([
       'activate_tab',
       'browser_status',
+      'cdp_attach',
+      'cdp_detach',
       'claim_tab',
       'click',
       'click_at',
@@ -411,6 +413,8 @@ describe('registerBrowserTools', () => {
     await server.tools.get('click_at')?.({ x: 10, y: 20, sessionTabId: 'tab-1' });
     await server.tools.get('keypress')?.({ keys: ['Tab', 'Enter'] });
     await server.tools.get('screenshot')?.({ format: 'jpeg' });
+    await server.tools.get('cdp_attach')?.({ sessionTabId: 'tab-1', ttlMs: 600000 });
+    await server.tools.get('cdp_detach')?.({ sessionTabId: 'tab-1' });
     await server.tools.get('release_tab')?.({ sessionTabId: 'tab-1' });
     await server.tools.get('finalize_tabs')?.({ keep: [{ tabId: 3, status: 'handoff' }] });
 
@@ -421,6 +425,8 @@ describe('registerBrowserTools', () => {
       'click_at',
       'keypress',
       'screenshot',
+      'cdp_attach',
+      'cdp_detach',
       'release_tab',
       'finalize_tabs'
     ]);
@@ -481,12 +487,14 @@ describe('registerBrowserTools', () => {
       status: 'connected',
       protocolVersion: 1,
       features: ['navigate-pending-warning'],
-      session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+      session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
+      debuggerPermissionGranted: true,
+      attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
     };
     registerBrowserTools(server, bridge, {
       getStatusContext: () => ({
         adapterProtocolVersion: ADAPTER_PROTOCOL_VERSION,
-        registeredToolCount: 25,
+        registeredToolCount: 27,
         brokerOwnership: 'adopted'
       })
     });
@@ -497,21 +505,25 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([{ action: 'ping', params: {} }]);
     expect(status).toMatchObject({
       ready: true,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 25 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 27 },
       broker: { reachable: true, ownership: 'adopted' },
       extension: {
         connected: true,
         status: 'connected',
         protocolVersion: 1,
         features: ['navigate-pending-warning'],
-        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
+        debuggerPermissionGranted: true,
+        attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
       },
       ping: {
         pong: true,
         status: 'connected',
         protocolVersion: 1,
         features: ['navigate-pending-warning'],
-        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] }
+        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
+        debuggerPermissionGranted: true,
+        attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
       }
     });
     expect(status.nextAction).toBeUndefined();
@@ -538,7 +550,7 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     bridge.error = new Error('No Chrome extension connected to broker');
     registerBrowserTools(server, bridge, {
-      getStatusContext: () => ({ registeredToolCount: 25, brokerPort: 8765 })
+      getStatusContext: () => ({ registeredToolCount: 27, brokerPort: 8765 })
     });
 
     const result = await server.tools.get('browser_status')?.({});
@@ -546,7 +558,7 @@ describe('registerBrowserTools', () => {
 
     expect(status).toMatchObject({
       ready: false,
-      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 25 },
+      adapter: { connected: true, protocolVersion: ADAPTER_PROTOCOL_VERSION, registeredToolCount: 27 },
       broker: { reachable: true },
       extension: { connected: false },
       error: 'No Chrome extension connected to broker'
