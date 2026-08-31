@@ -158,8 +158,9 @@ function requestOptionalPermissions(request = {}) {
   });
 }
 
-async function persistSettingsThenRequestPermissions({ settings, origins = [], permissions = [] }) {
+async function persistSettingsThenRequestPermissions({ settings, origins = [], permissions = [], revokePermissions = [] }) {
   await chrome.storage.local.set(settings);
+  if (revokePermissions.length) await removePermissions({ permissions: revokePermissions });
   const granted = await requestOptionalPermissions({ origins, permissions });
   return { saved: true, granted };
 }
@@ -177,8 +178,13 @@ save.addEventListener('click', async () => {
     const origins = collectOptionalPermissionOrigins(nextAllowedOrigins);
     const wantDebugger = enableDebugger?.checked === true;
     const permissions = wantDebugger ? ['debugger'] : [];
-    const { granted } = await persistSettingsThenRequestPermissions({ settings, origins, permissions });
-    if (!wantDebugger) await removePermissions({ permissions: ['debugger'] });
+    const revokePermissions = wantDebugger ? [] : ['debugger'];
+    const { granted } = await persistSettingsThenRequestPermissions({
+      settings,
+      origins,
+      permissions,
+      revokePermissions
+    });
     bridgeUrl.value = nextBridgeUrl;
     allowedOrigins.value = formatAllowedOriginPatternsForDisplay(nextAllowedOrigins).join('\n');
     if (!granted) {

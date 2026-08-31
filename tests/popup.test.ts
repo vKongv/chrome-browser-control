@@ -6,9 +6,11 @@ import { describe, expect, it } from 'vitest';
 const TOKEN = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
 
 function loadPopupHarness({
-  grantedOnRequest = true
+  grantedOnRequest = true,
+  hangRequest = false
 }: {
   grantedOnRequest?: boolean;
+  hangRequest?: boolean;
 } = {}) {
   const events: Array<{ type: string; payload: unknown }> = [];
   const fields: Record<string, { value: string; textContent?: string }> = {
@@ -50,6 +52,7 @@ function loadPopupHarness({
       },
       request: (request: { origins?: string[]; permissions?: string[] }, callback?: (granted: boolean) => void) => {
         events.push({ type: 'permissions.request', payload: request });
+        if (hangRequest) return;
         callback?.(grantedOnRequest);
         return Promise.resolve(grantedOnRequest);
       },
@@ -137,7 +140,7 @@ describe('popup save ordering', () => {
     await harness.clickSave();
 
     const types = harness.events.map((event) => event.type);
-    expect(types.slice(0, 4)).toEqual(['storage.set', 'permissions.request', 'permissions.remove', 'runtime.sendMessage']);
+    expect(types.slice(0, 4)).toEqual(['storage.set', 'permissions.remove', 'permissions.request', 'runtime.sendMessage']);
     expect(harness.events[0]).toEqual({
       type: 'storage.set',
       payload: {
@@ -147,6 +150,10 @@ describe('popup save ordering', () => {
       }
     });
     expect(harness.events[1]).toEqual({
+      type: 'permissions.remove',
+      payload: { permissions: ['debugger'] }
+    });
+    expect(harness.events[2]).toEqual({
       type: 'permissions.request',
       payload: {
         origins: ['http://*/*', 'https://*/*', '<all_urls>']
@@ -163,8 +170,12 @@ describe('popup save ordering', () => {
 
     await harness.clickSave();
 
-    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.request', 'permissions.remove']);
+    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.remove', 'permissions.request']);
     expect(harness.events[1]).toEqual({
+      type: 'permissions.remove',
+      payload: { permissions: ['debugger'] }
+    });
+    expect(harness.events[2]).toEqual({
       type: 'permissions.request',
       payload: { origins: ['https://example.com/*'] }
     });
@@ -208,5 +219,43 @@ describe('popup save ordering', () => {
     expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.request']);
     expect(harness.events[0]?.payload).toEqual({ allowedOrigins: ['https://example.com/*'] });
     expect(harness.events[1]?.payload).toEqual({ origins: ['https://example.com/*'] });
+  });
+
+  it('revokes debugger before the origin request so a closed popup cannot keep it', async () => {
+    const harness = loadPopupHarness({ hangRequest: true });
+    await harness.flush();
+    harness.events.length = 0;
+    harness.fields.enableDebugger.checked = false;
+    harness.fields.allowedOrigins.value = 'https://other.example';
+
+    void harness.clickSave();
+    await harness.flush();
+
+    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.remove', 'permissions.request']);
+    expect(harness.events[1]).toEqual({
+      type: 'permissions.remove',
+      payload: { permissions: ['debugger'] }
+    });
+    expect(harness.events[2]).toEqual({
+      type: 'permissions.request',
+      payload: { origins: ['https://other.example/*'] }
+    });
+  });
+
+  it('revokes debugger through persist-then-request before a hanging permission dialog', async () => {
+    const harness = loadPopupHarness({ hangRequest: true });
+    await harness.flush();
+    harness.events.length = 0;
+
+    const pending = harness.popup.persistSettingsThenRequestPermissions({
+      settings: { allowedOrigins: ['https://other.example/*'] },
+      origins: ['https://other.example/*'],
+      revokePermissions: ['debugger']
+    });
+    await harness.flush();
+
+    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.remove', 'permissions.request']);
+    expect(harness.events[1]?.payload).toEqual({ permissions: ['debugger'] });
+    void pending;
   });
 });
