@@ -490,6 +490,12 @@ describe('extension security helpers', () => {
     expect(security.isUrlAllowed('chrome://extensions', ['*'])).toBe(false);
     expect(security.isUrlAllowed('file:///tmp/page.html', ['*'])).toBe(false);
     expect(security.isUrlAllowed('chrome-extension://abc/popup.html', ['*'])).toBe(false);
+    expect(security.collectOptionalPermissionOrigins(['http://*/*', 'https://*/*'])).toEqual([
+      'http://*/*',
+      'https://*/*',
+      '<all_urls>'
+    ]);
+    expect(security.collectOptionalPermissionOrigins(['https://example.com/*'])).toEqual(['https://example.com/*']);
   });
 
   it('deduplicates mixed wildcard and explicit origin inputs', () => {

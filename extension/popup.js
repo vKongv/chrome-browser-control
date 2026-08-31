@@ -11,8 +11,7 @@ const {
   DEFAULT_BRIDGE_URL,
   DEFAULT_ALLOWED_ORIGINS,
   formatAllowedOriginPatternsForDisplay,
-  getHostPermissionOrigins,
-  getScreenshotPermissionOrigins,
+  collectOptionalPermissionOrigins,
   normalizeAllowedOriginPatterns,
   normalizeBridgeUrl,
   validatePairingToken
@@ -129,11 +128,22 @@ copyJson.addEventListener('click', () => copySnippet('json'));
 copyCursor.addEventListener('click', () => copySnippet('cursor'));
 copyYaml.addEventListener('click', () => copySnippet('yaml'));
 
-function requestHostPermissions(origins) {
-  if (!origins.length || !chrome.permissions?.request) return Promise.resolve(true);
+function requestOptionalPermissions(request = {}) {
+  const origins = Array.isArray(request.origins) ? request.origins : [];
+  const permissions = Array.isArray(request.permissions) ? request.permissions : [];
+  if ((!origins.length && !permissions.length) || !chrome.permissions?.request) return Promise.resolve(true);
+  const payload = {};
+  if (origins.length) payload.origins = origins;
+  if (permissions.length) payload.permissions = permissions;
   return new Promise((resolve) => {
-    chrome.permissions.request({ origins }, (granted) => resolve(Boolean(granted)));
+    chrome.permissions.request(payload, (granted) => resolve(Boolean(granted)));
   });
+}
+
+async function persistSettingsThenRequestPermissions({ settings, origins = [], permissions = [] }) {
+  await chrome.storage.local.set(settings);
+  const granted = await requestOptionalPermissions({ origins, permissions });
+  return { saved: true, granted };
 }
 
 save.addEventListener('click', async () => {
@@ -141,20 +151,20 @@ save.addEventListener('click', async () => {
     const nextBridgeUrl = normalizeBridgeUrl(bridgeUrl.value);
     const nextToken = validatePairingToken(token.value);
     const nextAllowedOrigins = normalizeAllowedOriginPatterns(allowedOrigins.value);
-    const hostGranted = await requestHostPermissions(getHostPermissionOrigins(nextAllowedOrigins));
-    if (!hostGranted) {
-      showStatus('error: allowed origin permission was not granted');
-      return;
-    }
-    const screenshotGranted = await requestHostPermissions(getScreenshotPermissionOrigins(nextAllowedOrigins));
-    await chrome.storage.local.set({
+    const settings = {
       bridgeUrl: nextBridgeUrl,
       token: nextToken,
       allowedOrigins: nextAllowedOrigins
-    });
+    };
+    const origins = collectOptionalPermissionOrigins(nextAllowedOrigins);
+    const { granted } = await persistSettingsThenRequestPermissions({ settings, origins });
     bridgeUrl.value = nextBridgeUrl;
     allowedOrigins.value = formatAllowedOriginPatternsForDisplay(nextAllowedOrigins).join('\n');
-    showStatus(screenshotGranted ? 'connecting' : 'connecting; screenshot permission not granted');
+    if (!granted) {
+      showStatus('saved; optional permission was not granted');
+      return;
+    }
+    showStatus('connecting');
     const response = await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: 'connect' }, resolve);
     });
@@ -171,3 +181,11 @@ save.addEventListener('click', async () => {
 refresh().catch((error) => {
   statusEl.textContent = `error: ${error.message}`;
 });
+
+if (globalThis.CBC_TEST_HARNESS) {
+  globalThis.BrowserControlPopup = {
+    collectOptionalPermissionOrigins,
+    persistSettingsThenRequestPermissions,
+    requestOptionalPermissions
+  };
+}
