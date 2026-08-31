@@ -18,6 +18,7 @@ import {
   performClickAt,
   performKeypress,
   prepareTrustedClickAt,
+  prepareTrustedKeypress,
   queryElements,
   waitForCondition,
   performType
@@ -378,6 +379,27 @@ describe('extension content core', () => {
     Object.defineProperty(view, 'frameElement', { configurable: true, value: null });
 
     expect(() => prepareTrustedClickAt({ x: 12, y: 18 }, document as unknown as Document)).toThrow('CDP_CROSS_ORIGIN_FRAME');
+  });
+
+  it('focuses the targeted document before a trusted keypress', () => {
+    const parent = makeDocument('<input id="parent-input" />');
+    const child = makeDocument('<input id="child-input" />');
+    const parentInput = parent.querySelector('#parent-input') as unknown as HTMLElement;
+    const childInput = child.querySelector('#child-input') as unknown as HTMLElement;
+    parentInput.focus();
+    childInput.focus();
+
+    const parentFocus = vi.spyOn(parentInput, 'focus');
+    const childFocus = vi.spyOn(childInput, 'focus');
+    const childWindowFocus = vi.spyOn(child.defaultView as unknown as { focus: () => void }, 'focus');
+
+    expect(prepareTrustedKeypress({ keys: 'Enter' }, child as unknown as Document)).toEqual({
+      prepared: true,
+      keys: ['Enter']
+    });
+    expect(childWindowFocus).toHaveBeenCalled();
+    expect(childFocus).toHaveBeenCalled();
+    expect(parentFocus).not.toHaveBeenCalled();
   });
 
   it('fails click, type, click_at, and keypress on hidden documents unless allowHidden is true', () => {

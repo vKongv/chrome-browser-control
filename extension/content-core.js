@@ -1009,6 +1009,9 @@ function prepareTrustedKeypress({ keys, allowHidden = false } = {}, documentRef 
   assertDocumentVisible(documentRef, allowHidden);
   const keyList = Array.isArray(keys) ? keys : [keys];
   if (!keyList.length || keyList.some((key) => !key)) throw new Error('keypress requires keys');
+  documentRef.defaultView?.focus?.();
+  const target = documentRef.activeElement || documentRef.body || documentRef.documentElement;
+  target?.focus?.();
   return { prepared: true, keys: keyList.map((key) => String(key)) };
 }
 
