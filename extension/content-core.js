@@ -965,7 +965,7 @@ function requireTabViewportPoint(x, y, documentRef = document) {
   const point = toTabViewportPoint(x, y, documentRef);
   if (!point.ok) {
     throw new Error(
-      'Cannot map cross-origin iframe coordinates for trusted input. Use a same-origin frame or the top document.'
+      'CDP_CROSS_ORIGIN_FRAME: cannot map iframe coordinates for trusted input. Detach CDP, or use a same-origin frame or the top document.'
     );
   }
   return point;

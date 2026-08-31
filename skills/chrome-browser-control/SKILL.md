@@ -38,7 +38,7 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
    - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. By default focus is unchanged; pass `active: true` only when the user should see that tab. New tabs without a target stay in the background unless `active: true`. Use `activate_tab` to raise a tab and its window without navigating. Read `visible` / `visibilityState` from the result; do not treat `focused` as success.
    - After `navigate`, verify the landing entity with `requestedUrl`, `finalUrl`, and `redirected` (`url` aliases `finalUrl`) — especially after vanity URLs or redirects.
    - For multi-step work, call `claim_tab` (advisory by default) and keep the returned `sessionTabId`.
-   - For trusted input (`isTrusted: true`), call `cdp_attach({ sessionTabId })` after the claim. Chrome shows a debugging banner on that tab; that banner is expected. Detach with `cdp_detach` when you no longer need it. `release_tab` / `finalize_tabs` also detach. Attach auto-expires after 10 minutes unless you pass `ttlMs`.
+   - For trusted input (`isTrusted: true`), call `cdp_attach({ sessionTabId })` after the claim. Chrome shows a debugging banner on that tab; that banner is expected. Detach with `cdp_detach` when you no longer need it. `release_tab` and `finalize_tabs` also detach, including kept finalize claims. Repeating `cdp_attach` on an already-attached tab refreshes the TTL without tearing down the socket. Attach auto-expires after 10 minutes unless you pass `ttlMs`.
    - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases. Exclusive leases are tab-level only — they do not isolate whole browsers like separate remote sessions.
    - Do not rely on active-tab fallback for a task with more than one action.
    - Prefer DOM tools over `screenshot` when the user is browsing; screenshots may activate the target tab.
@@ -83,13 +83,14 @@ When the happy path fails, try these bounded recoveries before declaring the pag
 - **Coordinate clicks:** from `visible_snapshot` or `query_elements` bounds, click the center with `click_at`, then verify with a targeted `wait_for` / small snapshot. Prefer this over screenshots for interaction.
 - **Hidden document / ignored writes:** `click`, `type`, `click_at`, `keypress`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Scroll steps stay unguarded. Call `activate_tab`, then retry. Pass `allowHidden: true` only when `visibilityState` is `hidden`, or when you intentionally need a background write. If `reason` is `host_permission_denied` or `document_unavailable`, grant host permission or reload the tab — `allowHidden` will not help. Do not treat `focused`, `visible: false`, or `screenshot.activated: false` as that recovery.
 - **Trusted CDP input:**
-  - `CDP_PERMISSION_DENIED`: ask the user to enable trusted input in the extension popup and grant Chrome's debugger dialog, then retry `cdp_attach`.
-  - `CDP_TAB_NOT_CLAIMED`: call `claim_tab` and pass that `sessionTabId` to `cdp_attach`.
-  - `CDP_ORIGIN_NOT_ALLOWED`: the tab left Allowed Origins (or was never allowed). Navigate or claim an allowed tab, then `cdp_attach` again.
+  - `CDP_PERMISSION_DENIED`: the optional debugger permission is missing or was revoked mid-session. Ask the user to enable trusted input in the extension popup and grant Chrome's debugger dialog, then retry `cdp_attach`. To use the content-script path instead, call `cdp_detach`.
+  - `CDP_TAB_NOT_CLAIMED`: call `claim_tab` and pass that `sessionTabId` to `cdp_attach`. An expired exclusive claim does not authorize attach or trusted input.
+  - `CDP_ORIGIN_NOT_ALLOWED`: the tab left Allowed Origins (or was never allowed), or Allowed Origins changed while attached. Navigate or claim an allowed tab, then `cdp_attach` again.
   - `CDP_ATTACH_REFUSED`: Chrome refused the attach (`chrome://`, Chrome Web Store, enterprise policy, or another debugger). Report it; do not retry in a loop.
   - `CDP_DETACHED_BY_USER`: DevTools took the socket. Do not auto-recover. Call `cdp_attach` only if you still need trusted input after DevTools is closed, or `cdp_detach` to resume the content-script path.
   - `CDP_METHOD_NOT_PERMITTED`: do not invent other CDP methods. Stay on the shipped click/type/keypress tools.
-  - `CDP_DETACHED_BY_SUSPENSION`: the service worker dropped the socket. Call `cdp_attach` again; never assume it came back.
+  - `CDP_DETACHED_BY_SUSPENSION`: the service worker dropped the socket, or hydration could not prove this extension still owns it. Call `cdp_attach` again; never assume it came back.
+  - `CDP_CROSS_ORIGIN_FRAME`: trusted clicks cannot map coordinates across a cross-origin iframe. Call `cdp_detach` and use the content-script path, or target a same-origin frame or the top document.
 - **Focus without hijacking the user:** leave `navigate` at default (focus unchanged). Pass `active: true` only when visibility is required. Use `activate_tab` when a later write needs the tab and window focused. New untargeted tabs stay in the background unless activated. Avoid `screenshot` while the user is browsing the same window.
 
 Honest capability limits (do not invent workarounds):

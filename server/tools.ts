@@ -567,7 +567,7 @@ export function registerBrowserTools(
     {
       title: 'Attach trusted CDP input',
       description:
-        'Attach the optional chrome.debugger tier to a claimed tab. While attached, click, type, keypress, click_at, and matching perform_actions steps use trusted CDP input. Requires the popup debugger permission and an allowed origin. Chrome shows a debugging banner on the tab.',
+        'Attach the optional chrome.debugger tier to a claimed tab. While attached, click, type, keypress, click_at, and matching perform_actions steps use trusted CDP input. Requires the popup debugger permission and an allowed origin. Chrome shows a debugging banner on the tab. Repeating attach on the same tab refreshes the TTL without tearing down the socket.',
       inputSchema: {
         sessionTabId: z.string().min(1).describe('Claimed tab session id returned by claim_tab.'),
         ttlMs: z
@@ -587,7 +587,7 @@ export function registerBrowserTools(
     {
       title: 'Detach trusted CDP input',
       description:
-        'Detach the optional chrome.debugger tier from a claimed tab and return click/type/keypress to the content-script path. release_tab and finalize_tabs also detach.',
+        'Detach the optional chrome.debugger tier from a claimed tab and return click/type/keypress to the content-script path. release_tab and finalize_tabs also detach, including kept finalize claims.',
       inputSchema: {
         sessionTabId: z.string().min(1).optional(),
         tabId: OptionalTabId
@@ -601,7 +601,7 @@ export function registerBrowserTools(
     {
       title: 'Finalize claimed tabs',
       description:
-        'Release browser-control ownership state for claimed tabs. This does not close user tabs; pass keep entries to preserve handoff/deliverable claims.',
+        'Release browser-control ownership state for claimed tabs. This does not close user tabs; pass keep entries to preserve handoff/deliverable claims. Detaches CDP attachments on every claimed tab, including kept claims.',
       inputSchema: {
         keep: z
           .array(

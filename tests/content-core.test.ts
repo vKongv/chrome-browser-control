@@ -17,6 +17,7 @@ import {
   performClick,
   performClickAt,
   performKeypress,
+  prepareTrustedClickAt,
   queryElements,
   waitForCondition,
   performType
@@ -368,6 +369,15 @@ describe('extension content core', () => {
 
     expect(performKeypress({ keys: ['Tab', 'Control+Enter'] }, document as unknown as Document)).toEqual({ pressed: ['Tab', 'Control+Enter'] });
     expect(keys).toEqual(['Tab', 'Enter']);
+  });
+
+  it('fails trusted iframe coordinate mapping with CDP_CROSS_ORIGIN_FRAME', () => {
+    const document = makeDocument('<button id="save">Save</button>');
+    const view = document.defaultView as unknown as { top: unknown; frameElement: unknown };
+    Object.defineProperty(view, 'top', { configurable: true, value: {} });
+    Object.defineProperty(view, 'frameElement', { configurable: true, value: null });
+
+    expect(() => prepareTrustedClickAt({ x: 12, y: 18 }, document as unknown as Document)).toThrow('CDP_CROSS_ORIGIN_FRAME');
   });
 
   it('fails click, type, click_at, and keypress on hidden documents unless allowHidden is true', () => {
