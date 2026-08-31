@@ -4625,6 +4625,19 @@ describe('optional chrome.debugger tier', () => {
     });
   });
 
+  it('types a space as an insertable CDP character', async () => {
+    const background = loadCdpBackground();
+    await claimAndAttach(background);
+    await expect(
+      background.handleBridgeRequest('type', { ref: 'h1', text: 'hello world', tabId: 2 })
+    ).resolves.toMatchObject({ typed: 11, inputPath: 'cdp' });
+    const spaceChars = background.debuggerCommands.filter(
+      (command) =>
+        command.method === 'Input.dispatchKeyEvent' && command.params?.type === 'char' && command.params?.text === ' '
+    );
+    expect(spaceChars).toHaveLength(1);
+  });
+
   it('routes click through CDP while attached and through the content script after detach', async () => {
     const background = loadCdpBackground();
     await claimAndAttach(background);

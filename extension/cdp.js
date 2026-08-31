@@ -5,7 +5,7 @@
   const MIN_ATTACH_TTL_MS = 1_000;
 
   const SPECIAL_KEYS = {
-    Enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
+    Enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
     Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
     Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
     Esc: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
@@ -19,8 +19,8 @@
     End: { key: 'End', code: 'End', windowsVirtualKeyCode: 35 },
     PageUp: { key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33 },
     PageDown: { key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 },
-    Space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32 },
-    ' ': { key: ' ', code: 'Space', windowsVirtualKeyCode: 32 }
+    Space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' },
+    ' ': { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' }
   };
 
   function assertCdpMethod(method) {

@@ -37,3 +37,44 @@ describe('CDP method allowlist', () => {
     }
   });
 });
+
+function charTexts(commands: Array<{ params?: { type?: string; text?: string } }>) {
+  return commands.filter((command) => command.params?.type === 'char').map((command) => command.params?.text);
+}
+
+describe('CDP key insertion', () => {
+  const cdp = loadCdp();
+
+  it('inserts a space when typing a string that contains one', () => {
+    expect(charTexts(cdp.typeTextCommands('hello world'))).toEqual([
+      'h',
+      'e',
+      'l',
+      'l',
+      'o',
+      ' ',
+      'w',
+      'o',
+      'r',
+      'l',
+      'd'
+    ]);
+  });
+
+  it('inserts a space for Space and literal-space keypress', () => {
+    expect(charTexts(cdp.keypressCommands('Space'))).toEqual([' ']);
+    expect(charTexts(cdp.keypressCommands(' '))).toEqual([' ']);
+  });
+
+  it('inserts a carriage return for Enter', () => {
+    expect(charTexts(cdp.keypressCommands('Enter'))).toEqual(['\r']);
+  });
+
+  it('leaves Tab, arrows, and Home/End without insertable text', () => {
+    expect(charTexts(cdp.keypressCommands('Tab'))).toEqual([]);
+    expect(charTexts(cdp.keypressCommands('ArrowLeft'))).toEqual([]);
+    expect(charTexts(cdp.keypressCommands('ArrowRight'))).toEqual([]);
+    expect(charTexts(cdp.keypressCommands('Home'))).toEqual([]);
+    expect(charTexts(cdp.keypressCommands('End'))).toEqual([]);
+  });
+});
