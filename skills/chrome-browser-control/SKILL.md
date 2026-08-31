@@ -31,14 +31,14 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
    - Compare `adapter.registeredToolCount` with the host tool list if schemas look stale; restart the MCP host if counts diverge.
    - Check `protocolVersion` and `features` if behavior seems stale.
    - Check `allowedOrigins` before assuming a page is controllable.
-   - Read `debuggerPermissionGranted` and `attachedTabs` before using trusted input. The tier is off until the user grants the optional debugger permission in the popup.
+   - Read `cdpEnabled` and `attachedTabs` before using trusted input. The tier is off until the user enables it in the extension popup. The debugger permission is required in the manifest and cannot be granted or revoked from the popup.
 
 2. Pick a tab deliberately.
    - Use `list_tabs` for existing pages.
    - Use `navigate` for an allowed URL when opening or reusing a page is appropriate. By default focus is unchanged; pass `active: true` only when the user should see that tab. New tabs without a target stay in the background unless `active: true`. Use `activate_tab` to raise a tab and its window without navigating. Read `visible` / `visibilityState` from the result; do not treat `focused` as success.
    - After `navigate`, verify the landing entity with `requestedUrl`, `finalUrl`, and `redirected` (`url` aliases `finalUrl`) — especially after vanity URLs or redirects.
    - For multi-step work, call `claim_tab` (advisory by default) and keep the returned `sessionTabId`.
-   - For trusted input (`isTrusted: true`), call `cdp_attach({ sessionTabId })` after the claim. Chrome shows a debugging banner on that tab; that banner is expected. Detach with `cdp_detach` when you no longer need it. `release_tab` and `finalize_tabs` also detach, including kept finalize claims. Repeating `cdp_attach` on an already-attached tab refreshes the TTL without tearing down the socket. Attach auto-expires after 10 minutes unless you pass `ttlMs`.
+   - For trusted input (`isTrusted: true`), confirm `cdpEnabled` is true, then call `cdp_attach({ sessionTabId })` after the claim. Chrome shows a debugging banner on that tab; that banner is expected. Detach with `cdp_detach` when you no longer need it. `release_tab` and `finalize_tabs` also detach, including kept finalize claims. Repeating `cdp_attach` on an already-attached tab refreshes the TTL without tearing down the socket. Attach auto-expires after 10 minutes unless you pass `ttlMs`.
    - For parallel agents on one profile, use `claim_tab({ exclusive: true, ttlMs: 300000, owner?: "label" })`; the MCP adapter injects `ownerId` per process. Handle `TAB_EXCLUSIVE_CLAIM_CONFLICT` by picking another tab. Run one writing agent per profile, or use exclusive leases. Exclusive leases are tab-level only — they do not isolate whole browsers like separate remote sessions.
    - Do not rely on active-tab fallback for a task with more than one action.
    - Prefer DOM tools over `screenshot` when the user is browsing; screenshots may activate the target tab.
@@ -83,7 +83,7 @@ When the happy path fails, try these bounded recoveries before declaring the pag
 - **Coordinate clicks:** from `visible_snapshot` or `query_elements` bounds, click the center with `click_at`, then verify with a targeted `wait_for` / small snapshot. Prefer this over screenshots for interaction.
 - **Hidden document / ignored writes:** `click`, `type`, `click_at`, `keypress`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Scroll steps stay unguarded. Call `activate_tab`, then retry. Pass `allowHidden: true` only when `visibilityState` is `hidden`, or when you intentionally need a background write. If `reason` is `host_permission_denied` or `document_unavailable`, grant host permission or reload the tab — `allowHidden` will not help. Do not treat `focused`, `visible: false`, or `screenshot.activated: false` as that recovery.
 - **Trusted CDP input:**
-  - `CDP_PERMISSION_DENIED`: the optional debugger permission is missing or was revoked mid-session. Ask the user to enable trusted input in the extension popup and grant Chrome's debugger dialog, then retry `cdp_attach`. To use the content-script path instead, call `cdp_detach`.
+  - `CDP_NOT_ENABLED`: the popup `enableCdp` toggle is off. Ask the user to enable trusted input in the extension popup, then retry `cdp_attach`. To use the content-script path instead, call `cdp_detach`.
   - `CDP_TAB_NOT_CLAIMED`: call `claim_tab` and pass that `sessionTabId` to `cdp_attach`. An expired exclusive claim does not authorize attach or trusted input.
   - `CDP_ORIGIN_NOT_ALLOWED`: the tab left Allowed Origins (or was never allowed), or Allowed Origins changed while attached. Navigate or claim an allowed tab, then `cdp_attach` again.
   - `CDP_ATTACH_REFUSED`: Chrome refused the attach (`chrome://`, Chrome Web Store, enterprise policy, or another debugger). Report it; do not retry in a loop.
@@ -94,7 +94,7 @@ When the happy path fails, try these bounded recoveries before declaring the pag
 - **Focus without hijacking the user:** leave `navigate` at default (focus unchanged). Pass `active: true` only when visibility is required. Use `activate_tab` when a later write needs the tab and window focused. New untargeted tabs stay in the background unless activated. Avoid `screenshot` while the user is browsing the same window.
 
 Honest capability limits (do not invent workarounds):
-- No raw CDP and no arbitrary page `eval` / injected scripts beyond the shipped tools. Trusted input is only `cdp_attach` plus the existing click/type/keypress/`click_at` tools, constrained to `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent`.
+- The extension requests the required `debugger` permission. Agents still have no raw CDP and no arbitrary page `eval` / injected scripts beyond the shipped tools. Trusted input is only `cdp_attach` plus the existing click/type/keypress/`click_at` tools, constrained to `Input.dispatchMouseEvent` and `Input.dispatchKeyEvent`.
 - No cookie, localStorage, sessionStorage, history, bookmark, download, request-header, or response-body tools.
 - No file upload / `setFileInputFiles` helper.
 - No shadow-DOM piercing beyond what the accessibility/DOM snapshot already exposes.
@@ -113,7 +113,7 @@ If a needed capability is in the limits list, stop and tell the user what is mis
 - Infinite scroll or feeds: `collect_scroll` (use `until` / nested `scroll` when useful); use `extract_feed_posts` first when post heuristics fit.
 - Multi-step form/focus chains on one tab: `perform_actions` (not `click_at`).
 - Focus without navigating: `activate_tab` (check `visible` before retrying writes).
-- Trusted input: `cdp_attach` after `claim_tab`; `cdp_detach` when done. Check `browser_status` for permission and attached tabs first.
+- Trusted input: `cdp_attach` after `claim_tab`; `cdp_detach` when done. Check `browser_status` for `cdpEnabled` and attached tabs first.
 - Post-action synchronization: `wait_for`.
 - Debugging: `page_status`, then `console_logs`.
 - Visual proof: `screenshot` (optionally cropped) when the user asks for pixels or DOM tools are insufficient.

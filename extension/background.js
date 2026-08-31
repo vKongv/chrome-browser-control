@@ -19,7 +19,8 @@ const {
 const DEFAULTS = {
   bridgeUrl: DEFAULT_BRIDGE_URL,
   token: '',
-  allowedOrigins: DEFAULT_ALLOWED_ORIGINS
+  allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
+  enableCdp: false
 };
 
 const EXTENSION_PROTOCOL_MARKER = {
@@ -209,11 +210,6 @@ function cdpError(prefix, detail) {
   return new Error(`${prefix}: ${detail}`);
 }
 
-async function hasDebuggerPermission() {
-  if (!chrome.permissions?.contains) return false;
-  return Boolean(await chrome.permissions.contains({ permissions: ['debugger'] }));
-}
-
 async function debuggerAttach(tabId) {
   if (!chrome.debugger?.attach) {
     throw cdpError('CDP_ATTACH_REFUSED', 'chrome.debugger is unavailable in this context');
@@ -331,10 +327,11 @@ const cdpStateReady = hydrateCdpState();
 
 async function attachCdpForClaim(sessionTabId, ttlMs) {
   sweepExpiredLeases();
-  if (!(await hasDebuggerPermission())) {
+  const settings = await getSettings();
+  if (settings.enableCdp !== true) {
     throw cdpError(
-      'CDP_PERMISSION_DENIED',
-      'optional debugger permission is not granted. Enable it in the extension popup.'
+      'CDP_NOT_ENABLED',
+      'trusted input is disabled. Enable it in the extension popup, then call cdp_attach.'
     );
   }
   if (!sessionTabId || !claimedTabs.has(sessionTabId)) {
@@ -345,7 +342,6 @@ async function attachCdpForClaim(sessionTabId, ttlMs) {
   if (!tab) {
     throw cdpError('CDP_TAB_NOT_CLAIMED', `claimed tab is no longer available for sessionTabId: ${sessionTabId}`);
   }
-  const settings = await getSettings();
   if (!isInjectableUrl(tab.url || '') || !isUrlAllowed(tab.url || '', settings.allowedOrigins)) {
     throw cdpError('CDP_ORIGIN_NOT_ALLOWED', `tab origin is outside Allowed Origins: ${tab.url || 'unknown URL'}`);
   }
@@ -512,7 +508,8 @@ async function getSettings() {
   return {
     bridgeUrl: normalizeBridgeUrl(settings.bridgeUrl),
     token: validatePairingToken(settings.token),
-    allowedOrigins: normalizeAllowedOriginPatterns(settings.allowedOrigins)
+    allowedOrigins: normalizeAllowedOriginPatterns(settings.allowedOrigins),
+    enableCdp: settings.enableCdp === true
   };
 }
 
@@ -1516,7 +1513,7 @@ async function handleBridgeRequest(action, params = {}) {
         status: liveStatus,
         allowedOrigins: describeAllowedOrigins(settings.allowedOrigins),
         session: sessionState(),
-        debuggerPermissionGranted: await hasDebuggerPermission(),
+        cdpEnabled: settings.enableCdp === true,
         attachedTabs: attachedTabsReport(),
         ...EXTENSION_PROTOCOL_MARKER
       };
@@ -1806,25 +1803,22 @@ if (chrome.webNavigation?.onCommitted?.addListener) {
   });
 }
 
-if (chrome.permissions?.onRemoved?.addListener) {
-  chrome.permissions.onRemoved.addListener((removed) => {
-    if (!removed?.permissions?.includes('debugger')) return;
-    void Promise.all(
-      [...cdpAttachments.keys(), ...cdpFailClosed.keys()].map((tabId) =>
-        detachCdp(tabId, {
-          failClosed: true,
-          prefix: 'CDP_PERMISSION_DENIED',
-          detail: 'optional debugger permission was revoked. Enable it in the extension popup, then call cdp_attach again.'
-        })
-      )
-    );
-  });
-}
-
 if (chrome.storage?.onChanged?.addListener) {
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || !changes?.allowedOrigins) return;
+    if (area !== 'local') return;
     void (async () => {
+      if (changes?.enableCdp && changes.enableCdp.newValue !== true) {
+        await Promise.all(
+          [...cdpAttachments.keys()].map((tabId) =>
+            detachCdp(tabId, {
+              failClosed: true,
+              prefix: 'CDP_NOT_ENABLED',
+              detail: 'trusted input is disabled in the extension popup. Enable it there, then call cdp_attach again.'
+            })
+          )
+        );
+      }
+      if (!changes?.allowedOrigins) return;
       const settings = await getSettings();
       for (const tabId of [...cdpAttachments.keys()]) {
         const tab = await getTabIfExists(tabId);

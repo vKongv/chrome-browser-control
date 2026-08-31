@@ -7,13 +7,15 @@ const TOKEN = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
 
 function loadPopupHarness({
   grantedOnRequest = true,
-  hangRequest = false
+  hangRequest = false,
+  stored = {}
 }: {
   grantedOnRequest?: boolean;
   hangRequest?: boolean;
+  stored?: Record<string, unknown>;
 } = {}) {
   const events: Array<{ type: string; payload: unknown }> = [];
-  const fields: Record<string, { value: string; textContent?: string }> = {
+  const fields: Record<string, { value: string; textContent?: string; checked?: boolean }> = {
     bridgeUrl: { value: 'ws://127.0.0.1:8765' },
     token: { value: TOKEN },
     allowedOrigins: { value: 'https://example.com' },
@@ -35,7 +37,8 @@ function loadPopupHarness({
           bridgeUrl: 'ws://127.0.0.1:8765',
           token: TOKEN,
           allowedOrigins: ['https://example.com/*'],
-          status: 'connected'
+          status: 'connected',
+          ...stored
         }),
         set: async (items: Record<string, unknown>) => {
           events.push({ type: 'storage.set', payload: items });
@@ -140,25 +143,23 @@ describe('popup save ordering', () => {
     await harness.clickSave();
 
     const types = harness.events.map((event) => event.type);
-    expect(types.slice(0, 4)).toEqual(['storage.set', 'permissions.remove', 'permissions.request', 'runtime.sendMessage']);
+    expect(types.slice(0, 3)).toEqual(['storage.set', 'permissions.request', 'runtime.sendMessage']);
     expect(harness.events[0]).toEqual({
       type: 'storage.set',
       payload: {
         bridgeUrl: 'ws://127.0.0.1:8765',
         token: TOKEN,
-        allowedOrigins: ['http://*/*', 'https://*/*']
+        allowedOrigins: ['http://*/*', 'https://*/*'],
+        enableCdp: false
       }
     });
     expect(harness.events[1]).toEqual({
-      type: 'permissions.remove',
-      payload: { permissions: ['debugger'] }
-    });
-    expect(harness.events[2]).toEqual({
       type: 'permissions.request',
       payload: {
         origins: ['http://*/*', 'https://*/*', '<all_urls>']
       }
     });
+    expect(harness.events.some((event) => event.type === 'permissions.remove')).toBe(false);
     expect(harness.fields.status.textContent).toBe('connected');
   });
 
@@ -170,12 +171,14 @@ describe('popup save ordering', () => {
 
     await harness.clickSave();
 
-    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.remove', 'permissions.request']);
-    expect(harness.events[1]).toEqual({
-      type: 'permissions.remove',
-      payload: { permissions: ['debugger'] }
+    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.request']);
+    expect(harness.events[0]?.payload).toEqual({
+      bridgeUrl: 'ws://127.0.0.1:8765',
+      token: TOKEN,
+      allowedOrigins: ['https://example.com/*'],
+      enableCdp: false
     });
-    expect(harness.events[2]).toEqual({
+    expect(harness.events[1]).toEqual({
       type: 'permissions.request',
       payload: { origins: ['https://example.com/*'] }
     });
@@ -185,7 +188,7 @@ describe('popup save ordering', () => {
     );
   });
 
-  it('requests the debugger permission in the same call as origins when enabled', async () => {
+  it('persists enableCdp without requesting or removing the debugger permission', async () => {
     const harness = loadPopupHarness();
     await harness.flush();
     harness.events.length = 0;
@@ -194,15 +197,33 @@ describe('popup save ordering', () => {
 
     await harness.clickSave();
 
-    expect(harness.events[0]?.type).toBe('storage.set');
-    expect(harness.events[1]).toEqual({
-      type: 'permissions.request',
+    expect(harness.events[0]).toEqual({
+      type: 'storage.set',
       payload: {
-        origins: ['https://example.com/*'],
-        permissions: ['debugger']
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token: TOKEN,
+        allowedOrigins: ['https://example.com/*'],
+        enableCdp: true
       }
     });
-    expect(harness.events.some((event) => event.type === 'permissions.remove')).toBe(false);
+    expect(harness.events[1]).toEqual({
+      type: 'permissions.request',
+      payload: { origins: ['https://example.com/*'] }
+    });
+    expect(
+      harness.events.some(
+        (event) =>
+          (event.type === 'permissions.request' || event.type === 'permissions.remove') &&
+          Array.isArray((event.payload as { permissions?: string[] })?.permissions) &&
+          (event.payload as { permissions?: string[] }).permissions?.includes('debugger')
+      )
+    ).toBe(false);
+  });
+
+  it('loads the trusted-input checkbox from stored enableCdp, not from chrome.permissions', async () => {
+    const harness = loadPopupHarness({ stored: { enableCdp: true } });
+    await harness.flush();
+    expect(harness.fields.enableDebugger.checked).toBe(true);
   });
 
   it('exposes persist-then-request so a closed popup cannot drop the save', async () => {
@@ -221,7 +242,7 @@ describe('popup save ordering', () => {
     expect(harness.events[1]?.payload).toEqual({ origins: ['https://example.com/*'] });
   });
 
-  it('revokes debugger before the origin request so a closed popup cannot keep it', async () => {
+  it('persists settings before a hanging origin permission dialog', async () => {
     const harness = loadPopupHarness({ hangRequest: true });
     await harness.flush();
     harness.events.length = 0;
@@ -231,31 +252,17 @@ describe('popup save ordering', () => {
     void harness.clickSave();
     await harness.flush();
 
-    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.remove', 'permissions.request']);
-    expect(harness.events[1]).toEqual({
-      type: 'permissions.remove',
-      payload: { permissions: ['debugger'] }
+    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.request']);
+    expect(harness.events[0]?.payload).toEqual({
+      bridgeUrl: 'ws://127.0.0.1:8765',
+      token: TOKEN,
+      allowedOrigins: ['https://other.example/*'],
+      enableCdp: false
     });
-    expect(harness.events[2]).toEqual({
+    expect(harness.events[1]).toEqual({
       type: 'permissions.request',
       payload: { origins: ['https://other.example/*'] }
     });
-  });
-
-  it('revokes debugger through persist-then-request before a hanging permission dialog', async () => {
-    const harness = loadPopupHarness({ hangRequest: true });
-    await harness.flush();
-    harness.events.length = 0;
-
-    const pending = harness.popup.persistSettingsThenRequestPermissions({
-      settings: { allowedOrigins: ['https://other.example/*'] },
-      origins: ['https://other.example/*'],
-      revokePermissions: ['debugger']
-    });
-    await harness.flush();
-
-    expect(harness.events.map((event) => event.type)).toEqual(['storage.set', 'permissions.remove', 'permissions.request']);
-    expect(harness.events[1]?.payload).toEqual({ permissions: ['debugger'] });
-    void pending;
+    expect(harness.events.some((event) => event.type === 'permissions.remove')).toBe(false);
   });
 });

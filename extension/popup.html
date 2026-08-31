@@ -26,9 +26,9 @@
     <textarea id="allowedOrigins" placeholder="https://example.com&#10;http://localhost:3000&#10;*"></textarea>
     <label for="enableDebugger">
       <input id="enableDebugger" type="checkbox" />
-      Enable trusted input (optional debugger permission)
+      Enable trusted CDP input
     </label>
-    <p class="hint">Off by default. Chrome shows a debugging banner on attached tabs after you grant this.</p>
+    <p class="hint">Off by default. The debugger permission is required and cannot be revoked without uninstalling; this checkbox is the on/off switch. Chrome showed a warning when the extension loaded. Attached tabs show a debugging banner.</p>
     <button id="save">Save and reconnect</button>
     <label for="setupSnippet">MCP config helper</label>
     <textarea id="setupSnippet" readonly placeholder="Save settings, then copy a config snippet."></textarea>

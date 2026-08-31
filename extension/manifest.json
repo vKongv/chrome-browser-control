@@ -10,9 +10,7 @@
     "storage",
     "activeTab",
     "offscreen",
-    "webNavigation"
-  ],
-  "optional_permissions": [
+    "webNavigation",
     "debugger"
   ],
   "optional_host_permissions": [

@@ -44,7 +44,7 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
   };
 
   console.error(
-    '[chrome-browser-control] Trusted CDP input is opt-in via the extension debugger permission; the MCP adapter does not open a raw CDP socket.'
+    '[chrome-browser-control] Trusted CDP input is gated by the extension popup toggle; the MCP adapter does not open a raw CDP socket.'
   );
 
   const ownerId = crypto.randomUUID();

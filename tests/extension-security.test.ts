@@ -522,11 +522,11 @@ describe('extension security helpers', () => {
     expect(manifest.optional_host_permissions).toContain('<all_urls>');
   });
 
-  it('declares debugger only as an optional permission', () => {
+  it('declares debugger as a required permission, never optional', () => {
     const manifest = JSON.parse(readFileSync(join(process.cwd(), 'extension/manifest.json'), 'utf8'));
 
-    expect(manifest.permissions).not.toContain('debugger');
-    expect(manifest.optional_permissions).toEqual(['debugger']);
+    expect(manifest.permissions).toContain('debugger');
+    expect(manifest.optional_permissions || []).not.toContain('debugger');
   });
 
   it('allows only loopback ws bridge URLs without paths', () => {
@@ -674,7 +674,7 @@ describe('extension background origin enforcement', () => {
       pong: true,
       status: 'connected',
       allowedOrigins: ['https://allowed.example/*'],
-      debuggerPermissionGranted: false,
+      cdpEnabled: false,
       attachedTabs: [],
       protocolVersion: 7,
       features: expect.arrayContaining([
@@ -4545,7 +4545,7 @@ describe('extension background origin enforcement', () => {
   });
 });
 
-describe('optional chrome.debugger tier', () => {
+describe('trusted chrome.debugger tier', () => {
   const token = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';
   const allowedTab = {
     id: 2,
@@ -4570,7 +4570,8 @@ describe('optional chrome.debugger tier', () => {
       settings: {
         bridgeUrl: 'ws://127.0.0.1:8765',
         token,
-        allowedOrigins: ['https://allowed.example/*']
+        allowedOrigins: ['https://allowed.example/*'],
+        enableCdp: true
       },
       tabs: [allowedTab],
       grantedPermissions: ['debugger'],
@@ -4585,12 +4586,38 @@ describe('optional chrome.debugger tier', () => {
     return { claim, attached };
   }
 
-  it('refuses attach without the optional debugger permission', async () => {
-    const background = loadCdpBackground({ grantedPermissions: [] });
+  it('refuses attach with CDP_NOT_ENABLED when the stored flag is off', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        enableCdp: false
+      }
+    });
     const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
     await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).rejects.toThrow(
-      'CDP_PERMISSION_DENIED'
+      'CDP_NOT_ENABLED'
     );
+  });
+
+  it('attaches when the stored flag is on even if chrome.permissions has no debugger grant', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        enableCdp: true
+      },
+      grantedPermissions: []
+    });
+    const claim = await background.handleBridgeRequest('claim_tab', { tabId: 2 });
+    await expect(background.handleBridgeRequest('cdp_attach', { sessionTabId: claim.sessionTabId })).resolves.toMatchObject({
+      attached: true,
+      tabId: 2,
+      sessionTabId: claim.sessionTabId,
+      inputPath: 'cdp'
+    });
   });
 
   it('refuses attach on an unclaimed tab', async () => {
@@ -4620,7 +4647,7 @@ describe('optional chrome.debugger tier', () => {
       inputPath: 'cdp'
     });
     await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
-      debuggerPermissionGranted: true,
+      cdpEnabled: true,
       attachedTabs: [expect.objectContaining({ tabId: 2, sessionTabId: claim.sessionTabId })]
     });
   });
@@ -4750,12 +4777,12 @@ describe('optional chrome.debugger tier', () => {
     });
   });
 
-  it('fails closed with CDP_PERMISSION_DENIED after debugger permission removal', async () => {
+  it('fails closed with CDP_NOT_ENABLED after the stored flag is turned off', async () => {
     const background = loadCdpBackground();
     await claimAndAttach(background);
-    background.firePermissionsRemoved({ permissions: ['debugger'] });
+    background.fireStorageChanged({ enableCdp: { newValue: false, oldValue: true } });
     await flushMicrotasks();
-    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_PERMISSION_DENIED');
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).rejects.toThrow('CDP_NOT_ENABLED');
     expect(background.debuggerAttached.has(2)).toBe(false);
   });
 
@@ -4902,7 +4929,8 @@ describe('optional chrome.debugger tier', () => {
     const settings = {
       bridgeUrl: 'ws://127.0.0.1:8765',
       token,
-      allowedOrigins: ['https://allowed.example/*']
+      allowedOrigins: ['https://allowed.example/*'],
+      enableCdp: true
     };
     const background = loadCdpBackground({ settings });
     await claimAndAttach(background);
@@ -4922,7 +4950,8 @@ describe('optional chrome.debugger tier', () => {
     const settings = {
       bridgeUrl: 'ws://127.0.0.1:8765',
       token,
-      allowedOrigins: ['https://allowed.example/*', 'https://other.example/*']
+      allowedOrigins: ['https://allowed.example/*', 'https://other.example/*'],
+      enableCdp: true
     };
     const background = loadCdpBackground({ settings });
     await claimAndAttach(background);
@@ -4970,7 +4999,8 @@ describe('optional chrome.debugger tier', () => {
         settings: {
           bridgeUrl: 'ws://127.0.0.1:8765',
           token,
-          allowedOrigins: ['https://allowed.example/*', 'https://cross.example/*']
+          allowedOrigins: ['https://allowed.example/*', 'https://cross.example/*'],
+          enableCdp: true
         }
       },
       (_tabId, message, options) => {

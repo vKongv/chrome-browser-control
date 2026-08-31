@@ -488,7 +488,7 @@ describe('registerBrowserTools', () => {
       protocolVersion: 1,
       features: ['navigate-pending-warning'],
       session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
-      debuggerPermissionGranted: true,
+      cdpEnabled: true,
       attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
     };
     registerBrowserTools(server, bridge, {
@@ -513,7 +513,7 @@ describe('registerBrowserTools', () => {
         protocolVersion: 1,
         features: ['navigate-pending-warning'],
         session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
-        debuggerPermissionGranted: true,
+        cdpEnabled: true,
         attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
       },
       ping: {
@@ -522,7 +522,7 @@ describe('registerBrowserTools', () => {
         protocolVersion: 1,
         features: ['navigate-pending-warning'],
         session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
-        debuggerPermissionGranted: true,
+        cdpEnabled: true,
         attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
       }
     });

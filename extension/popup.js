@@ -98,6 +98,7 @@ async function refresh() {
     bridgeUrl: DEFAULT_BRIDGE_URL,
     token: '',
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
+    enableCdp: false,
     status: 'unknown'
   });
   bridgeUrl.value = settings.bridgeUrl;
@@ -106,7 +107,7 @@ async function refresh() {
   setupSnippet.value = jsonConfigTemplate(settings.token || '<generated-token>');
   showStatus(settings.status);
   if (enableDebugger) {
-    enableDebugger.checked = await containsPermission({ permissions: ['debugger'] });
+    enableDebugger.checked = settings.enableCdp === true;
   }
   const response = await queryLiveStatus();
   if (response?.ok) showStatus(response.status);
@@ -132,20 +133,6 @@ copyJson.addEventListener('click', () => copySnippet('json'));
 copyCursor.addEventListener('click', () => copySnippet('cursor'));
 copyYaml.addEventListener('click', () => copySnippet('yaml'));
 
-function containsPermission(request) {
-  if (!chrome.permissions?.contains) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    chrome.permissions.contains(request, (granted) => resolve(Boolean(granted)));
-  });
-}
-
-function removePermissions(request) {
-  if (!chrome.permissions?.remove) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    chrome.permissions.remove(request, (removed) => resolve(Boolean(removed)));
-  });
-}
-
 function requestOptionalPermissions(request = {}) {
   const origins = Array.isArray(request.origins) ? request.origins : [];
   const permissions = Array.isArray(request.permissions) ? request.permissions : [];
@@ -158,9 +145,8 @@ function requestOptionalPermissions(request = {}) {
   });
 }
 
-async function persistSettingsThenRequestPermissions({ settings, origins = [], permissions = [], revokePermissions = [] }) {
+async function persistSettingsThenRequestPermissions({ settings, origins = [], permissions = [] }) {
   await chrome.storage.local.set(settings);
-  if (revokePermissions.length) await removePermissions({ permissions: revokePermissions });
   const granted = await requestOptionalPermissions({ origins, permissions });
   return { saved: true, granted };
 }
@@ -173,17 +159,13 @@ save.addEventListener('click', async () => {
     const settings = {
       bridgeUrl: nextBridgeUrl,
       token: nextToken,
-      allowedOrigins: nextAllowedOrigins
+      allowedOrigins: nextAllowedOrigins,
+      enableCdp: enableDebugger?.checked === true
     };
     const origins = collectOptionalPermissionOrigins(nextAllowedOrigins);
-    const wantDebugger = enableDebugger?.checked === true;
-    const permissions = wantDebugger ? ['debugger'] : [];
-    const revokePermissions = wantDebugger ? [] : ['debugger'];
     const { granted } = await persistSettingsThenRequestPermissions({
       settings,
-      origins,
-      permissions,
-      revokePermissions
+      origins
     });
     bridgeUrl.value = nextBridgeUrl;
     allowedOrigins.value = formatAllowedOriginPatternsForDisplay(nextAllowedOrigins).join('\n');
