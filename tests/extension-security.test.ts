@@ -4819,6 +4819,55 @@ describe('optional chrome.debugger tier', () => {
     expect(background.debuggerCommands).toEqual([]);
   });
 
+  it('detaches an expired stored attachment on hydration without a fail-closed marker', async () => {
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs: [allowedTab],
+      grantedPermissions: ['debugger'],
+      debuggerTargets: [],
+      contentResult: { x: 12, y: 34, clicked: 'h1' },
+      sessionStore: {
+        cbcCdpAttachState: {
+          attachments: [
+            [
+              2,
+              {
+                tabId: 2,
+                sessionTabId: 'tab-1',
+                attachedAt: 0,
+                expiresAt: -1,
+                ttlMs: 600_000
+              }
+            ]
+          ],
+          failClosed: []
+        }
+      }
+    });
+    await background.cdpStateReady;
+    expect(background.debuggerDetachCount()).toBe(1);
+    expect(background.debuggerAttachCount()).toBe(0);
+    expect(background.sessionStore.cbcCdpAttachState).toMatchObject({
+      attachments: [],
+      failClosed: []
+    });
+    await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
+      attachedTabs: []
+    });
+    background.debuggerCommands.length = 0;
+    await expect(background.handleBridgeRequest('click', { ref: 'h1', tabId: 2 })).resolves.toMatchObject({
+      clicked: 'h1'
+    });
+    expect(background.debuggerCommands).toEqual([]);
+    expect(background.sentMessages.some((entry: { message: { action?: string } }) => entry.message.action === 'click')).toBe(
+      true
+    );
+  });
+
   it('refreshes an already-attached tab TTL without tearing down the live socket', async () => {
     const background = loadCdpBackground();
     const { claim, attached } = await claimAndAttach(background, 60_000);

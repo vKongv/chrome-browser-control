@@ -313,15 +313,15 @@ async function hydrateCdpState() {
     changed = true;
     if (expired) {
       clearCdpFailClosed(tabId);
-      continue;
+    } else {
+      // getTargets() reports attached:true without an owner. A live target after
+      // restart may be DevTools or another debugger; never resume stored privilege.
+      markCdpFailClosed(
+        tabId,
+        'CDP_DETACHED_BY_SUSPENSION',
+        'the debugger was detached when the service worker suspended. Call cdp_attach again.'
+      );
     }
-    // getTargets() reports attached:true without an owner. A live target after
-    // restart may be DevTools or another debugger; never resume stored privilege.
-    markCdpFailClosed(
-      tabId,
-      'CDP_DETACHED_BY_SUSPENSION',
-      'the debugger was detached when the service worker suspended. Call cdp_attach again.'
-    );
     await debuggerDetach(tabId);
   }
   if (changed) await persistCdpState();
