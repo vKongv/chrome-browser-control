@@ -199,7 +199,7 @@ async function handleBridgeMessage(raw) {
     }
     response = { kind: 'response', id: request.id, ok: true };
     try {
-      const backgroundResponse = await sendRuntimeMessage({
+      const backgroundResponse = await chrome.runtime.sendMessage({
         target: 'cbc-background',
         kind: 'bridge-request',
         action: request.action,

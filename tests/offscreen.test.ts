@@ -12,6 +12,7 @@ type FakeTimer = {
 type FakeSocket = {
   emit: (type: string, event: Record<string, unknown>) => void;
   readyState: number;
+  sentData: string[];
 };
 
 type OffscreenHarness = {
@@ -43,6 +44,7 @@ function loadOffscreenHarness(): OffscreenHarness {
     static readonly CLOSED = 3;
 
     readyState = FakeWebSocket.CONNECTING;
+    sentData: string[] = [];
     private readonly listeners = new Map<string, Array<(event: Record<string, unknown>) => void>>();
 
     constructor(readonly url: string) {
@@ -64,7 +66,9 @@ function loadOffscreenHarness(): OffscreenHarness {
       this.emit('close', { code, reason });
     }
 
-    send(_data: string) {}
+    send(data: string) {
+      this.sentData.push(data);
+    }
   }
 
   const chrome = {
@@ -125,6 +129,10 @@ async function connect(harness: OffscreenHarness) {
   });
 }
 
+async function flushMicrotasks(times = 8) {
+  for (let i = 0; i < times; i += 1) await Promise.resolve();
+}
+
 function adapterStatusMessages(harness: OffscreenHarness) {
   return harness.sentMessages.filter((message) => message.kind === 'adapter-status');
 }
@@ -155,6 +163,25 @@ describe('offscreen adapter status routing', () => {
 
     expect(() => harness.sockets[0].emit('close', { code: 1000, reason: 'normal' })).not.toThrow();
     expect(harness.timers.some((timer) => timer.active && timer.delay === 2000)).toBe(true);
+  });
+
+  it('R5: bridge requests preserve the runtime sendMessage error', async () => {
+    const harness = loadOffscreenHarness();
+    await connect(harness);
+    const errorMessage = 'Could not establish connection. Receiving end does not exist.';
+
+    harness.chrome.runtime.sendMessage = (message: Record<string, unknown>) => {
+      if (message.kind === 'bridge-request') return Promise.reject(new Error(errorMessage));
+      return Promise.resolve({ ok: true });
+    };
+    harness.sockets[0].emit('message', {
+      data: JSON.stringify({ kind: 'request', id: 'bridge-1', action: 'status', params: {} })
+    });
+    await flushMicrotasks();
+
+    expect(harness.sockets[0].sentData).toEqual([
+      JSON.stringify({ kind: 'response', id: 'bridge-1', ok: false, error: errorMessage })
+    ]);
   });
 
   it('T2: closing the socket arms the reconnect timer', async () => {
