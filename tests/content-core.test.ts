@@ -398,8 +398,33 @@ describe('extension content core', () => {
       keys: ['Enter']
     });
     expect(childWindowFocus).toHaveBeenCalled();
-    expect(childFocus).toHaveBeenCalled();
+    expect(child.activeElement).toBe(childInput);
+    expect(childFocus).not.toHaveBeenCalled();
     expect(parentFocus).not.toHaveBeenCalled();
+  });
+
+  it('does not move trusted-keypress focus off an inner shadow control', () => {
+    const document = makeDocument('<div id="host"></div>');
+    const host = document.querySelector('#host') as unknown as HTMLElement;
+    host.tabIndex = 0;
+    const shadow = host.attachShadow({ mode: 'open' });
+    const first = document.createElement('input');
+    first.id = 'first';
+    const second = document.createElement('input');
+    second.id = 'second';
+    shadow.append(first, second);
+    second.focus();
+
+    expect(document.activeElement).toBe(host);
+    expect(shadow.activeElement).toBe(second);
+
+    expect(prepareTrustedKeypress({ keys: 'Enter' }, document as unknown as Document)).toEqual({
+      prepared: true,
+      keys: ['Enter']
+    });
+
+    expect(shadow.activeElement).toBe(second);
+    expect(document.activeElement).toBe(host);
   });
 
   it('fails click, type, click_at, and keypress on hidden documents unless allowHidden is true', () => {
