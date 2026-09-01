@@ -1841,6 +1841,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.target === 'cbc-background' && message?.kind === 'adapter-status') {
+    const storageOperation =
+      message.adapterStatus == null
+        ? chrome.storage.local.remove('adapterStatus')
+        : chrome.storage.local.set({ adapterStatus: message.adapterStatus });
+    storageOperation.catch(() => undefined);
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message?.target === 'cbc-background' && message?.kind === 'bridge-request') {
     claimStateReady
       .then(() => handleBridgeRequest(message.action, message.params || {}))
