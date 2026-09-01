@@ -6,9 +6,11 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync
 } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -59,6 +61,16 @@ function captureConsole(): { logs: string[]; errors: string[] } {
     errors.push(args.map(String).join(' '));
   });
   return { logs, errors };
+}
+
+function runCliCommand(command: 'doctor' | 'status', home: string) {
+  return spawnSync(process.execPath, ['--import', 'tsx', 'cli/main.ts', command], {
+    cwd: getPackageRoot(),
+    env: { ...process.env, HOME: home },
+    encoding: 'utf8',
+    timeout: 1500,
+    killSignal: 'SIGKILL'
+  });
 }
 
 afterEach(() => {
@@ -300,6 +312,65 @@ describe('cli extension copy diagnostics', () => {
     expect(extensionLines[0]).toContain('cbctl setup');
     expect(extensionLines[1]).toContain('broken-link');
     expect(extensionLines[1]).toContain('cbctl setup');
+  });
+
+  it('R11: diagnoses an installed FIFO without blocking either command', { timeout: 5000 }, () => {
+    useTempHome('cbc-cli-extension-fifo-');
+    installPackagedExtension();
+    const fifoPath = join(getInstalledExtensionPath(), 'cdp.js');
+    rmSync(fifoPath);
+    execFileSync('mkfifo', [fifoPath]);
+
+    try {
+      const status = runCliCommand('status', tempHome);
+      const doctor = runCliCommand('doctor', tempHome);
+
+      expect(status.error).toBeUndefined();
+      expect(status.status).toBe(0);
+      expect(status.stdout).toContain('stale');
+      expect(status.stdout).toContain('cdp.js');
+      expect(status.stdout).toContain('unable to read file');
+      expect(status.stdout).toContain('not a regular file');
+
+      expect(doctor.error).toBeUndefined();
+      expect(doctor.status).toBe(1);
+      expect(doctor.stdout).toContain('stale');
+      expect(doctor.stdout).toContain('cdp.js');
+      expect(doctor.stdout).toContain('unable to read file');
+      expect(doctor.stdout).toContain('not a regular file');
+    } finally {
+      rmSync(fifoPath, { force: true });
+    }
+  });
+
+  it('R12: reports an unreadable installed directory without listing unseen descendants', async () => {
+    useTempHome('cbc-cli-extension-unreadable-directory-');
+    installPackagedExtension();
+    const installedPath = getInstalledExtensionPath();
+    const originalMode = statSync(installedPath).mode & 0o777;
+    chmodSync(installedPath, 0o000);
+
+    try {
+      const { logs } = captureConsole();
+      const status = getExtensionCopyStatus();
+      const statusCode = await runStatus({ positional: ['status'], flags: {} });
+      const doctorCode = await runDoctor({ positional: ['doctor'], flags: {} });
+      const extensionLines = logs.filter((line) => line.includes('Extension copy'));
+
+      expect(status.state).toBe('stale');
+      expect(status.differingFiles).toEqual(['.']);
+      expect(status.inspectionProblems).toHaveLength(1);
+      expect(status.inspectionProblems?.[0]).toContain('installed extension copy .');
+      expect(status.inspectionProblems?.[0]).toContain('unable to read directory (EACCES)');
+      expect(statusCode).toBe(0);
+      expect(doctorCode).toBe(1);
+      expect(extensionLines[0]).toContain('1 differing file(s): .');
+      expect(extensionLines[0]).not.toContain('manifest.json');
+      expect(extensionLines[1]).toContain('1 differing file(s): .');
+      expect(extensionLines[1]).not.toContain('manifest.json');
+    } finally {
+      chmodSync(installedPath, originalMode);
+    }
   });
 });
 

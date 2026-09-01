@@ -24,6 +24,7 @@ interface ExtensionTreeProblem {
 interface ExtensionTreeResult {
   tree: Map<string, ExtensionTreeEntry>;
   problems: ExtensionTreeProblem[];
+  unreadableDirectories: Set<string>;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -45,12 +46,14 @@ function isMissingPathError(error: unknown): boolean {
 function readExtensionTree(root: string, side: string): ExtensionTreeResult {
   const tree = new Map<string, ExtensionTreeEntry>();
   const problems: ExtensionTreeProblem[] = [];
+  const unreadableDirectories = new Set<string>();
 
   function walk(directory: string, prefix: string): void {
     let entries: Dirent[];
     try {
       entries = readdirSync(directory, { withFileTypes: true });
     } catch (error) {
+      unreadableDirectories.add(prefix || '.');
       problems.push({
         path: prefix || '.',
         detail: formatFileSystemProblem(side, prefix, 'read directory', error)
@@ -70,7 +73,7 @@ function readExtensionTree(root: string, side: string): ExtensionTreeResult {
       } else if (entry.isDirectory()) {
         tree.set(relativePath, { kind: 'directory' });
         walk(absolutePath, relativePath);
-      } else {
+      } else if (entry.isFile()) {
         try {
           tree.set(relativePath, { kind: 'file', content: readFileSync(absolutePath) });
         } catch (error) {
@@ -80,12 +83,25 @@ function readExtensionTree(root: string, side: string): ExtensionTreeResult {
             detail: formatFileSystemProblem(side, relativePath, 'read file', error)
           });
         }
+      } else {
+        tree.set(relativePath, { kind: 'unreadable' });
+        problems.push({
+          path: relativePath,
+          detail: formatFileSystemProblem(side, relativePath, 'read file', new Error('not a regular file'))
+        });
       }
     }
   }
 
   walk(root, '');
-  return { tree, problems };
+  return { tree, problems, unreadableDirectories };
+}
+
+function isUninspectedDescendant(path: string, unreadableDirectories: Set<string>): boolean {
+  for (const directory of unreadableDirectories) {
+    if (directory === '.' ? path !== '.' : path.startsWith(`${directory}/`)) return true;
+  }
+  return false;
 }
 
 function copyRecursive(source: string, destination: string): void {
@@ -147,6 +163,12 @@ export function getExtensionCopyStatus(): ExtensionCopyStatus {
   const paths = new Set([...packagedResult.tree.keys(), ...installedResult.tree.keys()]);
   const differingFiles = new Set(
     [...paths].filter((path) => {
+      if (
+        isUninspectedDescendant(path, packagedResult.unreadableDirectories) ||
+        isUninspectedDescendant(path, installedResult.unreadableDirectories)
+      ) {
+        return false;
+      }
       const packagedEntry = packagedResult.tree.get(path);
       const installedEntry = installedResult.tree.get(path);
       if (!packagedEntry || !installedEntry || packagedEntry.kind !== installedEntry.kind) return true;
