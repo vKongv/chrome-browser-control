@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureBroker } from '../../server/broker-lifecycle.js';
 import { formatBrokerWsUrl, resolveToken } from '../../server/env.js';
-import { extensionCopyLooksValid } from '../copy-extension.js';
+import { getExtensionCopyStatus } from '../copy-extension.js';
 import {
   brokerAlreadyRunning,
   isPortOpen,
@@ -15,7 +15,7 @@ import { getUserConfigPath } from '../../server/paths.js';
 export async function runStatus(_args: ParsedArgs): Promise<number> {
   const configPath = getUserConfigPath();
   const hasConfig = existsSync(configPath);
-  const hasExtension = extensionCopyLooksValid();
+  const extensionCopy = getExtensionCopyStatus();
   let brokerRunning = false;
   let authOk = false;
   let pid: number | undefined;
@@ -54,7 +54,13 @@ export async function runStatus(_args: ParsedArgs): Promise<number> {
   console.log('Chrome Browser Control status');
   console.log('=============================');
   console.log(`${hasConfig ? '✅' : '❌'} User config ${hasConfig ? getUserConfigPath() : 'missing — run cbctl setup'}`);
-  console.log(`${hasExtension ? '✅' : '❌'} Extension copy ${hasExtension ? 'present' : 'missing — run cbctl setup'}`);
+  const extensionDetail =
+    extensionCopy.state === 'current'
+      ? 'present'
+      : extensionCopy.state === 'absent'
+        ? 'missing — run cbctl setup'
+        : `stale — ${extensionCopy.differingFiles.length} differing file(s): ${extensionCopy.differingFiles.join(', ')} — run cbctl setup, then reload the unpacked extension in chrome://extensions`;
+  console.log(`${extensionCopy.state === 'current' ? '✅' : '❌'} Extension copy ${extensionDetail}`);
   if (tokenIssue) {
     console.log(`❌ Token ${tokenIssue}`);
   } else if (hasConfig) {

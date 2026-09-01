@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,7 +6,9 @@ import { EventEmitter } from 'node:events';
 import { mcpAutoloadOption, runMcp } from '../cli/commands/mcp.js';
 import { runDoctor } from '../cli/commands/doctor.js';
 import { runSetup } from '../cli/commands/setup.js';
+import { runStatus } from '../cli/commands/status.js';
 import { runStart } from '../cli/commands/start.js';
+import { getExtensionCopyStatus } from '../cli/copy-extension.js';
 import { flagBoolean, parseArgs } from '../cli/parse-args.js';
 import * as brokerProcess from '../cli/broker-process.js';
 import { isAutoloadEnabled } from '../server/env.js';
@@ -15,7 +17,9 @@ import * as mcpConfig from '../server/mcp-config.js';
 import * as serverIndex from '../server/index.js';
 import {
   getInstalledExtensionPath,
+  getInstalledVersionPath,
   getPackageRoot,
+  getPackagedExtensionPath,
   getUserConfigDir,
   getUserConfigPath,
   readPackageVersion
@@ -25,6 +29,27 @@ import { buildNextAction } from '../server/status-coaching.js';
 const originalHome = process.env.HOME;
 const originalAutoload = process.env.CHROME_BROWSER_CONTROL_AUTOLOAD;
 let tempHome = '';
+
+function useTempHome(prefix: string): void {
+  tempHome = mkdtempSync(join(tmpdir(), prefix));
+  process.env.HOME = tempHome;
+}
+
+function installPackagedExtension(): void {
+  cpSync(getPackagedExtensionPath(), getInstalledExtensionPath(), { recursive: true });
+}
+
+function captureConsole(): { logs: string[]; errors: string[] } {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    logs.push(args.map(String).join(' '));
+  });
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    errors.push(args.map(String).join(' '));
+  });
+  return { logs, errors };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -74,6 +99,115 @@ describe('cli version identity', () => {
     expect(logs.some((line) => line.includes('Package root') && line.includes(root))).toBe(true);
     expect(logs.find((line) => line.includes('CLI version'))).toMatch(/^✅/);
     expect(logs.find((line) => line.includes('Package root'))).toMatch(/^✅/);
+  });
+});
+
+describe('cli extension copy diagnostics', () => {
+  it('T1: reports an absent installed copy as missing', async () => {
+    useTempHome('cbc-cli-extension-absent-');
+    const { logs } = captureConsole();
+
+    expect(getExtensionCopyStatus()).toEqual({ state: 'absent', differingFiles: [] });
+    await runStatus({ positional: ['status'], flags: {} });
+    await runDoctor({ positional: ['doctor'], flags: {} });
+
+    expect(logs).toContain('❌ Extension copy missing — run cbctl setup');
+    expect(logs).toContain('❌ Extension copy — missing — run cbctl setup');
+  });
+
+  it('T2: reports a matching copy as current in both commands', async () => {
+    useTempHome('cbc-cli-extension-current-');
+    installPackagedExtension();
+    const { logs } = captureConsole();
+
+    expect(getExtensionCopyStatus()).toEqual({ state: 'current', differingFiles: [] });
+    await runStatus({ positional: ['status'], flags: {} });
+    await runDoctor({ positional: ['doctor'], flags: {} });
+
+    expect(logs).toContain('✅ Extension copy present');
+    expect(logs).toContain('✅ Extension copy — current');
+  });
+
+  it('T3: makes doctor fail and prints the stale remedy for changed content', async () => {
+    useTempHome('cbc-cli-extension-stale-');
+    installPackagedExtension();
+    const manifestPath = join(getInstalledExtensionPath(), 'manifest.json');
+    const { logs, errors } = captureConsole();
+
+    const currentCode = await runDoctor({ positional: ['doctor'], flags: {} });
+    const currentFailureCount = Number(errors.at(-1)?.match(/(\d+) check/)?.[1]);
+    writeFileSync(manifestPath, `${readFileSync(manifestPath, 'utf8')}\nT3 mutation\n`);
+
+    const staleCode = await runDoctor({ positional: ['doctor'], flags: {} });
+    const extensionLine = logs.filter((line) => line.includes('Extension copy')).at(-1);
+    const staleFailureCount = Number(errors.at(-1)?.match(/(\d+) check/)?.[1]);
+
+    expect(currentCode).toBe(1);
+    expect(staleCode).toBe(1);
+    expect(staleFailureCount).toBe(currentFailureCount + 1);
+    expect(extensionLine).toMatch(/^❌/);
+    expect(extensionLine).toContain('stale');
+    expect(extensionLine).toContain('manifest.json');
+    expect(extensionLine).toContain('cbctl setup');
+    expect(extensionLine).toContain('reload the unpacked extension');
+  });
+
+  it('T4: reports stale content even when the installed version matches', () => {
+    useTempHome('cbc-cli-extension-version-match-');
+    installPackagedExtension();
+    writeFileSync(getInstalledVersionPath(), `${readPackageVersion()}\n`);
+    const cdpPath = join(getInstalledExtensionPath(), 'cdp.js');
+    writeFileSync(cdpPath, `${readFileSync(cdpPath, 'utf8')}\nT4 mutation\n`);
+
+    const status = getExtensionCopyStatus();
+
+    expect(status.state).toBe('stale');
+    expect(status.differingFiles).toContain('cdp.js');
+  });
+
+  it('T5: reports a packaged file missing from the installed copy as stale', () => {
+    useTempHome('cbc-cli-extension-missing-file-');
+    installPackagedExtension();
+    rmSync(join(getInstalledExtensionPath(), 'cdp.js'));
+
+    const status = getExtensionCopyStatus();
+
+    expect(status.state).toBe('stale');
+    expect(status.differingFiles).toContain('cdp.js');
+  });
+
+  it('T6: does not print a green status tick for a stale copy', async () => {
+    useTempHome('cbc-cli-extension-status-stale-');
+    installPackagedExtension();
+    const popupPath = join(getInstalledExtensionPath(), 'popup.js');
+    writeFileSync(popupPath, `${readFileSync(popupPath, 'utf8')}\nT6 mutation\n`);
+    const { logs } = captureConsole();
+
+    await runStatus({ positional: ['status'], flags: {} });
+    const extensionLine = logs.find((line) => line.includes('Extension copy'));
+
+    expect(extensionLine).toMatch(/^❌/);
+    expect(extensionLine).toContain('stale');
+    expect(extensionLine).not.toMatch(/^✅/);
+  });
+
+  it('T7: surfaces every differing file name', async () => {
+    useTempHome('cbc-cli-extension-differences-');
+    installPackagedExtension();
+    const backgroundPath = join(getInstalledExtensionPath(), 'background.js');
+    const extraPath = join(getInstalledExtensionPath(), 'extra.js');
+    writeFileSync(backgroundPath, `${readFileSync(backgroundPath, 'utf8')}\nT7 mutation\n`);
+    rmSync(join(getInstalledExtensionPath(), 'cdp.js'));
+    writeFileSync(extraPath, 'T7 extra file\n');
+    const { logs } = captureConsole();
+
+    await runStatus({ positional: ['status'], flags: {} });
+    const extensionLine = logs.find((line) => line.includes('Extension copy'));
+
+    expect(extensionLine).toContain('background.js');
+    expect(extensionLine).toContain('cdp.js');
+    expect(extensionLine).toContain('extra.js');
+    expect(extensionLine).toContain('3 differing file(s)');
   });
 });
 

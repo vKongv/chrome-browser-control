@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { extensionCopyLooksValid } from '../copy-extension.js';
+import { getExtensionCopyStatus } from '../copy-extension.js';
 import {
   getCompiledBrokerMainPath,
   getCompiledMcpMainPath,
@@ -29,7 +29,14 @@ export async function runDoctor(_args: ParsedArgs): Promise<number> {
   const mcpMain = getCompiledMcpMainPath();
   checks.push({ name: 'Compiled broker entry', ok: existsSync(brokerMain), detail: brokerMain });
   checks.push({ name: 'Compiled MCP entry', ok: existsSync(mcpMain), detail: mcpMain });
-  checks.push({ name: 'Extension copy', ok: extensionCopyLooksValid(), detail: 'Run cbctl setup' });
+  const extensionCopy = getExtensionCopyStatus();
+  const extensionDetail =
+    extensionCopy.state === 'current'
+      ? 'current'
+      : extensionCopy.state === 'absent'
+        ? 'missing — run cbctl setup'
+        : `stale — ${extensionCopy.differingFiles.length} differing file(s): ${extensionCopy.differingFiles.join(', ')} — run cbctl setup, then reload the unpacked extension in chrome://extensions`;
+  checks.push({ name: 'Extension copy', ok: extensionCopy.state === 'current', detail: extensionDetail });
 
   const configPath = getUserConfigPath();
   const hasConfig = existsSync(configPath);
