@@ -1,6 +1,39 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import vm from 'node:vm';
 import { Window as HappyWindow } from 'happy-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
+
+type ContentCore = Record<string, any>;
+
+const contentCorePath = join(process.cwd(), 'extension/content-core.js');
+const generatorPath = join(process.cwd(), 'scripts/generate-content-core.mjs');
+const tempGeneratorRoots: string[] = [];
+
+function loadContentCore(): ContentCore {
+  const HostDate = globalThis.Date;
+  const context = vm.createContext({
+    console,
+    Date: class extends HostDate {
+      static now() {
+        return globalThis.Date.now();
+      }
+    },
+    setTimeout: (...args: Parameters<typeof setTimeout>) => globalThis.setTimeout(...args),
+    clearTimeout: (...args: Parameters<typeof clearTimeout>) => globalThis.clearTimeout(...args)
+  });
+  (context as any).globalThis = context;
+  vm.runInContext(
+    `${readFileSync(contentCorePath, 'utf8')}\nglobalThis.BrowserControlContentCore.__testing = __testing;`,
+    context,
+    { filename: contentCorePath }
+  );
+  return (context as any).BrowserControlContentCore;
+}
+
+const {
   __testing,
   boundsForRef,
   buildSnapshotFromDocument,
@@ -22,7 +55,25 @@ import {
   queryElements,
   waitForCondition,
   performType
-} from '../extension/content-core.module.js';
+} = loadContentCore();
+
+function makeGeneratorFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'cbc-content-core-'));
+  tempGeneratorRoots.push(root);
+  const extensionDir = join(root, 'extension');
+  mkdirSync(extensionDir);
+  writeFileSync(join(extensionDir, 'content-core.module.js'), readFileSync(join(process.cwd(), 'extension/content-core.module.js')));
+  writeFileSync(join(extensionDir, 'content-core.js'), readFileSync(contentCorePath));
+  return {
+    root,
+    sourcePath: join(extensionDir, 'content-core.module.js'),
+    outputPath: join(extensionDir, 'content-core.js')
+  };
+}
+
+function runGenerator(root: string, ...args: string[]) {
+  return spawnSync(process.execPath, [generatorPath, ...args], { cwd: root, encoding: 'utf8' });
+}
 
 function makeDocument(html: string) {
   const window = new HappyWindow({ url: 'https://example.test/' });
@@ -49,6 +100,40 @@ describe('extension content core', () => {
   afterEach(() => {
     __testing.resetRefStore();
     __testing.clearConsoleLogs();
+    for (const root of tempGeneratorRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it('loads behavior from the shipping content-core.js file', () => {
+    expect(typeof prepareTrustedKeypress).toBe('function');
+    expect(readFileSync(contentCorePath, 'utf8')).toContain('globalThis.BrowserControlContentCore');
+  });
+
+  it('matches a fresh generation of content-core.js', () => {
+    const fixture = makeGeneratorFixture();
+
+    expect(runGenerator(fixture.root).status).toBe(0);
+    expect(readFileSync(fixture.outputPath, 'utf8')).toBe(readFileSync(contentCorePath, 'utf8'));
+  });
+
+  it('detects drift when either content-core copy changes', () => {
+    const moduleFixture = makeGeneratorFixture();
+    writeFileSync(moduleFixture.sourcePath, `${readFileSync(moduleFixture.sourcePath, 'utf8')}\nconst tec213ModuleMutation = true;\n`);
+    expect(runGenerator(moduleFixture.root, '--check').status).not.toBe(0);
+
+    const shippingFixture = makeGeneratorFixture();
+    writeFileSync(shippingFixture.outputPath, `${readFileSync(shippingFixture.outputPath, 'utf8')}\n// tec213 shipping mutation\n`);
+    expect(runGenerator(shippingFixture.root, '--check').status).not.toBe(0);
+  });
+
+  it('returns zero for clean output and non-zero for drift in --check mode', () => {
+    const fixture = makeGeneratorFixture();
+
+    expect(runGenerator(fixture.root, '--check').status).toBe(0);
+    writeFileSync(fixture.outputPath, `${readFileSync(fixture.outputPath, 'utf8')}\n`);
+
+    const drift = runGenerator(fixture.root, '--check');
+    expect(drift.status).not.toBe(0);
+    expect(drift.stderr).toContain('out of date');
   });
 
   it('builds a compact snapshot with stable refs for interactive elements by default', () => {

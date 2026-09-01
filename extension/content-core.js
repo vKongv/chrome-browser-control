@@ -1,3 +1,5 @@
+// Generated from extension/content-core.module.js; do not edit.
+
 const REF_ATTR = 'data-cbc-ref';
 const INTERESTING_SELECTOR = 'a,button,input,textarea,select,summary,[role],[contenteditable]';
 const FULL_ELEMENT_LIMIT = 250;
