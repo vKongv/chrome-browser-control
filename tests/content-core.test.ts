@@ -175,6 +175,29 @@ describe('extension content core', () => {
   });
 
   it.each([
+    ['const', 'export const$foo = 1;'],
+    ['let', 'export let$x = 2;'],
+    ['var', 'export var$y = 3;'],
+    ['class', 'export class$C {}'],
+    ['function', 'export function$foo() {}'],
+    ['async function', 'export async function$foo() {}'],
+    ['const with a Unicode continuation', 'export consté = 1;'],
+    ['let with a Unicode continuation', 'export leté = 2;'],
+    ['var with a Unicode continuation', 'export varé = 3;'],
+    ['class with a Unicode continuation', 'export classÉ {}'],
+    ['function with a Unicode continuation', 'export functioné() {}'],
+    ['async function with a Unicode continuation', 'export async functioné() {}']
+  ])('refuses %s when the keyword continues into an identifier', (_kind, unsupportedLine) => {
+    const fixture = makeGeneratorSourceFixture(`${unsupportedLine}\n`);
+
+    const result = runGenerator(fixture.root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Unsupported export form on line 1: ${unsupportedLine}`);
+    expect(existsSync(fixture.outputPath)).toBe(false);
+  });
+
+  it.each([
     ['named export', 'export { a, b };'],
     ['default export', 'export default foo;']
   ])('refuses %s with line details and no output', (_kind, unsupportedLine) => {

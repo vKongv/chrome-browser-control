@@ -10,7 +10,7 @@ export function generateContentCore(source) {
     .split('\n')
     .map((line, index) => {
       if (!/^export\b/.test(line)) return line;
-      if (!/^export (?=(?:function|async function|const|let|var|class)\b)/.test(line)) {
+      if (!/^export (?=(?:function|async function|const|let|var|class)(?![$\p{ID_Continue}\u200C\u200D]))/u.test(line)) {
         throw new Error(`Unsupported export form on line ${index + 1}: ${line}`);
       }
       return line.replace(/^export /, '');
