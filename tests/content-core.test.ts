@@ -1,6 +1,39 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import vm from 'node:vm';
 import { Window as HappyWindow } from 'happy-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
+
+type ContentCore = Record<string, any>;
+
+const contentCorePath = join(process.cwd(), 'extension/content-core.js');
+const generatorPath = join(process.cwd(), 'scripts/generate-content-core.mjs');
+const tempGeneratorRoots: string[] = [];
+
+function loadContentCore(): ContentCore {
+  const HostDate = globalThis.Date;
+  const context = vm.createContext({
+    console,
+    Date: class extends HostDate {
+      static now() {
+        return globalThis.Date.now();
+      }
+    },
+    setTimeout: (...args: Parameters<typeof setTimeout>) => globalThis.setTimeout(...args),
+    clearTimeout: (...args: Parameters<typeof clearTimeout>) => globalThis.clearTimeout(...args)
+  });
+  (context as any).globalThis = context;
+  vm.runInContext(
+    `${readFileSync(contentCorePath, 'utf8')}\nglobalThis.BrowserControlContentCore.__testing = __testing;`,
+    context,
+    { filename: contentCorePath }
+  );
+  return (context as any).BrowserControlContentCore;
+}
+
+const {
   __testing,
   boundsForRef,
   buildSnapshotFromDocument,
@@ -22,7 +55,37 @@ import {
   queryElements,
   waitForCondition,
   performType
-} from '../extension/content-core.module.js';
+} = loadContentCore();
+
+function makeGeneratorFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'cbc-content-core-'));
+  tempGeneratorRoots.push(root);
+  const extensionDir = join(root, 'extension');
+  mkdirSync(extensionDir);
+  writeFileSync(join(extensionDir, 'content-core.module.js'), readFileSync(join(process.cwd(), 'extension/content-core.module.js')));
+  writeFileSync(join(extensionDir, 'content-core.js'), readFileSync(contentCorePath));
+  return {
+    root,
+    sourcePath: join(extensionDir, 'content-core.module.js'),
+    outputPath: join(extensionDir, 'content-core.js')
+  };
+}
+
+function makeGeneratorSourceFixture(source: string, output?: string) {
+  const root = mkdtempSync(join(tmpdir(), 'cbc-content-core-'));
+  tempGeneratorRoots.push(root);
+  const extensionDir = join(root, 'extension');
+  mkdirSync(extensionDir);
+  const sourcePath = join(extensionDir, 'content-core.module.js');
+  const outputPath = join(extensionDir, 'content-core.js');
+  writeFileSync(sourcePath, source);
+  if (output !== undefined) writeFileSync(outputPath, output);
+  return { root, sourcePath, outputPath };
+}
+
+function runGenerator(root: string, ...args: string[]) {
+  return spawnSync(process.execPath, [generatorPath, ...args], { cwd: root, encoding: 'utf8' });
+}
 
 function makeDocument(html: string) {
   const window = new HappyWindow({ url: 'https://example.test/' });
@@ -49,6 +112,118 @@ describe('extension content core', () => {
   afterEach(() => {
     __testing.resetRefStore();
     __testing.clearConsoleLogs();
+    for (const root of tempGeneratorRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it('loads behavior from the shipping content-core.js file', () => {
+    expect(typeof prepareTrustedKeypress).toBe('function');
+    expect(readFileSync(contentCorePath, 'utf8')).toContain('globalThis.BrowserControlContentCore');
+  });
+
+  it('matches a fresh generation of content-core.js', () => {
+    const fixture = makeGeneratorFixture();
+
+    expect(runGenerator(fixture.root).status).toBe(0);
+    expect(readFileSync(fixture.outputPath, 'utf8')).toBe(readFileSync(contentCorePath, 'utf8'));
+  });
+
+  it('detects drift when either content-core copy changes', () => {
+    const moduleFixture = makeGeneratorFixture();
+    writeFileSync(moduleFixture.sourcePath, `${readFileSync(moduleFixture.sourcePath, 'utf8')}\nconst tec213ModuleMutation = true;\n`);
+    expect(runGenerator(moduleFixture.root, '--check').status).not.toBe(0);
+
+    const shippingFixture = makeGeneratorFixture();
+    writeFileSync(shippingFixture.outputPath, `${readFileSync(shippingFixture.outputPath, 'utf8')}\n// tec213 shipping mutation\n`);
+    expect(runGenerator(shippingFixture.root, '--check').status).not.toBe(0);
+  });
+
+  it('returns zero for clean output and non-zero for drift in --check mode', () => {
+    const fixture = makeGeneratorFixture();
+
+    expect(runGenerator(fixture.root, '--check').status).toBe(0);
+    writeFileSync(fixture.outputPath, `${readFileSync(fixture.outputPath, 'utf8')}\n`);
+
+    const drift = runGenerator(fixture.root, '--check');
+    expect(drift.status).not.toBe(0);
+    expect(drift.stderr).toContain('out of date');
+  });
+
+  it('strips export only from supported declaration forms', () => {
+    const source = [
+      'export function plain() {}',
+      'export async function asynchronous() {}',
+      'export const constant = 1;',
+      'export let mutable = 2;',
+      'export var legacy = 3;',
+      'export class Example {}'
+    ].join('\n') + '\n';
+    const fixture = makeGeneratorSourceFixture(source);
+
+    expect(runGenerator(fixture.root).status).toBe(0);
+    expect(readFileSync(fixture.outputPath, 'utf8')).toBe(
+      '// Generated from extension/content-core.module.js; do not edit.\n\n' +
+        [
+          'function plain() {}',
+          'async function asynchronous() {}',
+          'const constant = 1;',
+          'let mutable = 2;',
+          'var legacy = 3;',
+          'class Example {}'
+        ].join('\n') +
+        '\n'
+    );
+  });
+
+  it.each([
+    ['const', 'export const$foo = 1;'],
+    ['let', 'export let$x = 2;'],
+    ['var', 'export var$y = 3;'],
+    ['class', 'export class$C {}'],
+    ['function', 'export function$foo() {}'],
+    ['async function', 'export async function$foo() {}'],
+    ['const with a Unicode continuation', 'export consté = 1;'],
+    ['let with a Unicode continuation', 'export leté = 2;'],
+    ['var with a Unicode continuation', 'export varé = 3;'],
+    ['class with a Unicode continuation', 'export classÉ {}'],
+    ['function with a Unicode continuation', 'export functioné() {}'],
+    ['async function with a Unicode continuation', 'export async functioné() {}']
+  ])('refuses %s when the keyword continues into an identifier', (_kind, unsupportedLine) => {
+    const fixture = makeGeneratorSourceFixture(`${unsupportedLine}\n`);
+
+    const result = runGenerator(fixture.root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Unsupported export form on line 1: ${unsupportedLine}`);
+    expect(existsSync(fixture.outputPath)).toBe(false);
+  });
+
+  it.each([
+    ['named export', 'export { a, b };'],
+    ['default export', 'export default foo;']
+  ])('refuses %s with line details and no output', (_kind, unsupportedLine) => {
+    const fixture = makeGeneratorSourceFixture(`const before = true;\n${unsupportedLine}\n`);
+
+    const result = runGenerator(fixture.root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Unsupported export form on line 2: ${unsupportedLine}`);
+    expect(result.stderr.toLowerCase()).toContain('unsupported');
+    expect(existsSync(fixture.outputPath)).toBe(false);
+  });
+
+  it.each([
+    ['named export', 'export { a, b };'],
+    ['default export', 'export default foo;']
+  ])('refuses %s in --check mode with line details', (_kind, unsupportedLine) => {
+    const existingOutput = 'existing output\n';
+    const fixture = makeGeneratorSourceFixture(`const before = true;\n${unsupportedLine}\n`, existingOutput);
+
+    const result = runGenerator(fixture.root, '--check');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Unsupported export form on line 2: ${unsupportedLine}`);
+    expect(result.stderr.toLowerCase()).toContain('unsupported');
+    expect(readFileSync(fixture.outputPath, 'utf8')).toBe(existingOutput);
   });
 
   it('builds a compact snapshot with stable refs for interactive elements by default', () => {
