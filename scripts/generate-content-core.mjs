@@ -5,7 +5,19 @@ import { fileURLToPath } from 'node:url';
 export const GENERATED_HEADER = '// Generated from extension/content-core.module.js; do not edit.\n\n';
 
 export function generateContentCore(source) {
-  return `${GENERATED_HEADER}${source.replace(/^export /gm, '')}`;
+  // This is intentionally line-based and does not distinguish export text inside strings or comments.
+  const transformed = source
+    .split('\n')
+    .map((line, index) => {
+      if (!/^export\b/.test(line)) return line;
+      if (!/^export (?=(?:function|async function|const|let|var|class)\b)/.test(line)) {
+        throw new Error(`Unsupported export form on line ${index + 1}: ${line}`);
+      }
+      return line.replace(/^export /, '');
+    })
+    .join('\n');
+
+  return `${GENERATED_HEADER}${transformed}`;
 }
 
 function main() {

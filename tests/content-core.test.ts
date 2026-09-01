@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,6 +71,18 @@ function makeGeneratorFixture() {
   };
 }
 
+function makeGeneratorSourceFixture(source: string, output?: string) {
+  const root = mkdtempSync(join(tmpdir(), 'cbc-content-core-'));
+  tempGeneratorRoots.push(root);
+  const extensionDir = join(root, 'extension');
+  mkdirSync(extensionDir);
+  const sourcePath = join(extensionDir, 'content-core.module.js');
+  const outputPath = join(extensionDir, 'content-core.js');
+  writeFileSync(sourcePath, source);
+  if (output !== undefined) writeFileSync(outputPath, output);
+  return { root, sourcePath, outputPath };
+}
+
 function runGenerator(root: string, ...args: string[]) {
   return spawnSync(process.execPath, [generatorPath, ...args], { cwd: root, encoding: 'utf8' });
 }
@@ -134,6 +146,61 @@ describe('extension content core', () => {
     const drift = runGenerator(fixture.root, '--check');
     expect(drift.status).not.toBe(0);
     expect(drift.stderr).toContain('out of date');
+  });
+
+  it('strips export only from supported declaration forms', () => {
+    const source = [
+      'export function plain() {}',
+      'export async function asynchronous() {}',
+      'export const constant = 1;',
+      'export let mutable = 2;',
+      'export var legacy = 3;',
+      'export class Example {}'
+    ].join('\n') + '\n';
+    const fixture = makeGeneratorSourceFixture(source);
+
+    expect(runGenerator(fixture.root).status).toBe(0);
+    expect(readFileSync(fixture.outputPath, 'utf8')).toBe(
+      '// Generated from extension/content-core.module.js; do not edit.\n\n' +
+        [
+          'function plain() {}',
+          'async function asynchronous() {}',
+          'const constant = 1;',
+          'let mutable = 2;',
+          'var legacy = 3;',
+          'class Example {}'
+        ].join('\n') +
+        '\n'
+    );
+  });
+
+  it.each([
+    ['named export', 'export { a, b };'],
+    ['default export', 'export default foo;']
+  ])('refuses %s with line details and no output', (_kind, unsupportedLine) => {
+    const fixture = makeGeneratorSourceFixture(`const before = true;\n${unsupportedLine}\n`);
+
+    const result = runGenerator(fixture.root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Unsupported export form on line 2: ${unsupportedLine}`);
+    expect(result.stderr.toLowerCase()).toContain('unsupported');
+    expect(existsSync(fixture.outputPath)).toBe(false);
+  });
+
+  it.each([
+    ['named export', 'export { a, b };'],
+    ['default export', 'export default foo;']
+  ])('refuses %s in --check mode with line details', (_kind, unsupportedLine) => {
+    const existingOutput = 'existing output\n';
+    const fixture = makeGeneratorSourceFixture(`const before = true;\n${unsupportedLine}\n`, existingOutput);
+
+    const result = runGenerator(fixture.root, '--check');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Unsupported export form on line 2: ${unsupportedLine}`);
+    expect(result.stderr.toLowerCase()).toContain('unsupported');
+    expect(readFileSync(fixture.outputPath, 'utf8')).toBe(existingOutput);
   });
 
   it('builds a compact snapshot with stable refs for interactive elements by default', () => {
