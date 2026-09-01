@@ -59,7 +59,9 @@ export async function runStatus(_args: ParsedArgs): Promise<number> {
       ? 'present'
       : extensionCopy.state === 'absent'
         ? 'missing — run cbctl setup'
-        : `stale — ${extensionCopy.differingFiles.length} differing file(s): ${extensionCopy.differingFiles.join(', ')} — run cbctl setup, then reload the unpacked extension in chrome://extensions`;
+        : `stale — ${extensionCopy.differingFiles.length} differing file(s): ${extensionCopy.differingFiles.join(', ')}${
+            extensionCopy.inspectionProblems?.length ? ` — ${extensionCopy.inspectionProblems.join('; ')}` : ''
+          } — run cbctl setup, then reload the unpacked extension in chrome://extensions`;
   console.log(`${extensionCopy.state === 'current' ? '✅' : '❌'} Extension copy ${extensionDetail}`);
   if (tokenIssue) {
     console.log(`❌ Token ${tokenIssue}`);

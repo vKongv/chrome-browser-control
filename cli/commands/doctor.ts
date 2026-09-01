@@ -35,7 +35,9 @@ export async function runDoctor(_args: ParsedArgs): Promise<number> {
       ? 'current'
       : extensionCopy.state === 'absent'
         ? 'missing — run cbctl setup'
-        : `stale — ${extensionCopy.differingFiles.length} differing file(s): ${extensionCopy.differingFiles.join(', ')} — run cbctl setup, then reload the unpacked extension in chrome://extensions`;
+        : `stale — ${extensionCopy.differingFiles.length} differing file(s): ${extensionCopy.differingFiles.join(', ')}${
+            extensionCopy.inspectionProblems?.length ? ` — ${extensionCopy.inspectionProblems.join('; ')}` : ''
+          } — run cbctl setup, then reload the unpacked extension in chrome://extensions`;
   checks.push({ name: 'Extension copy', ok: extensionCopy.state === 'current', detail: extensionDetail });
 
   const configPath = getUserConfigPath();

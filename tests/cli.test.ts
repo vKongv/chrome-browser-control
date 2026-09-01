@@ -1,4 +1,14 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -108,9 +118,11 @@ describe('cli extension copy diagnostics', () => {
     const { logs } = captureConsole();
 
     expect(getExtensionCopyStatus()).toEqual({ state: 'absent', differingFiles: [] });
-    await runStatus({ positional: ['status'], flags: {} });
-    await runDoctor({ positional: ['doctor'], flags: {} });
+    const statusCode = await runStatus({ positional: ['status'], flags: {} });
+    const doctorCode = await runDoctor({ positional: ['doctor'], flags: {} });
 
+    expect(statusCode).toBe(0);
+    expect(doctorCode).toBe(1);
     expect(logs).toContain('❌ Extension copy missing — run cbctl setup');
     expect(logs).toContain('❌ Extension copy — missing — run cbctl setup');
   });
@@ -208,6 +220,86 @@ describe('cli extension copy diagnostics', () => {
     expect(extensionLine).toContain('cdp.js');
     expect(extensionLine).toContain('extra.js');
     expect(extensionLine).toContain('3 differing file(s)');
+  });
+
+  it('R8: diagnoses an unreadable installed file without aborting doctor', async () => {
+    useTempHome('cbc-cli-extension-unreadable-');
+    installPackagedExtension();
+    const cdpPath = join(getInstalledExtensionPath(), 'cdp.js');
+    chmodSync(cdpPath, 0o000);
+
+    try {
+      const { logs } = captureConsole();
+      const status = getExtensionCopyStatus();
+      const statusCode = await runStatus({ positional: ['status'], flags: {} });
+      const doctorCode = await runDoctor({ positional: ['doctor'], flags: {} });
+      const extensionLines = logs.filter((line) => line.includes('Extension copy'));
+
+      expect(status.state).toBe('stale');
+      expect(status.differingFiles).toContain('cdp.js');
+      expect(status.inspectionProblems?.some((problem) => problem.includes('cdp.js') && problem.includes('EACCES'))).toBe(true);
+      expect(statusCode).toBe(0);
+      expect(doctorCode).toBe(1);
+      expect(extensionLines[0]).toContain('cdp.js');
+      expect(extensionLines[0]).toContain('EACCES');
+      expect(extensionLines[0]).toContain('cbctl setup');
+      expect(extensionLines[1]).toContain('cdp.js');
+      expect(extensionLines[1]).toContain('EACCES');
+      expect(extensionLines[1]).toContain('cbctl setup');
+      expect(logs.some((line) => line.includes('CLI version'))).toBe(true);
+      expect(logs.some((line) => line.includes('Compiled broker entry'))).toBe(true);
+      expect(logs.some((line) => line.includes('User config'))).toBe(true);
+      expect(logs.some((line) => line.includes('Pairing token configured'))).toBe(true);
+    } finally {
+      chmodSync(cdpPath, 0o644);
+    }
+  });
+
+  it('R8: diagnoses an installed directory symlink as stale without following it', async () => {
+    useTempHome('cbc-cli-extension-directory-symlink-');
+    installPackagedExtension();
+    const symlinkTarget = join(tempHome, 'directory-target');
+    mkdirSync(symlinkTarget);
+    writeFileSync(join(symlinkTarget, 'marker.txt'), 'R8 directory symlink\n');
+    symlinkSync(symlinkTarget, join(getInstalledExtensionPath(), 'directory-link'), 'dir');
+    const { logs } = captureConsole();
+
+    const status = getExtensionCopyStatus();
+    const statusCode = await runStatus({ positional: ['status'], flags: {} });
+    const doctorCode = await runDoctor({ positional: ['doctor'], flags: {} });
+    const extensionLines = logs.filter((line) => line.includes('Extension copy'));
+
+    expect(status.state).toBe('stale');
+    expect(status.differingFiles).toContain('directory-link');
+    expect(status.inspectionProblems?.some((problem) => problem.includes('directory-link'))).toBe(true);
+    expect(statusCode).toBe(0);
+    expect(doctorCode).toBe(1);
+    expect(extensionLines[0]).toContain('directory-link');
+    expect(extensionLines[0]).toContain('cbctl setup');
+    expect(extensionLines[1]).toContain('directory-link');
+    expect(extensionLines[1]).toContain('cbctl setup');
+  });
+
+  it('R8: diagnoses a broken installed symlink as stale without throwing', async () => {
+    useTempHome('cbc-cli-extension-broken-symlink-');
+    installPackagedExtension();
+    symlinkSync(join(tempHome, 'missing-target'), join(getInstalledExtensionPath(), 'broken-link'));
+    const { logs } = captureConsole();
+
+    const status = getExtensionCopyStatus();
+    const statusCode = await runStatus({ positional: ['status'], flags: {} });
+    const doctorCode = await runDoctor({ positional: ['doctor'], flags: {} });
+    const extensionLines = logs.filter((line) => line.includes('Extension copy'));
+
+    expect(status.state).toBe('stale');
+    expect(status.differingFiles).toContain('broken-link');
+    expect(status.inspectionProblems?.some((problem) => problem.includes('broken-link'))).toBe(true);
+    expect(statusCode).toBe(0);
+    expect(doctorCode).toBe(1);
+    expect(extensionLines[0]).toContain('broken-link');
+    expect(extensionLines[0]).toContain('cbctl setup');
+    expect(extensionLines[1]).toContain('broken-link');
+    expect(extensionLines[1]).toContain('cbctl setup');
   });
 });
 
