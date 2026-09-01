@@ -86,7 +86,7 @@ Load the unpacked extension from:
 (or `extension/` from the repo when iterating on extension sources).
 
 After editing extension files, run `npm run build`, run `cbctl setup`, then reload the unpacked extension in `chrome://extensions` before live browser checks. After editing MCP server files (`server/`, `cli/`), rebuild (`npm run build`) and restart the MCP server in your host (Cursor: MCP settings → restart `chrome_browser_control`).
-The `cbctl doctor` command now reports whether the installed copy is absent, stale, or current, so a stale copy is detectable rather than silent.
+The `cbctl doctor` command reports whether the installed copy is absent, stale, or current, so a stale copy is detectable rather than silent.
 
 ## Verification commands
 
