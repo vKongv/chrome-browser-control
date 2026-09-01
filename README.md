@@ -272,7 +272,7 @@ npm audit
 
 `npm run benchmark:snapshots` is an alias for the same compact-vs-full benchmark. The benchmark prints compact bytes, full bytes, and reduction percentage; compact mode should stay at least 50% smaller on the dense fixture.
 
-After editing files under `extension/`, reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 27`, extension protocol version `7`, and the `cdp-trusted-input` feature marker when both sides are current.
+After editing files under `extension/`, run `npm run build`, run `cbctl setup`, then reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 27`, extension protocol version `7`, and the `cdp-trusted-input` feature marker when both sides are current.
 
 ## Limitations
 
