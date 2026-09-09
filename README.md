@@ -12,7 +12,7 @@ Repository: https://github.com/vkongv/chrome-browser-control
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - Google Chrome
 
 ## Install and Setup

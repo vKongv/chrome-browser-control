@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      # This check must run before `npm run build`, not after. `npm run build`
+      # regenerates extension/content-core.js from extension/content-core.module.js,
+      # so building first would silently repair any drift and this check would then
+      # pass for the wrong reason — the gate would be worthless. Running it here
+      # catches real drift between the hand-edited module source and the committed
+      # generated file.
+      - name: Check extension/content-core.js is not stale
+        run: node scripts/generate-content-core.mjs --check
+
+      - run: npm test
+
+      - run: npm run build
+
+      # Second guard, independent of the check above: confirms the generator's
+      # --check mode and its write mode agree. If they ever diverge, `npm run build`
+      # would change the generated file even though the --check step above reported
+      # no drift, and this catches that.
+      - name: Confirm build produced no diff in the generated file
+        run: git diff --exit-code extension/content-core.js
+
+      - run: npm run benchmark:compact-snapshots
+
+  consumer-smoke:
+    name: Consumer package smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Pack the publishable tarball
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+
+      - name: Install the tarball into a scratch directory outside the repo
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke-install"
+          cd "$RUNNER_TEMP/smoke-install"
+          npm init -y
+          npm install "$RUNNER_TEMP"/chrome-browser-control-*.tgz
+
+      - name: Run cbctl version from the installed package
+        working-directory: ${{ runner.temp }}/smoke-install
+        run: node_modules/.bin/cbctl version
+
+      - name: Run cbctl doctor from the installed package
+        working-directory: ${{ runner.temp }}/smoke-install
+        run: |
+          set +e
+          node_modules/.bin/cbctl doctor
+          status=$?
+          set -e
+          echo "cbctl doctor exited with status $status"
+          # No `cbctl setup` has run in this job, so the extension copy, user
+          # config, and broker are all absent by design. doctor reports those
+          # as failed checks and exits 1 (cli/commands/doctor.ts) -- that is the
+          # expected, correct result in CI, not a broker being up. Assert that
+          # exact exit code deliberately, rather than forcing it to 0, so this
+          # still catches a genuine crash or an unrelated exit code.
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected cbctl doctor to exit 1 without a broker/config; got $status"
+            exit 1
+          fi
