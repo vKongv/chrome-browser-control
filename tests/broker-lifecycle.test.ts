@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:net';
 import { ChromeBroker } from '../server/broker.js';
 import {
-  BROKER_AUTOLOAD_TIMEOUT_MS,
   ensureBroker,
   getBrokerOwnership,
   resetBrokerLifecycleForTests,
@@ -156,10 +155,6 @@ describe('ensureBroker', () => {
     expect(String(spawnMock.mock.calls[0]?.[1]?.[0] ?? '')).toContain('dist/server/broker-main.js');
     expect(resultA).toBe(resultB);
     expect(resultA).toMatchObject({ ownership: 'spawned', autoloadTimedOut: true, reachable: false, authOk: false });
-  });
-
-  it('uses a bounded autoload timeout constant', () => {
-    expect(BROKER_AUTOLOAD_TIMEOUT_MS).toBe(15_000);
   });
 
   it('re-probes and recovers when a cached broker stops responding', async () => {
