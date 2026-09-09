@@ -23,7 +23,7 @@ export async function runDoctor(_args: ParsedArgs): Promise<number> {
   }
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
-  checks.push({ name: 'Node.js >= 18', ok: nodeMajor >= 18, detail: process.version });
+  checks.push({ name: 'Node.js >= 20', ok: nodeMajor >= 20, detail: process.version });
 
   const brokerMain = getCompiledBrokerMainPath();
   const mcpMain = getCompiledMcpMainPath();

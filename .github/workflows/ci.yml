@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # fail-fast: false so every Node version reports its own result. With the
+      # default true, one failing version cancels its siblings before they run a
+      # single step -- a cancelled job reports as a failure and tells us nothing,
+      # and the whole point of this matrix is knowing whether a failure is
+      # version-specific or common to all three.
+      fail-fast: false
+      matrix:
+        node-version: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      # Step order below is load-bearing, in both directions:
+      #
+      # - The drift check runs before `npm run build`, not after. Build
+      #   regenerates extension/content-core.js from
+      #   extension/content-core.module.js, so building first would silently
+      #   repair any drift and this check would then pass for the wrong
+      #   reason — the gate would be worthless. Running it here catches real
+      #   drift between the hand-edited module source and the committed
+      #   generated file.
+      # - The build runs before `npm test`, not after. The suite's broker
+      #   tests spawn the compiled broker from dist/server/broker-main.js
+      #   (see ensureBroker in server/broker-lifecycle.ts); without dist/
+      #   present it never spawns and ownership never becomes 'spawned',
+      #   failing four broker-lifecycle assertions. Every contributor
+      #   machine already has a stale dist/ from an earlier build, which is
+      #   why this only shows up on a genuinely clean checkout. Building
+      #   first also means the suite runs against real built output instead
+      #   of whatever happened to be on disk.
+      - name: Check extension/content-core.js is not stale
+        run: node scripts/generate-content-core.mjs --check
+
+      - run: npm run build
+
+      - run: npm test
+
+      # Second guard, independent of the drift check above: confirms the
+      # generator's --check mode and its write mode agree. If they ever
+      # diverge, `npm run build` would change the generated file even though
+      # the --check step above reported no drift, and this catches that.
+      - name: Confirm build produced no diff in the generated file
+        run: git diff --exit-code extension/content-core.js
+
+      - run: npm run benchmark:compact-snapshots
+
+  consumer-smoke:
+    name: Consumer package smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Pack the publishable tarball
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+
+      - name: Install the tarball into a scratch directory outside the repo
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke-install"
+          cd "$RUNNER_TEMP/smoke-install"
+          npm init -y
+          npm install "$RUNNER_TEMP"/chrome-browser-control-*.tgz
+
+      - name: Run cbctl version from the installed package
+        working-directory: ${{ runner.temp }}/smoke-install
+        run: node_modules/.bin/cbctl version
+
+      - name: Run cbctl doctor from the installed package
+        working-directory: ${{ runner.temp }}/smoke-install
+        run: |
+          set +e
+          node_modules/.bin/cbctl doctor
+          status=$?
+          set -e
+          echo "cbctl doctor exited with status $status"
+          # No `cbctl setup` has run in this job, so the extension copy, user
+          # config, and broker are all absent by design. doctor reports those
+          # as failed checks and exits 1 (cli/commands/doctor.ts) -- that is the
+          # expected, correct result in CI, not a broker being up. Assert that
+          # exact exit code deliberately, rather than forcing it to 0, so this
+          # still catches a genuine crash or an unrelated exit code.
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected cbctl doctor to exit 1 without a broker/config; got $status"
+            exit 1
+          fi

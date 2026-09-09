@@ -13,7 +13,7 @@
     "url": "https://github.com/vkongv/chrome-browser-control/issues"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "keywords": [
     "mcp",
