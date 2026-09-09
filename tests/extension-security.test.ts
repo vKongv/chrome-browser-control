@@ -10,15 +10,22 @@ function loadSecurity() {
   return (context as any).BrowserControlSecurity;
 }
 
-function withNavigateMetadata(expected: Record<string, unknown>, requestedUrl?: string) {
-  const security = loadSecurity();
+// `redirected` is stated literally rather than derived from security.urlsEquivalent().
+// Deriving it would compare the subject against itself: if urlsEquivalent() inverted,
+// both the product value and this expectation would flip together and every navigate
+// test would still pass. Callers that expect a redirect pass it explicitly.
+function withNavigateMetadata(
+  expected: Record<string, unknown>,
+  requestedUrl?: string,
+  redirected = false
+) {
   const requested = requestedUrl ?? String(expected.url ?? '');
   const finalUrl = String(expected.url ?? requested);
   return {
     ...expected,
     requestedUrl: requested,
     finalUrl,
-    redirected: !security.urlsEquivalent(requested, finalUrl),
+    redirected,
     url: finalUrl
   };
 }
@@ -47,6 +54,7 @@ function loadBackgroundHarness({
   grantedPermissions = [],
   captureError,
   frames,
+  staleCachedDocumentIds = [],
   contentReady = true,
   sendMessageError,
   executeScriptError,
@@ -67,6 +75,10 @@ function loadBackgroundHarness({
   grantedPermissions?: string[];
   captureError?: Error;
   frames?: Array<Record<string, unknown>>;
+  // Document ids that webNavigation.getAllFrames still reports (a stale cache) but
+  // that getFrame no longer confirms. Lets a test reach the replacement-reconfirmation
+  // branch, which is unreachable when both mocks read the same frame array.
+  staleCachedDocumentIds?: string[];
   contentReady?: boolean;
   sendMessageError?: (message: Record<string, unknown>, options: { documentId?: string }) => Error | undefined;
   executeScriptError?: (details: Record<string, unknown>) => Error | undefined;
@@ -337,6 +349,7 @@ function loadBackgroundHarness({
         const found = configuredFrames.find(
           (frame) =>
             frame.tabId === tabId &&
+            !staleCachedDocumentIds.includes(String(frame.documentId)) &&
             (documentId === undefined || frame.documentId === documentId) &&
             (frameId === undefined || frame.frameId === frameId)
         );
@@ -985,8 +998,12 @@ describe('extension background origin enforcement', () => {
       grantedOrigins: ['https://allowed.example/*']
     });
 
-    for (const documentId of ['other-tab-doc', 'missing-doc', 'old-document-for-frame-8']) {
-      await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId })).rejects.toThrow('DOCUMENT_STALE:');
+    // Exact message: this is the lifecycle/not-found branch, which the DOCUMENT_STALE:
+    // prefix alone cannot tell apart from the replacement-reconfirmation branch.
+    for (const documentId of ['other-tab-doc', 'missing-doc']) {
+      await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId })).rejects.toThrow(
+        'DOCUMENT_STALE: the selected document is no longer the active document for its frame'
+      );
     }
     await expect(background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'fenced-doc' })).rejects.toThrow(
       'DOCUMENT_UNSUPPORTED:'
@@ -1020,7 +1037,10 @@ describe('extension background origin enforcement', () => {
         parentFrameId: 0,
         documentId: 'old-child-doc',
         url: 'https://allowed.example/old',
-        documentLifecycle: 'pending_deletion',
+        // getAllFrames still reports this retained document as active. Only the
+        // getFrame reconfirmation proves the frame was already replaced, so this
+        // must stay 'active' or the earlier lifecycle check short-circuits first.
+        documentLifecycle: 'active',
         frameType: 'sub_frame'
       },
       {
@@ -1041,12 +1061,16 @@ describe('extension background origin enforcement', () => {
       },
       tabs: [{ id: 1, active: true, url: 'https://allowed.example/', windowId: 1, status: 'complete' }],
       frames,
+      staleCachedDocumentIds: ['old-child-doc'],
       contentResult: { ref: 'h1' }
     });
 
+    // Exact message, not the DOCUMENT_STALE: prefix. The prefix alone cannot tell the
+    // replacement reconfirmation apart from the earlier lifecycle check, so it would
+    // pass even if the reconfirmation branch were deleted.
     await expect(
       background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'old-child-doc' })
-    ).rejects.toThrow('DOCUMENT_STALE:');
+    ).rejects.toThrow('DOCUMENT_STALE: the selected document was replaced');
     await expect(
       background.handleBridgeRequest('snapshot', { tabId: 1, documentId: 'replacement-child-doc' })
     ).resolves.toMatchObject({
@@ -1683,34 +1707,8 @@ describe('extension background origin enforcement', () => {
   });
 
   it('waits for tab load only before the first perform_actions step', async () => {
-    const tabBase = {
-      id: 1,
-      active: true,
-      highlighted: true,
-      title: 'Example Domain',
-      url: 'https://example.com/',
-      windowId: 1
-    };
-    const completeBackground = loadBackgroundHarness({
-      settings: {
-        bridgeUrl: 'ws://127.0.0.1:8765',
-        token,
-        allowedOrigins: ['https://example.com/*']
-      },
-      tabs: [{ ...tabBase, status: 'complete' }],
-      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
-    });
-    completeBackground.resetTabGetCount();
-    await completeBackground.handleBridgeRequest('perform_actions', {
-      tabId: 1,
-      actions: [
-        { action: 'click', ref: 'h1' },
-        { action: 'click', ref: 'h2' }
-      ]
-    });
-    const completeTabGets = completeBackground.tabGetCount();
-
-    const loadingBackground = loadBackgroundHarness({
+    const tabGetsAtDispatch: number[] = [];
+    const background = loadBackgroundHarness({
       settings: {
         bridgeUrl: 'ws://127.0.0.1:8765',
         token,
@@ -1718,18 +1716,25 @@ describe('extension background origin enforcement', () => {
       },
       tabs: [
         {
-          ...tabBase,
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Example Domain',
+          url: 'https://example.com/',
+          windowId: 1,
           status: 'loading',
           _navigateLoadsRemaining: 3,
           _navigateFinal: { title: 'Example Domain', url: 'https://example.com/', status: 'complete' }
         }
       ],
-      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+      contentResult: (_tabId, message) => {
+        tabGetsAtDispatch.push(background.tabGetCount());
+        return { action: message.action, params: message.params };
+      }
     });
-    loadingBackground.resetTabGetCount();
 
     await expect(
-      loadingBackground.handleBridgeRequest('perform_actions', {
+      background.handleBridgeRequest('perform_actions', {
         tabId: 1,
         actions: [
           { action: 'click', ref: 'h1' },
@@ -1738,7 +1743,11 @@ describe('extension background origin enforcement', () => {
       })
     ).resolves.toMatchObject({ ok: true, completedCount: 2 });
 
-    expect(loadingBackground.tabGetCount()).toBeGreaterThan(completeTabGets);
+    // Step 0 drains the loading tab before it dispatches. Step 1 must then dispatch
+    // without a single further tabs.get, which is what "only before the first step"
+    // means. A regression that re-waits per step adds at least one get here.
+    expect(tabGetsAtDispatch).toHaveLength(2);
+    expect(tabGetsAtDispatch[1]).toBe(tabGetsAtDispatch[0]);
   });
 
   it('rejects invalid perform_actions after before running any step', async () => {
@@ -2935,6 +2944,10 @@ describe('extension background origin enforcement', () => {
         token,
         allowedOrigins: ['http://*/*', 'https://*/*']
       },
+      // Stated explicitly: the harness otherwise defaults grantedOrigins to
+      // allowedOrigins, which made this the same "wildcard granted" state as the
+      // next test, so the two could only ever pass or fail together.
+      grantedOrigins: [],
       tabs: [
         {
           id: 1,
@@ -3222,10 +3235,10 @@ describe('extension background origin enforcement', () => {
       ref: 'e12',
       cropBounds: { x: 20, y: 30, width: 50, height: 25 }
     });
-    const refBoundsIndex = background.sentMessages.findIndex(
-      (entry: { message: { action?: string } }) => entry.message.action === 'ref_bounds'
-    );
-    expect(refBoundsIndex).toBeGreaterThanOrEqual(0);
+    // The activation-before-request ordering is the actual behavior under test, and it
+    // is checked inside contentResult above (tabs[0].active is read at the moment
+    // ref_bounds is handled). A bare "ref_bounds was sent at some point" check adds
+    // nothing beyond what cropBounds already implies, so it was removed.
     expect(background.captures).toHaveLength(1);
   });
 
@@ -3959,7 +3972,10 @@ describe('extension background origin enforcement', () => {
       sessionTabId: 'tab-1',
       tabId: 2
     });
-    await expect(unreadable.handleBridgeRequest('page_status', { sessionTabId: 'tab-1' })).resolves.toBeTruthy();
+    await expect(unreadable.handleBridgeRequest('page_status', { sessionTabId: 'tab-1' })).resolves.toEqual(
+      withTopDocumentMetadata({}, 2)
+    );
+    expect(unreadable.sentMessages.at(-1)).toMatchObject({ tabId: 2, message: { action: 'page_status' } });
   });
 
   it('keeps tabs.onRemoved cleanup after persisted claims rehydrate', async () => {
@@ -4362,7 +4378,49 @@ describe('extension background origin enforcement', () => {
     expect(result.warning).not.toMatch(/unless you pass allowHidden/);
   });
 
-  it('activate_tab reports an unavailable document without recommending allowHidden', async () => {
+  it('activate_tab attributes a persistent connection error to document_unavailable via the error message, not tab state', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Restricted',
+        url: 'https://allowed.example/docs',
+        windowId: 9,
+        status: 'complete'
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      // tab.status is 'complete' and tab.discarded is unset, so a 'document_unavailable'
+      // result here can only come from the /discarded|frame was removed|receiving end
+      // does not exist/i message regex, not from classifyVisibilityReadError's tab-state
+      // checks (covered separately by the loading/discarded isolating tests above).
+      executeScriptError: (details) =>
+        typeof details.func === 'function' ? new Error('Could not establish connection. Receiving end does not exist.') : undefined
+    });
+
+    const result = await background.handleBridgeRequest('activate_tab', { tabId: 1 });
+    expect(result).toEqual({
+      tabId: 1,
+      windowId: 9,
+      active: true,
+      focused: true,
+      visibilityState: 'unknown',
+      visible: false,
+      reason: 'document_unavailable',
+      warning:
+        'Document is unavailable (discarded, still loading, or restricted). Reload the tab and retry activate_tab. allowHidden will not help.'
+    });
+    expect(result.warning).not.toMatch(/unless you pass allowHidden/);
+  });
+
+  it('activate_tab attributes a persistently loading tab to document_unavailable via tab.status, not the error message', async () => {
     const tabs = [
       {
         id: 1,
@@ -4381,8 +4439,10 @@ describe('extension background origin enforcement', () => {
         allowedOrigins: ['https://allowed.example/*']
       },
       tabs,
-      executeScriptError: (details) =>
-        typeof details.func === 'function' ? new Error('Could not establish connection. Receiving end does not exist.') : undefined
+      // Does not match classifyVisibilityReadError's message regex
+      // (/discarded|frame was removed|receiving end does not exist/i), so a
+      // 'document_unavailable' result here can only come from tab.status === 'loading'.
+      executeScriptError: (details) => (typeof details.func === 'function' ? new Error('Transient injection failure') : undefined)
     });
 
     const result = await background.handleBridgeRequest('activate_tab', { tabId: 1 });
@@ -4397,7 +4457,48 @@ describe('extension background origin enforcement', () => {
       warning:
         'Document is unavailable (discarded, still loading, or restricted). Reload the tab and retry activate_tab. allowHidden will not help.'
     });
-    expect(result.warning).not.toMatch(/unless you pass allowHidden/);
+    expect(tabs[0].status).toBe('loading');
+  });
+
+  it('activate_tab attributes a persistently discarded tab to document_unavailable via tab.discarded, not the error message', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Discarded',
+        url: 'https://allowed.example/docs',
+        windowId: 9,
+        status: 'complete',
+        discarded: true
+      }
+    ];
+    const background = loadBackgroundHarness({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*']
+      },
+      tabs,
+      // Does not match classifyVisibilityReadError's message regex
+      // (/discarded|frame was removed|receiving end does not exist/i), so a
+      // 'document_unavailable' result here can only come from tab.discarded.
+      executeScriptError: (details) => (typeof details.func === 'function' ? new Error('Transient injection failure') : undefined)
+    });
+
+    const result = await background.handleBridgeRequest('activate_tab', { tabId: 1 });
+    expect(result).toEqual({
+      tabId: 1,
+      windowId: 9,
+      active: true,
+      focused: true,
+      visibilityState: 'unknown',
+      visible: false,
+      reason: 'document_unavailable',
+      warning:
+        'Document is unavailable (discarded, still loading, or restricted). Reload the tab and retry activate_tab. allowHidden will not help.'
+    });
+    expect(tabs[0].discarded).toBe(true);
   });
 
   it('activate_tab keeps waiting when a loading document later becomes visible', async () => {
@@ -4909,7 +5010,12 @@ describe('trusted chrome.debugger tier', () => {
     );
   });
 
-  it('does not treat another debugger\'s attached target as this extension during hydration', async () => {
+  // Named for what it proves. Hydration never calls chrome.debugger.getTargets(), so
+  // there is no target-ownership check to cover (background.js documents this: a live
+  // target after restart may be DevTools, so stored privilege is never resumed). The
+  // debuggerTargets fixture stands in for that live third-party target and must not
+  // change the outcome.
+  it('fails closed on hydration even when a live debugger target is still attached', async () => {
     const background = loadBackgroundHarness({
       settings: {
         bridgeUrl: 'ws://127.0.0.1:8765',
