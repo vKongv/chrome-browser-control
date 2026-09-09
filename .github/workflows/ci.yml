@@ -15,6 +15,12 @@ jobs:
     name: Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
+      # fail-fast: false so every Node version reports its own result. With the
+      # default true, one failing version cancels its siblings before they run a
+      # single step -- a cancelled job reports as a failure and tells us nothing,
+      # and the whole point of this matrix is knowing whether a failure is
+      # version-specific or common to all three.
+      fail-fast: false
       matrix:
         node-version: [20, 22, 24]
     steps:
