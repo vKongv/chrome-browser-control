@@ -300,6 +300,80 @@ describe('extension content core', () => {
     ]);
   });
 
+  it('ignores associated labels on non-labelable elements', () => {
+    const document = makeDocument(`
+      <label for="link">Wrong label</label><a id="link" href="#">Right link</a>
+      <label for="rolebtn">Wrong role</label><div id="rolebtn" role="button">Own text</div>
+      <label>Wrapped <a href="/w">Right wrapped</a></label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'link', label: 'Right link' },
+      { role: 'button', label: 'Own text' },
+      { role: 'link', label: 'Right wrapped' }
+    ]);
+  });
+
+  it('concatenates multiple associated labels in DOM order', () => {
+    const document = makeDocument(`
+      <label>Outer <input id="x"></label><label for="x">Second</label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Outer Second' }]);
+  });
+
+  it('uses value before title for button-type inputs', () => {
+    const document = makeDocument('<input type="button" value="Save" title="Tooltip">');
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Save' }]);
+  });
+
+  it('includes img and input type=image alt text from associated labels', () => {
+    const document = makeDocument(`
+      <label for="email"><img alt="Email"></label><input id="email">
+      <label for="photo"><input type="image" alt="Portrait"></label><input id="photo">
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Email' },
+      { role: 'textbox', label: '' },
+      { role: 'textbox', label: 'Portrait' }
+    ]);
+  });
+
+  it('does not use value as a name for radio and checkbox without a label', () => {
+    const document = makeDocument(`
+      <input type="radio" name="size" value="small">
+      <input type="checkbox" name="topping" value="bacon">
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: '' },
+      { role: 'textbox', label: '' }
+    ]);
+  });
+
+  it('lets an associated label outrank title', () => {
+    const document = makeDocument(`
+      <label for="titled">Visible</label>
+      <input id="titled" title="Tooltip name">
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Visible' }]);
+  });
+
   it('supports full mode with the legacy verbose fields', () => {
     const document = makeDocument('<button>Save</button><p>Body text</p>');
 

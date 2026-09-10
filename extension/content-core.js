@@ -82,6 +82,21 @@ function collapseWhitespace(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function isLabelable(element) {
+  const tag = String(element.tagName || '').toLowerCase();
+  if (tag === 'button' || tag === 'meter' || tag === 'output' || tag === 'progress' || tag === 'select' || tag === 'textarea') {
+    return true;
+  }
+  if (tag !== 'input') return false;
+  return String(element.getAttribute('type') || '').toLowerCase() !== 'hidden';
+}
+
+function isButtonTypeInput(element) {
+  if (String(element.tagName || '').toLowerCase() !== 'input') return false;
+  const type = String(element.getAttribute('type') || '').toLowerCase();
+  return type === 'submit' || type === 'button' || type === 'reset';
+}
+
 function textContentExcluding(root, exclude) {
   const parts = [];
   function walk(node) {
@@ -91,6 +106,17 @@ function textContentExcluding(root, exclude) {
       return;
     }
     if (node.nodeType !== 1) return;
+    const tag = String(node.tagName || '').toLowerCase();
+    if (tag === 'img') {
+      const alt = node.getAttribute('alt');
+      if (alt) parts.push(alt);
+      return;
+    }
+    if (tag === 'input' && String(node.getAttribute('type') || '').toLowerCase() === 'image') {
+      const alt = node.getAttribute('alt');
+      if (alt) parts.push(alt);
+      return;
+    }
     for (const child of node.childNodes) walk(child);
   }
   walk(root);
@@ -114,27 +140,25 @@ function labelledByName(element) {
 }
 
 function associatedLabelName(element) {
+  if (!isLabelable(element)) return '';
   const doc = element.ownerDocument;
-  const labels = [];
-  const seen = new Set();
+  if (!doc?.querySelectorAll) return '';
   const id = element.getAttribute('id');
-  if (id && doc?.querySelectorAll) {
-    for (const label of doc.querySelectorAll('label[for]')) {
-      if (label.getAttribute('for') !== id) continue;
-      seen.add(label);
-      labels.push(label);
-    }
-  }
+  let wrapping = null;
   let ancestor = element.parentElement;
   while (ancestor) {
     if (String(ancestor.tagName || '').toLowerCase() === 'label') {
-      if (!seen.has(ancestor)) labels.push(ancestor);
+      wrapping = ancestor;
       break;
     }
     ancestor = ancestor.parentElement;
   }
   const parts = [];
-  for (const label of labels) {
+  for (const label of doc.querySelectorAll('label')) {
+    const forId = label.getAttribute('for');
+    const explicit = Boolean(id && forId === id);
+    const encapsulated = label === wrapping && !forId;
+    if (!explicit && !encapsulated) continue;
     const text = textContentExcluding(label, element);
     if (text) parts.push(text);
   }
@@ -151,6 +175,14 @@ function labelFor(element, limit = 160) {
   const associated = associatedLabelName(element);
   if (associated) return associated.slice(0, limit);
 
+  if (isButtonTypeInput(element)) {
+    const value = element.getAttribute('value');
+    if (value) return value.trim().slice(0, limit);
+    const title = element.getAttribute('title');
+    if (title) return title.trim().slice(0, limit);
+    return '';
+  }
+
   const title = element.getAttribute('title');
   if (title) return title.trim().slice(0, limit);
 
@@ -158,14 +190,7 @@ function labelFor(element, limit = 160) {
   if (placeholder) return placeholder.trim().slice(0, limit);
 
   const tag = element.tagName.toLowerCase();
-  if (tag === 'input') {
-    const type = String(element.getAttribute('type') || '').toLowerCase();
-    if (type === 'submit' || type === 'button' || type === 'reset') {
-      const value = element.getAttribute('value');
-      if (value) return value.trim().slice(0, limit);
-    }
-    return '';
-  }
+  if (tag === 'input') return '';
 
   const text = element.innerText || element.textContent || '';
   return text.replace(/\s+/g, ' ').trim().slice(0, limit);
