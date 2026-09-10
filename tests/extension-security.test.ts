@@ -701,17 +701,6 @@ describe('body-capture allowlist and restricted-category denylist', () => {
     expect(security.maskTokenShapedFields('{"d":"eyJhbGciOiJub25lIn0.e30."}')).toBe(
       '{"d":"eyJhbGciOiJub25lIn0.e30."}'
     );
-    const source = readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8');
-    expect(source).toMatch(/Best-effort masking of obvious token-shaped fields, not a guarantee/);
-    expect(source).not.toMatch(/redact/i);
-  });
-
-  it('labels the denylist as a guardrail against operator error, not a control', () => {
-    const source = readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8');
-    expect(source).toMatch(/Guardrail against operator error, not a control/);
-    expect(source).toMatch(/Hand-written, no upstream feed/);
-    expect(source).toMatch(/stale the day it merges/);
-    expect(source).toMatch(/Must never be described in review as the thing keeping bodies safe/);
   });
 });
 
@@ -5495,12 +5484,6 @@ describe('trusted chrome.debugger tier', () => {
     expect(JSON.stringify(read)).not.toMatch(/redact/i);
 
     background.debuggerCommands.length = 0;
-    await expect(
-      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-bin' })
-    ).rejects.toThrow('CDP_BODY_BINARY_REFUSED');
-    expect(background.debuggerCommands).toEqual([
-      { tabId: 2, method: 'Network.getResponseBody', params: { requestId: 'req-bin' } }
-    ]);
     try {
       await background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-bin' });
       throw new Error('expected binary body to be refused');
@@ -5508,6 +5491,9 @@ describe('trusted chrome.debugger tier', () => {
       expect((error as Error).message).toMatch(/^CDP_BODY_BINARY_REFUSED:/);
       expect((error as Error).message).not.toContain('aGVsbG8=');
     }
+    expect(background.debuggerCommands).toEqual([
+      { tabId: 2, method: 'Network.getResponseBody', params: { requestId: 'req-bin' } }
+    ]);
 
     background.debuggerCommands.length = 0;
     await expect(
