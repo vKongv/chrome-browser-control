@@ -93,14 +93,30 @@ The `cbctl doctor` command reports whether the installed copy is absent, stale, 
 Run before reporting success:
 
 ```bash
-npm test
 npm run build
+npm test
 cbctl doctor
 # or: node dist/cli/main.js doctor
 npm run benchmark:compact-snapshots
 ```
 
+Build before test, not after: `ensureBroker` (`server/broker-lifecycle.ts:174`) checks `existsSync` on `dist/server/broker-main.js` before spawning, so four `tests/broker-lifecycle.test.ts` tests fail on a clean checkout without a prior build. CI (`.github/workflows/ci.yml`) enforces this order.
+
 Expected benchmark target: compact snapshots should remain at least 50% smaller than full snapshots on the dense fixture. Last verified reduction was 82.45%.
+
+## What unit tests cannot prove
+
+The suite runs under `happy-dom`. It cannot produce:
+
+- a real `document.visibilityState`
+- window focus, occlusion, or minimisation
+- top-layer stacking order for modal dialogs
+- tab discard and restore
+- MV3 service-worker suspension
+
+A test that simulates one of these by mutating fixture state directly asserts the fixture, not Chrome. If an acceptance criterion needs one of these behaviours, say so and report it as a gap requiring a live-browser check. Do not write a unit test that appears to cover it.
+
+A test named for a branch must fail when that branch is broken. Mutate the branch and rerun the test before trusting it — that's the only way to know the test reaches the code its name claims. Two regressions (`TEC-201`, `TEC-221`) shipped past tests that looked like branch coverage but weren't.
 
 ## MCP config generation
 
