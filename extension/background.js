@@ -160,6 +160,12 @@ function bumpNetworkIndexGeneration(tabId) {
   index.generation = (index.generation || 0) + 1;
 }
 
+// Marker is requestId === loaderId plus a URL match. That invariant holds for
+// the main request of every loader, including a subframe's, so a same-URL
+// subframe document request in the commit window can displace the genuine
+// top-frame marker. The missing discriminator is top-frame identity; closing
+// it needs Page domain access. Extending ALLOWED_METHODS is a posture change.
+// Tracked in TEC-224. Stale-row invalidation is not unconditional.
 function pruneNetworkIndexForMainFrameCommit(tabId, committedUrl) {
   const index = networkIndexes.get(tabId);
   if (!index) return;
