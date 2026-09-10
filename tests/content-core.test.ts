@@ -249,6 +249,57 @@ describe('extension content core', () => {
     expect(document.querySelector(`[data-cbc-ref="${snapshot.elements[1].ref}"]`)?.textContent).toBe('Save');
   });
 
+  it('names httpbin encapsulating-label form fields from visible label text', () => {
+    const document = makeDocument(`
+      <form>
+        <p><label>Customer name: <input name="custname"></label></p>
+        <p><label>Telephone: <input type=tel name="custtel"></label></p>
+        <p><label>E-mail address: <input type=email name="custemail"></label></p>
+        <p><label> <input type=radio name=size value="small"> Small </label></p>
+        <p><label> <input type=checkbox name="topping" value="bacon"> Bacon </label></p>
+        <p><label>Preferred delivery time: <input type=time name="delivery"></label></p>
+        <p><label>Delivery instructions: <textarea name="comments"></textarea></label></p>
+        <p><button>Submit order</button></p>
+      </form>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Customer name:' },
+      { role: 'textbox', label: 'Telephone:' },
+      { role: 'textbox', label: 'E-mail address:' },
+      { role: 'textbox', label: 'Small' },
+      { role: 'textbox', label: 'Bacon' },
+      { role: 'textbox', label: 'Preferred delivery time:' },
+      { role: 'textbox', label: 'Delivery instructions:' },
+      { role: 'button', label: 'Submit order' }
+    ]);
+  });
+
+  it('computes accessible names from label[for], aria-labelledby, and HTML-AAM precedence', () => {
+    const document = makeDocument(`
+      <label for="named">Account number</label>
+      <input id="named" />
+      <span id="phone-lbl">Work phone</span>
+      <input aria-labelledby="phone-lbl" />
+      <label for="hinted">Real name</label>
+      <input id="hinted" placeholder="Hint only" />
+      <input placeholder="Search" title="Tip" />
+      <label>Notes: <textarea name="notes">leftover draft</textarea></label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Account number' },
+      { role: 'textbox', label: 'Work phone' },
+      { role: 'textbox', label: 'Real name' },
+      { role: 'textbox', label: 'Tip' },
+      { role: 'textbox', label: 'Notes:' }
+    ]);
+  });
+
   it('supports full mode with the legacy verbose fields', () => {
     const document = makeDocument('<button>Save</button><p>Body text</p>');
 

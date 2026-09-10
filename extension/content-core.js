@@ -78,15 +78,96 @@ function roleFor(element) {
   return tag;
 }
 
+function collapseWhitespace(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function textContentExcluding(root, exclude) {
+  const parts = [];
+  function walk(node) {
+    if (node === exclude) return;
+    if (node.nodeType === 3) {
+      parts.push(node.nodeValue || '');
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    for (const child of node.childNodes) walk(child);
+  }
+  walk(root);
+  return collapseWhitespace(parts.join(''));
+}
+
+function labelledByName(element) {
+  const raw = element.getAttribute('aria-labelledby');
+  if (!raw) return '';
+  const doc = element.ownerDocument;
+  if (!doc?.getElementById) return '';
+  const parts = [];
+  for (const id of raw.trim().split(/\s+/)) {
+    if (!id) continue;
+    const ref = doc.getElementById(id);
+    if (!ref) continue;
+    const text = collapseWhitespace(ref.innerText || ref.textContent || '');
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
+}
+
+function associatedLabelName(element) {
+  const doc = element.ownerDocument;
+  const labels = [];
+  const seen = new Set();
+  const id = element.getAttribute('id');
+  if (id && doc?.querySelectorAll) {
+    for (const label of doc.querySelectorAll('label[for]')) {
+      if (label.getAttribute('for') !== id) continue;
+      seen.add(label);
+      labels.push(label);
+    }
+  }
+  let ancestor = element.parentElement;
+  while (ancestor) {
+    if (String(ancestor.tagName || '').toLowerCase() === 'label') {
+      if (!seen.has(ancestor)) labels.push(ancestor);
+      break;
+    }
+    ancestor = ancestor.parentElement;
+  }
+  const parts = [];
+  for (const label of labels) {
+    const text = textContentExcluding(label, element);
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
+}
+
 function labelFor(element, limit = 160) {
+  const labelledBy = labelledByName(element);
+  if (labelledBy) return labelledBy.slice(0, limit);
+
   const aria = element.getAttribute('aria-label');
   if (aria) return aria.trim().slice(0, limit);
-  const placeholder = element.getAttribute('placeholder');
-  if (placeholder) return placeholder.trim().slice(0, limit);
+
+  const associated = associatedLabelName(element);
+  if (associated) return associated.slice(0, limit);
+
   const title = element.getAttribute('title');
   if (title) return title.trim().slice(0, limit);
-  const value = element.tagName.toLowerCase() === 'input' ? element.getAttribute('value') : '';
-  const text = value || element.innerText || element.textContent || '';
+
+  const placeholder = element.getAttribute('placeholder');
+  if (placeholder) return placeholder.trim().slice(0, limit);
+
+  const tag = element.tagName.toLowerCase();
+  if (tag === 'input') {
+    const type = String(element.getAttribute('type') || '').toLowerCase();
+    if (type === 'submit' || type === 'button' || type === 'reset') {
+      const value = element.getAttribute('value');
+      if (value) return value.trim().slice(0, limit);
+    }
+    return '';
+  }
+
+  const text = element.innerText || element.textContent || '';
   return text.replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
