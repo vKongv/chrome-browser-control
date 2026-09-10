@@ -19,6 +19,7 @@ function loadPopupHarness({
     bridgeUrl: { value: 'ws://127.0.0.1:8765' },
     token: { value: TOKEN },
     allowedOrigins: { value: 'https://example.com' },
+    bodyCaptureOrigins: { value: '' },
     status: { value: '', textContent: 'unknown' },
     setupSnippet: { value: '' },
     save: { value: '' },
@@ -37,6 +38,7 @@ function loadPopupHarness({
           bridgeUrl: 'ws://127.0.0.1:8765',
           token: TOKEN,
           allowedOrigins: ['https://example.com/*'],
+          bodyCaptureOrigins: [],
           status: 'connected',
           ...stored
         }),
@@ -150,6 +152,7 @@ describe('popup save ordering', () => {
         bridgeUrl: 'ws://127.0.0.1:8765',
         token: TOKEN,
         allowedOrigins: ['http://*/*', 'https://*/*'],
+        bodyCaptureOrigins: [],
         enableCdp: false
       }
     });
@@ -176,6 +179,7 @@ describe('popup save ordering', () => {
       bridgeUrl: 'ws://127.0.0.1:8765',
       token: TOKEN,
       allowedOrigins: ['https://example.com/*'],
+      bodyCaptureOrigins: [],
       enableCdp: false
     });
     expect(harness.events[1]).toEqual({
@@ -203,6 +207,7 @@ describe('popup save ordering', () => {
         bridgeUrl: 'ws://127.0.0.1:8765',
         token: TOKEN,
         allowedOrigins: ['https://example.com/*'],
+        bodyCaptureOrigins: [],
         enableCdp: true
       }
     });
@@ -224,6 +229,12 @@ describe('popup save ordering', () => {
     const harness = loadPopupHarness({ stored: { enableCdp: true } });
     await harness.flush();
     expect(harness.fields.enableDebugger.checked).toBe(true);
+  });
+
+  it('loads stored body-capture origins into the textarea', async () => {
+    const harness = loadPopupHarness({ stored: { bodyCaptureOrigins: ['https://graph.facebook.com'] } });
+    await harness.flush();
+    expect(harness.fields.bodyCaptureOrigins.value).toBe('https://graph.facebook.com');
   });
 
   it('exposes persist-then-request so a closed popup cannot drop the save', async () => {
@@ -257,6 +268,7 @@ describe('popup save ordering', () => {
       bridgeUrl: 'ws://127.0.0.1:8765',
       token: TOKEN,
       allowedOrigins: ['https://other.example/*'],
+      bodyCaptureOrigins: [],
       enableCdp: false
     });
     expect(harness.events[1]).toEqual({
@@ -264,5 +276,29 @@ describe('popup save ordering', () => {
       payload: { origins: ['https://other.example/*'] }
     });
     expect(harness.events.some((event) => event.type === 'permissions.remove')).toBe(false);
+  });
+
+  it('persists body-capture origins separately and rejects *', async () => {
+    const harness = loadPopupHarness();
+    await harness.flush();
+    harness.events.length = 0;
+    harness.fields.bodyCaptureOrigins.value = 'https://graph.facebook.com';
+
+    await harness.clickSave();
+
+    expect(harness.events[0]?.payload).toEqual({
+      bridgeUrl: 'ws://127.0.0.1:8765',
+      token: TOKEN,
+      allowedOrigins: ['https://example.com/*'],
+      bodyCaptureOrigins: ['https://graph.facebook.com'],
+      enableCdp: false
+    });
+    expect(harness.fields.bodyCaptureOrigins.value).toBe('https://graph.facebook.com');
+
+    harness.events.length = 0;
+    harness.fields.bodyCaptureOrigins.value = '*';
+    await harness.clickSave();
+    expect(harness.events).toEqual([]);
+    expect(harness.fields.status.textContent).toMatch(/body-capture allowlist does not accept \*/);
   });
 });
