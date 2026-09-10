@@ -2,7 +2,7 @@
 
 Manual-first release path for the public npm package. **Do not** publish from GitHub Actions on push or from pull-request workflows. Prefer interactive `npm login` / 2FA on a maintainer machine. Later automation (if ever approved) must use Trusted Publishing / OIDC, not a long-lived classic `NPM_TOKEN` as the primary path.
 
-Current release target: **`0.3.1`** (keep `package.json`, `package-lock.json`, and `extension/manifest.json` aligned).
+Current release target: **`0.4.0`** (keep `package.json`, `package-lock.json`, and `extension/manifest.json` aligned).
 
 ## Choosing the bump
 
@@ -89,7 +89,7 @@ npx -y chrome-browser-control --help
 
 ## Optional GitHub Release (after npm succeeds)
 
-1. Create annotated tag for the published version (for this release, `v0.3.1`) on the same commit that was published.
+1. Create annotated tag for the published version (for this release, `v0.4.0`) on the same commit that was published.
 2. Open a GitHub Release for that tag with install commands (`npm install -g chrome-browser-control`, `npx -y chrome-browser-control setup`) and a short note that publish is manual / no CI publish credentials.
 3. Skip tagging/releasing if npm publish has not succeeded.
 
