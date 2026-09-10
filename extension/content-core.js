@@ -82,13 +82,28 @@ function collapseWhitespace(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function isFormAssociatedCustomElement(element) {
+  const name = String(element.localName || element.tagName || '').toLowerCase();
+  if (!name.includes('-')) return false;
+  try {
+    const registry = element.ownerDocument?.defaultView?.customElements;
+    if (!registry || typeof registry.get !== 'function') return false;
+    const definition = registry.get(name);
+    return Boolean(definition && definition.formAssociated === true);
+  } catch {
+    return false;
+  }
+}
+
 function isLabelable(element) {
   const tag = String(element.tagName || '').toLowerCase();
   if (tag === 'button' || tag === 'meter' || tag === 'output' || tag === 'progress' || tag === 'select' || tag === 'textarea') {
     return true;
   }
-  if (tag !== 'input') return false;
-  return String(element.getAttribute('type') || '').toLowerCase() !== 'hidden';
+  if (tag === 'input') {
+    return String(element.getAttribute('type') || '').toLowerCase() !== 'hidden';
+  }
+  return isFormAssociatedCustomElement(element);
 }
 
 function isButtonTypeInput(element) {

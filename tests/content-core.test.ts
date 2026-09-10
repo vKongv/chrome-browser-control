@@ -374,6 +374,37 @@ describe('extension content core', () => {
     expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Visible' }]);
   });
 
+  it('names form-associated custom elements from associated labels', () => {
+    const document = makeDocument(`
+      <label for="custom">Custom label</label>
+      <review-field id="custom" role="textbox"></review-field>
+    `);
+    const view = document.defaultView as any;
+    view.customElements.define(
+      'review-field',
+      class extends view.HTMLElement {
+        static formAssociated = true;
+      }
+    );
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Custom label' }]);
+  });
+
+  it('ignores associated labels on non-form-associated custom elements', () => {
+    const document = makeDocument(`
+      <label for="plain">Wrong label</label>
+      <plain-field id="plain" role="textbox">Own text</plain-field>
+    `);
+    const view = document.defaultView as any;
+    view.customElements.define('plain-field', class extends view.HTMLElement {});
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Own text' }]);
+  });
+
   it('supports full mode with the legacy verbose fields', () => {
     const document = makeDocument('<button>Save</button><p>Body text</p>');
 
