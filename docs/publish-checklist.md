@@ -69,15 +69,22 @@ npm run mcp
 
 1. Confirm you are on the intended commit of `main` with a clean working tree.
 2. Confirm npm account can publish an unscoped public package; complete 2FA.
-3. Confirm the name is still free or you own it: `npm view chrome-browser-control version` (404 before first publish is expected).
-4. Publish:
+3. Confirm the name is still free or you own it: `npm view chrome-browser-control version`. A 404 on that GET is expected only before the first publish. After the package exists, an E404 on PUT from `npm publish` means you are not authenticated, not that the package is missing — run `npm whoami` first.
+4. Log in, then confirm identity:
+
+```bash
+npm login
+npm whoami
+```
+
+5. Publish:
 
 ```bash
 npm publish --access public
 # add --provenance when the environment supports it
 ```
 
-5. Do **not** use a CI job attached to a PR for this step.
+6. Do **not** use a CI job attached to a PR for this step.
 
 ## Post-publish
 
