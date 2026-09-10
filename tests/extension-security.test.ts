@@ -618,6 +618,67 @@ describe('extension security helpers', () => {
   });
 });
 
+describe('body-capture allowlist and restricted-category denylist', () => {
+  const security = loadSecurity();
+
+  it('rejects * by name and refuses paths and wildcards', () => {
+    expect(() => security.normalizeBodyCaptureOrigin('*')).toThrow(security.BODY_CAPTURE_WILDCARD_ERROR);
+    expect(() => security.normalizeBodyCaptureOrigin('http://*/*')).toThrow(security.BODY_CAPTURE_WILDCARD_ERROR);
+    expect(() => security.normalizeBodyCaptureOrigin('https://*/*')).toThrow(security.BODY_CAPTURE_WILDCARD_ERROR);
+    expect(() => security.normalizeBodyCaptureOrigin('https://*.facebook.com')).toThrow(security.BODY_CAPTURE_WILDCARD_ERROR);
+    expect(() => security.normalizeBodyCaptureOrigin('https://graph.facebook.com/*')).toThrow(
+      security.BODY_CAPTURE_WILDCARD_ERROR
+    );
+    expect(() => security.normalizeBodyCaptureOrigin('https://graph.facebook.com/v19.0/me')).toThrow(
+      'body-capture allowlist entry must be an origin, not a path or URL'
+    );
+    expect(() => security.normalizeBodyCaptureOrigins('https://graph.facebook.com\n*')).toThrow(
+      security.BODY_CAPTURE_WILDCARD_ERROR
+    );
+    expect(security.normalizeBodyCaptureOrigin('https://graph.facebook.com')).toBe('https://graph.facebook.com');
+    expect(security.normalizeBodyCaptureOrigin('https://graph.facebook.com/')).toBe('https://graph.facebook.com');
+    expect(security.normalizeBodyCaptureOrigins('https://graph.facebook.com\nhttp://localhost:3000')).toEqual([
+      'https://graph.facebook.com',
+      'http://localhost:3000'
+    ]);
+  });
+
+  it('denies every origin when the body-capture allowlist is empty', () => {
+    expect(security.DEFAULT_BODY_CAPTURE_ORIGINS).toEqual([]);
+    expect(security.isBodyCaptureOriginAllowed('https://graph.facebook.com/v19.0/me', [])).toBe(false);
+    expect(security.isBodyCapturePermitted('https://graph.facebook.com/v19.0/me', [])).toBe(false);
+    expect(
+      security.isBodyCaptureOriginAllowed('https://graph.facebook.com/v19.0/me', ['https://graph.facebook.com'])
+    ).toBe(true);
+    expect(security.isBodyCaptureOriginAllowed('https://www.facebook.com/', ['https://graph.facebook.com'])).toBe(
+      false
+    );
+  });
+
+  it('refuses restricted-category hosts even when they are explicitly allowlisted', () => {
+    expect(security.RESTRICTED_CATEGORY_HOSTS).toContain('chase.com');
+    expect(security.RESTRICTED_CATEGORY_HOSTS).toContain('1password.com');
+    expect(security.RESTRICTED_CATEGORY_HOSTS).toContain('coinbase.com');
+    expect(security.isRestrictedCategoryOrigin('https://chase.com/login')).toBe(true);
+    expect(security.isRestrictedCategoryOrigin('https://online.chase.com/')).toBe(true);
+    expect(security.isRestrictedCategoryOrigin('https://my.1password.com/vault')).toBe(true);
+    expect(security.isRestrictedCategoryOrigin('https://notchase.com/')).toBe(false);
+    expect(security.isRestrictedCategoryOrigin('https://graph.facebook.com/v19.0/me')).toBe(false);
+    expect(security.isBodyCapturePermitted('https://chase.com/login', ['https://chase.com'])).toBe(false);
+    expect(security.isBodyCapturePermitted('https://graph.facebook.com/v19.0/me', ['https://graph.facebook.com'])).toBe(
+      true
+    );
+  });
+
+  it('labels the denylist as a guardrail against operator error, not a control', () => {
+    const source = readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8');
+    expect(source).toMatch(/Guardrail against operator error, not a control/);
+    expect(source).toMatch(/Hand-written, no upstream feed/);
+    expect(source).toMatch(/stale the day it merges/);
+    expect(source).toMatch(/Must never be described in review as the thing keeping bodies safe/);
+  });
+});
+
 
 describe('extension background origin enforcement', () => {
   const token = 'abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-';

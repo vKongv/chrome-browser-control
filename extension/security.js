@@ -184,12 +184,151 @@
     return normalizeUrlForCompare(a) === normalizeUrlForCompare(b);
   }
 
+  const DEFAULT_BODY_CAPTURE_ORIGINS = [];
+  const BODY_CAPTURE_WILDCARD_ERROR =
+    'body-capture allowlist does not accept *; entries must be origins, not wildcards';
+
+  // Guardrail against operator error, not a control. Hand-written, no upstream feed,
+  // stale the day it merges. Must never be described in review as the thing keeping bodies safe.
+  const RESTRICTED_CATEGORY_HOSTS = Object.freeze([
+    '1password.com',
+    '1password.eu',
+    'ally.com',
+    'americanexpress.com',
+    'bankofamerica.com',
+    'barclays.co.uk',
+    'binance.com',
+    'binance.us',
+    'bitwarden.com',
+    'blockchain.com',
+    'bybit.com',
+    'capitalone.com',
+    'cash.app',
+    'chase.com',
+    'citi.com',
+    'citibank.com',
+    'coinbase.com',
+    'crypto.com',
+    'dashlane.com',
+    'discover.com',
+    'enpass.io',
+    'etrade.com',
+    'fidelity.com',
+    'gemini.com',
+    'hsbc.com',
+    'keepersecurity.com',
+    'kraken.com',
+    'kucoin.com',
+    'lastpass.com',
+    'lloydsbank.com',
+    'metamask.io',
+    'natwest.com',
+    'nordpass.com',
+    'okx.com',
+    'paypal.com',
+    'phantom.app',
+    'pnc.com',
+    'revolut.com',
+    'robinhood.com',
+    'schwab.com',
+    'sofi.com',
+    'square.com',
+    'stripe.com',
+    'tdameritrade.com',
+    'uniswap.org',
+    'usbank.com',
+    'vanguard.com',
+    'venmo.com',
+    'wellsfargo.com',
+    'wise.com'
+  ]);
+
+  function parseHttpUrl(urlInput) {
+    try {
+      const url = new URL(String(urlInput || ''));
+      if (!['http:', 'https:'].includes(url.protocol)) return null;
+      return url;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function normalizeBodyCaptureOrigin(input) {
+    const raw = String(input || '').trim();
+    if (!raw) throw new Error('body-capture origin cannot be blank');
+    if (isWildcardOriginInput(raw) || isWildcardOriginPattern(raw) || raw.includes('*')) {
+      throw new Error(BODY_CAPTURE_WILDCARD_ERROR);
+    }
+
+    let candidate = raw;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate)) {
+      candidate = `https://${candidate}`;
+    }
+
+    let url;
+    try {
+      url = new URL(candidate);
+    } catch (_error) {
+      throw new Error(`body-capture allowlist entry must be a valid http(s) origin: ${raw}`);
+    }
+
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new Error(`body-capture allowlist entry must use http:// or https://: ${raw}`);
+    }
+    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+      throw new Error(`body-capture allowlist entry must be an origin, not a path or URL: ${raw}`);
+    }
+    return url.origin;
+  }
+
+  function normalizeBodyCaptureOrigins(input) {
+    const seen = new Set();
+    const origins = [];
+    for (const item of splitAllowedOriginInput(input)) {
+      const origin = normalizeBodyCaptureOrigin(item);
+      if (seen.has(origin)) continue;
+      seen.add(origin);
+      origins.push(origin);
+    }
+    return origins;
+  }
+
+  function isBodyCaptureOriginAllowed(urlInput, origins) {
+    const url = parseHttpUrl(urlInput);
+    if (!url) return false;
+    const allowed = Array.isArray(origins) ? origins : normalizeBodyCaptureOrigins(origins);
+    if (allowed.length === 0) return false;
+    return allowed.includes(url.origin);
+  }
+
+  function hostnameMatchesRestrictedHost(hostname, listedHost) {
+    const host = String(hostname || '').toLowerCase();
+    const listed = String(listedHost || '').toLowerCase();
+    if (!host || !listed) return false;
+    return host === listed || host.endsWith(`.${listed}`);
+  }
+
+  function isRestrictedCategoryOrigin(urlInput) {
+    const url = parseHttpUrl(urlInput);
+    if (!url) return false;
+    return RESTRICTED_CATEGORY_HOSTS.some((listed) => hostnameMatchesRestrictedHost(url.hostname, listed));
+  }
+
+  function isBodyCapturePermitted(urlInput, origins) {
+    if (!isBodyCaptureOriginAllowed(urlInput, origins)) return false;
+    if (isRestrictedCategoryOrigin(urlInput)) return false;
+    return true;
+  }
+
   global.BrowserControlSecurity = {
     DEFAULT_BRIDGE_URL,
     DEFAULT_ALLOWED_ORIGINS,
+    DEFAULT_BODY_CAPTURE_ORIGINS,
     WILDCARD_ORIGIN_INPUT,
     WILDCARD_ORIGIN_PATTERNS,
     SCREENSHOT_ALL_URLS_PERMISSION,
+    BODY_CAPTURE_WILDCARD_ERROR,
+    RESTRICTED_CATEGORY_HOSTS,
     normalizeBridgeUrl,
     validatePairingToken,
     normalizeAllowedOriginPattern,
@@ -201,6 +340,11 @@
     collectOptionalPermissionOrigins,
     isWildcardOriginPatterns,
     isUrlAllowed,
-    urlsEquivalent
+    urlsEquivalent,
+    normalizeBodyCaptureOrigin,
+    normalizeBodyCaptureOrigins,
+    isBodyCaptureOriginAllowed,
+    isRestrictedCategoryOrigin,
+    isBodyCapturePermitted
   };
 })(globalThis);
