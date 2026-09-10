@@ -164,21 +164,28 @@ function pruneNetworkIndexForMainFrameCommit(tabId, committedUrl) {
   const index = networkIndexes.get(tabId);
   if (!index) return;
   bumpNetworkIndexGeneration(tabId);
-  let keepFrom = -1;
+  let keepLoaderId = '';
   for (let i = index.order.length - 1; i >= 0; i -= 1) {
     const row = index.byId.get(index.order[i]);
-    if (row?.loaderId && row.requestId === row.loaderId && urlsEquivalent(row.url, committedUrl)) {
-      keepFrom = i;
+    if (
+      row &&
+      typeof row.loaderId === 'string' &&
+      row.loaderId &&
+      row.requestId === row.loaderId &&
+      urlsEquivalent(row.url, committedUrl)
+    ) {
+      keepLoaderId = row.loaderId;
       break;
     }
   }
-  if (keepFrom < 0) {
+  if (!keepLoaderId) {
     index.byId.clear();
     index.order.length = 0;
     return;
   }
-  for (const requestId of index.order.slice(0, keepFrom)) {
-    forgetNetworkRow(tabId, requestId);
+  for (const requestId of [...index.order]) {
+    const row = index.byId.get(requestId);
+    if (row?.loaderId !== keepLoaderId) forgetNetworkRow(tabId, requestId);
   }
 }
 
@@ -571,7 +578,7 @@ function handleNetworkEvent(source, method, params) {
     }
     rememberNetworkRow(tabId, {
       requestId,
-      loaderId: params.loaderId || requestId,
+      loaderId: typeof params.loaderId === 'string' && params.loaderId ? params.loaderId : undefined,
       url,
       method: params.request?.method || 'GET',
       status: null,

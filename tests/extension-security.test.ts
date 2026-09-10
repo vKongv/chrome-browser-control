@@ -5576,6 +5576,82 @@ describe('trusted chrome.debugger tier', () => {
     });
   });
 
+  it('drops a late page-A row that arrives after page B\'s document request and before commit', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://allowed.example', 'https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: () => ({ body: '{"from":"stale-a"}', base64Encoded: false })
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-old', loaderId: 'loader-a' });
+    background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
+      requestId: 'req-b-doc',
+      loaderId: 'req-b-doc',
+      type: 'Document',
+      wallTime: 1_700_000_010,
+      request: { url: 'https://allowed.example/other', method: 'GET' }
+    });
+    fireCompletedRequest(background, {
+      requestId: 'req-late-a',
+      loaderId: 'loader-a',
+      url: 'https://graph.facebook.com/v19.0/late'
+    });
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://allowed.example/other' });
+    await flushMicrotasks(12);
+
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests.map((row: { requestId: string }) => row.requestId)).toEqual(['req-b-doc']);
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-late-a' })
+    ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
+  it('does not treat a missing loader id as a document marker', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://allowed.example', 'https://graph.facebook.com'],
+        enableCdp: true
+      }
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-old', loaderId: 'loader-a' });
+    background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
+      requestId: 'req-fake',
+      wallTime: 1_700_000_010,
+      request: { url: 'https://allowed.example/other', method: 'GET' }
+    });
+    fireCompletedRequest(background, {
+      requestId: 'req-late-a',
+      loaderId: 'loader-a',
+      url: 'https://graph.facebook.com/v19.0/late'
+    });
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://allowed.example/other' });
+    await flushMicrotasks(12);
+
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests).toEqual([]);
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-fake' })
+    ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-late-a' })
+    ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
   it('refuses an in-flight body read after the index generation changes on navigation', async () => {
     let releaseBody: () => void = () => undefined;
     const bodyHold = new Promise<void>((resolve) => {
