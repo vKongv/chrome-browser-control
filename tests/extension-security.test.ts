@@ -4939,7 +4939,7 @@ describe('trusted chrome.debugger tier', () => {
   it('rejects an unlisted CDP method before sendCommand', async () => {
     const background = loadCdpBackground();
     await claimAndAttach(background);
-    await expect(background.sendCdpCommand(2, 'Network.enable', {})).rejects.toThrow('CDP_METHOD_NOT_PERMITTED');
+    await expect(background.sendCdpCommand(2, 'Fetch.enable', {})).rejects.toThrow('CDP_METHOD_NOT_PERMITTED');
     expect(background.debuggerCommands).toEqual([]);
   });
 

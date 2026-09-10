@@ -12,17 +12,25 @@ function loadCdp() {
 describe('CDP method allowlist', () => {
   const cdp = loadCdp();
 
-  it('permits only Input.dispatchMouseEvent and Input.dispatchKeyEvent', () => {
-    expect(cdp.ALLOWED_METHODS).toEqual(['Input.dispatchMouseEvent', 'Input.dispatchKeyEvent']);
+  it('permits Input and Network methods listed on the allowlist', () => {
+    expect(cdp.ALLOWED_METHODS).toEqual([
+      'Input.dispatchMouseEvent',
+      'Input.dispatchKeyEvent',
+      'Network.enable',
+      'Network.disable',
+      'Network.getResponseBody'
+    ]);
     expect(() => cdp.assertCdpMethod('Input.dispatchMouseEvent')).not.toThrow();
     expect(() => cdp.assertCdpMethod('Input.dispatchKeyEvent')).not.toThrow();
+    expect(() => cdp.assertCdpMethod('Network.enable')).not.toThrow();
+    expect(() => cdp.assertCdpMethod('Network.disable')).not.toThrow();
+    expect(() => cdp.assertCdpMethod('Network.getResponseBody')).not.toThrow();
   });
 
   it('rejects forbidden and unimplemented CDP methods before send', () => {
     for (const method of [
-      'Network.enable',
-      'Network.getResponseBody',
       'Fetch.enable',
+      'Fetch.continueRequest',
       'Network.setRequestInterception',
       'Network.continueInterceptedRequest',
       'Runtime.evaluate'

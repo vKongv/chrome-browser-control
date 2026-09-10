@@ -1,5 +1,11 @@
 (function (global) {
-  const ALLOWED_METHODS = Object.freeze(['Input.dispatchMouseEvent', 'Input.dispatchKeyEvent']);
+  const ALLOWED_METHODS = Object.freeze([
+    'Input.dispatchMouseEvent',
+    'Input.dispatchKeyEvent',
+    'Network.enable',
+    'Network.disable',
+    'Network.getResponseBody'
+  ]);
   const DEFAULT_ATTACH_TTL_MS = 600_000;
   const MAX_ATTACH_TTL_MS = 3_600_000;
   const MIN_ATTACH_TTL_MS = 1_000;
