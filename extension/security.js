@@ -320,6 +320,39 @@
     return true;
   }
 
+  const MAX_RESPONSE_BODY_BYTES = 1 * 1024 * 1024;
+  const MASKED_FIELD_VALUE = '[masked]';
+  const TOKEN_SHAPED_KEY =
+    /^(access_token|refresh_token|id_token|idToken|accessToken|refreshToken|client_secret|clientSecret|api_key|apiKey|private_key|privateKey|password|passwd|secret|token|authorization|session_token|sessionToken|auth_token|authToken|otp)$/i;
+
+  function isTokenShapedKey(key) {
+    return TOKEN_SHAPED_KEY.test(String(key));
+  }
+
+  function maskValue(value) {
+    if (Array.isArray(value)) return value.map(maskValue);
+    if (value && typeof value === 'object') {
+      const masked = {};
+      for (const [key, child] of Object.entries(value)) {
+        masked[key] = isTokenShapedKey(key) ? MASKED_FIELD_VALUE : maskValue(child);
+      }
+      return masked;
+    }
+    return value;
+  }
+
+  // Best-effort masking of obvious token-shaped fields, not a guarantee.
+  function maskTokenShapedFields(input) {
+    if (typeof input !== 'string') return input;
+    const trimmed = input.trim();
+    if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return input;
+    try {
+      return JSON.stringify(maskValue(JSON.parse(trimmed)));
+    } catch (_error) {
+      return input;
+    }
+  }
+
   global.BrowserControlSecurity = {
     DEFAULT_BRIDGE_URL,
     DEFAULT_ALLOWED_ORIGINS,
@@ -345,6 +378,8 @@
     normalizeBodyCaptureOrigins,
     isBodyCaptureOriginAllowed,
     isRestrictedCategoryOrigin,
-    isBodyCapturePermitted
+    isBodyCapturePermitted,
+    MAX_RESPONSE_BODY_BYTES,
+    maskTokenShapedFields
   };
 })(globalThis);

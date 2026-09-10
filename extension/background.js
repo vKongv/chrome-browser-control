@@ -6,11 +6,17 @@ if (typeof importScripts === 'function') {
 const {
   DEFAULT_BRIDGE_URL,
   DEFAULT_ALLOWED_ORIGINS,
+  DEFAULT_BODY_CAPTURE_ORIGINS,
   SCREENSHOT_ALL_URLS_PERMISSION,
   describeAllowedOrigins,
   getScreenshotPermissionOrigins,
   isUrlAllowed,
   normalizeAllowedOriginPatterns,
+  normalizeBodyCaptureOrigins,
+  isBodyCaptureOriginAllowed,
+  isRestrictedCategoryOrigin,
+  MAX_RESPONSE_BODY_BYTES,
+  maskTokenShapedFields,
   normalizeBridgeUrl,
   urlsEquivalent,
   validatePairingToken
@@ -20,6 +26,7 @@ const DEFAULTS = {
   bridgeUrl: DEFAULT_BRIDGE_URL,
   token: '',
   allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
+  bodyCaptureOrigins: DEFAULT_BODY_CAPTURE_ORIGINS,
   enableCdp: false
 };
 
@@ -63,8 +70,15 @@ const MAX_EXCLUSIVE_LEASE_TTL_MS = 3_600_000;
 const CLAIM_STATE_STORAGE_KEY = 'cbcClaimState';
 const CDP_STATE_STORAGE_KEY = 'cbcCdpAttachState';
 const CDP_INPUT_ACTIONS = new Set(['click', 'type', 'keypress', 'click_at']);
-const { assertCdpMethod, boundedAttachTtl, clickCommands, typeTextCommands, keypressCommands } =
-  globalThis.BrowserControlCdp;
+const {
+  assertCdpMethod,
+  boundedAttachTtl,
+  clickCommands,
+  typeTextCommands,
+  keypressCommands,
+  NETWORK_ENABLE_PARAMS,
+  MAX_NETWORK_INDEX_ROWS
+} = globalThis.BrowserControlCdp;
 
 let status = 'disconnected';
 let sessionName = '';
@@ -76,6 +90,88 @@ const cdpAttachments = new Map();
 const cdpFailClosed = new Map();
 const cdpTtlTimers = new Map();
 const cdpExpectedDetach = new Set();
+const networkIndexes = new Map();
+
+function readBodyCaptureOrigins(raw) {
+  try {
+    return normalizeBodyCaptureOrigins(raw ?? []);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function clearNetworkIndex(tabId) {
+  if (tabId === undefined) {
+    networkIndexes.clear();
+    return;
+  }
+  networkIndexes.delete(tabId);
+}
+
+function resetNetworkIndex(tabId, patterns) {
+  networkIndexes.set(tabId, {
+    patterns: Array.isArray(patterns) ? patterns.map((item) => String(item)) : [],
+    byId: new Map(),
+    order: []
+  });
+}
+
+function urlMatchesWatchPatterns(url, patterns) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return true;
+  return patterns.some((pattern) => {
+    const raw = String(pattern || '').trim();
+    if (!raw) return false;
+    if (raw.includes('*')) {
+      const escaped = raw.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*');
+      return new RegExp(`^${escaped}$`).test(url);
+    }
+    return url === raw || url.startsWith(raw);
+  });
+}
+
+function rememberNetworkRow(tabId, row) {
+  const index = networkIndexes.get(tabId);
+  if (!index) return;
+  const existing = index.byId.get(row.requestId);
+  if (existing) {
+    Object.assign(existing, row);
+    return;
+  }
+  while (index.order.length >= MAX_NETWORK_INDEX_ROWS) {
+    const oldest = index.order.shift();
+    index.byId.delete(oldest);
+  }
+  index.byId.set(row.requestId, row);
+  index.order.push(row.requestId);
+}
+
+function networkIndexRows(tabId) {
+  const index = networkIndexes.get(tabId);
+  if (!index) return [];
+  return index.order.map((requestId) => {
+    const row = index.byId.get(requestId);
+    return {
+      requestId: row.requestId,
+      url: row.url,
+      method: row.method,
+      status: row.status,
+      mimeType: row.mimeType,
+      size: row.size,
+      timestamp: row.timestamp
+    };
+  });
+}
+
+function attachedTabForSession(sessionTabId, action) {
+  if (!sessionTabId || !claimedTabs.has(sessionTabId)) {
+    throw cdpError('CDP_TAB_NOT_CLAIMED', `${action} requires a claimed sessionTabId`);
+  }
+  const claim = claimedTabs.get(sessionTabId);
+  if (!cdpAttachments.has(claim.tabId)) {
+    throw cdpError('CDP_NOT_ATTACHED', `${action} requires cdp_attach first`);
+  }
+  return claim;
+}
 
 function serializeClaimState() {
   return {
@@ -249,6 +345,7 @@ async function sendCdpCommands(tabId, commands) {
 function dropCdpAttachment(tabId) {
   clearCdpTtlTimer(tabId);
   cdpAttachments.delete(tabId);
+  clearNetworkIndex(tabId);
 }
 
 async function detachCdp(tabId, { failClosed = false, prefix, detail, skipDebugger = false } = {}) {
@@ -408,6 +505,119 @@ async function detachCdpForClaim(claim) {
   await detachCdp(claim.tabId, { failClosed: false });
 }
 
+function handleNetworkEvent(source, method, params) {
+  const tabId = source?.tabId;
+  const index = Number.isFinite(tabId) ? networkIndexes.get(tabId) : undefined;
+  if (!index || !params) return;
+  if (method === 'Network.requestWillBeSent') {
+    const url = params.request?.url;
+    const requestId = params.requestId;
+    if (!requestId || !url) return;
+    if (isRestrictedCategoryOrigin(url)) return;
+    if (!urlMatchesWatchPatterns(url, index.patterns)) return;
+    rememberNetworkRow(tabId, {
+      requestId,
+      url,
+      method: params.request?.method || 'GET',
+      status: null,
+      mimeType: null,
+      size: null,
+      timestamp: params.wallTime ? Math.round(params.wallTime * 1000) : Date.now()
+    });
+    return;
+  }
+  const row = index.byId.get(params.requestId);
+  if (!row) return;
+  if (method === 'Network.responseReceived') {
+    row.status = params.response?.status ?? row.status;
+    row.mimeType = params.response?.mimeType ?? row.mimeType;
+    if (typeof params.response?.encodedDataLength === 'number') {
+      row.size = params.response.encodedDataLength;
+    }
+    return;
+  }
+  if (method === 'Network.loadingFinished' && typeof params.encodedDataLength === 'number') {
+    row.size = params.encodedDataLength;
+  }
+}
+
+async function startNetworkWatch(params) {
+  const claim = attachedTabForSession(params.sessionTabId, 'cdp_network_watch');
+  await sendCdpCommand(claim.tabId, 'Network.enable', { ...NETWORK_ENABLE_PARAMS });
+  resetNetworkIndex(claim.tabId, params.patterns);
+  return {
+    watching: true,
+    tabId: claim.tabId,
+    sessionTabId: claim.sessionTabId,
+    maxRows: MAX_NETWORK_INDEX_ROWS
+  };
+}
+
+async function listNetworkRequests(params) {
+  const claim = attachedTabForSession(params.sessionTabId, 'cdp_network_requests');
+  if (!networkIndexes.has(claim.tabId)) {
+    throw cdpError('CDP_NETWORK_NOT_WATCHING', 'cdp_network_requests requires cdp_network_watch first');
+  }
+  return { requests: networkIndexRows(claim.tabId) };
+}
+
+async function readResponseBody(params) {
+  const claim = attachedTabForSession(params.sessionTabId, 'cdp_response_body');
+  if (!params.requestId) throw cdpError('CDP_REQUEST_NOT_FOUND', 'cdp_response_body requires requestId');
+  const index = networkIndexes.get(claim.tabId);
+  if (!index) {
+    throw cdpError('CDP_NETWORK_NOT_WATCHING', 'cdp_response_body requires cdp_network_watch first');
+  }
+  const row = index.byId.get(params.requestId);
+  if (!row) {
+    throw cdpError('CDP_REQUEST_NOT_FOUND', `requestId is not in the index: ${params.requestId}`);
+  }
+  const settings = await getSettings();
+  if (!isBodyCaptureOriginAllowed(row.url, settings.bodyCaptureOrigins)) {
+    throw cdpError(
+      'CDP_BODY_ORIGIN_NOT_ALLOWED',
+      'origin is not in the body-capture allowlist; an empty list means no body is readable'
+    );
+  }
+  if (isRestrictedCategoryOrigin(row.url)) {
+    throw cdpError('CDP_BODY_RESTRICTED_ORIGIN', `restricted-category origin: ${row.url}`);
+  }
+  if (typeof row.size === 'number' && row.size > MAX_RESPONSE_BODY_BYTES) {
+    throw cdpError(
+      'CDP_BODY_TOO_LARGE',
+      `response body exceeds ${MAX_RESPONSE_BODY_BYTES} bytes and was not returned`
+    );
+  }
+  const result = await sendCdpCommand(claim.tabId, 'Network.getResponseBody', { requestId: params.requestId });
+  if (result?.base64Encoded === true) {
+    throw cdpError('CDP_BODY_BINARY_REFUSED', 'binary response bodies are refused');
+  }
+  const body = typeof result?.body === 'string' ? result.body : '';
+  const bytes = new TextEncoder().encode(body).length;
+  if (bytes > MAX_RESPONSE_BODY_BYTES) {
+    throw cdpError(
+      'CDP_BODY_TOO_LARGE',
+      `response body exceeds ${MAX_RESPONSE_BODY_BYTES} bytes and was not returned`
+    );
+  }
+  let origin = '';
+  try {
+    origin = new URL(row.url).origin;
+  } catch (_error) {
+    origin = '';
+  }
+  return {
+    requestId: row.requestId,
+    url: row.url,
+    origin,
+    method: row.method,
+    status: row.status,
+    mimeType: row.mimeType,
+    size: bytes,
+    body: maskTokenShapedFields(body)
+  };
+}
+
 async function runCdpInputAction(tabId, action, params, allowedOrigins, options = {}) {
   const prepareAction =
     action === 'click'
@@ -509,6 +719,7 @@ async function getSettings() {
     bridgeUrl: normalizeBridgeUrl(settings.bridgeUrl),
     token: validatePairingToken(settings.token),
     allowedOrigins: normalizeAllowedOriginPatterns(settings.allowedOrigins),
+    bodyCaptureOrigins: readBodyCaptureOrigins(settings.bodyCaptureOrigins),
     enableCdp: settings.enableCdp === true
   };
 }
@@ -1663,6 +1874,15 @@ async function handleBridgeRequest(action, params = {}) {
     case 'cdp_detach': {
       return await detachCdpForTarget(params);
     }
+    case 'cdp_network_watch': {
+      return await startNetworkWatch(params);
+    }
+    case 'cdp_network_requests': {
+      return await listNetworkRequests(params);
+    }
+    case 'cdp_response_body': {
+      return await readResponseBody(params);
+    }
     case 'navigate': {
       const startedAt = Date.now();
       const { after, baseParams } = splitAfterParams(params);
@@ -1765,6 +1985,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     })
     .catch(() => undefined);
 });
+
+if (chrome.debugger?.onEvent?.addListener) {
+  chrome.debugger.onEvent.addListener(handleNetworkEvent);
+}
 
 if (chrome.debugger?.onDetach?.addListener) {
   chrome.debugger.onDetach.addListener((source, reason) => {
@@ -1891,7 +2115,8 @@ if (globalThis.CBC_TEST_HARNESS) {
     handleBridgeRequest,
     claimStateReady,
     cdpStateReady,
-    sendCdpCommand
+    sendCdpCommand,
+    rememberNetworkRow
   };
 }
 

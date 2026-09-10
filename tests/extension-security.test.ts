@@ -62,7 +62,8 @@ function loadBackgroundHarness({
   sessionGetHold,
   sessionGetError,
   debuggerAttachError,
-  debuggerTargets
+  debuggerTargets,
+  debuggerCommandHandler
 }: {
   settings: Record<string, unknown>;
   tabs: Array<Record<string, unknown>>;
@@ -87,6 +88,11 @@ function loadBackgroundHarness({
   sessionGetError?: Error;
   debuggerAttachError?: Error;
   debuggerTargets?: Array<Record<string, unknown>>;
+  debuggerCommandHandler?: (
+    target: { tabId: number },
+    method: string,
+    params: Record<string, unknown>
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
 }) {
   let now = 0;
   let nextTabId = Math.max(0, ...tabs.map((tab) => Number(tab.id) || 0)) + 1;
@@ -99,6 +105,8 @@ function loadBackgroundHarness({
   const windowUpdates: Array<{ windowId: number; update: Record<string, unknown> }> = [];
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
   const debuggerDetachListeners: Array<(source: { tabId?: number }, reason: string) => void> = [];
+  const debuggerEventListeners: Array<(source: { tabId?: number }, method: string, params: Record<string, unknown>) => void> =
+    [];
   const navigationCommittedListeners: Array<(details: Record<string, unknown>) => void> = [];
   const permissionRemovedListeners: Array<(removed: { permissions?: string[]; origins?: string[] }) => void> = [];
   const debuggerCommands: Array<{ tabId: number; method: string; params: Record<string, unknown> }> = [];
@@ -225,6 +233,7 @@ function loadBackgroundHarness({
       },
       sendCommand: async (target: { tabId: number }, method: string, params: Record<string, unknown> = {}) => {
         debuggerCommands.push({ tabId: target.tabId, method, params });
+        if (debuggerCommandHandler) return await debuggerCommandHandler(target, method, params);
         return {};
       },
       getTargets: async () =>
@@ -236,6 +245,13 @@ function loadBackgroundHarness({
       onDetach: {
         addListener: (listener: (source: { tabId?: number }, reason: string) => void) => {
           debuggerDetachListeners.push(listener);
+        }
+      },
+      onEvent: {
+        addListener: (
+          listener: (source: { tabId?: number }, method: string, params: Record<string, unknown>) => void
+        ) => {
+          debuggerEventListeners.push(listener);
         }
       }
     },
@@ -425,7 +441,8 @@ function loadBackgroundHarness({
     }),
     OffscreenCanvas: FakeOffscreenCanvas,
     btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'),
-    Uint8Array
+    Uint8Array,
+    TextEncoder
   });
   (context as any).globalThis = context;
   vm.runInContext(readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8'), context);
@@ -473,6 +490,9 @@ function loadBackgroundHarness({
     fireDebuggerDetach(tabId: number, reason: string) {
       debuggerAttached.delete(tabId);
       for (const listener of debuggerDetachListeners) listener({ tabId }, reason);
+    },
+    fireDebuggerEvent(tabId: number, method: string, params: Record<string, unknown>) {
+      for (const listener of debuggerEventListeners) listener({ tabId }, method, params);
     },
     fireNavigationCommitted(details: Record<string, unknown>) {
       for (const listener of navigationCommittedListeners) listener(details);
@@ -668,6 +688,22 @@ describe('body-capture allowlist and restricted-category denylist', () => {
     expect(security.isBodyCapturePermitted('https://graph.facebook.com/v19.0/me', ['https://graph.facebook.com'])).toBe(
       true
     );
+  });
+
+  it('masks obvious token-shaped JSON fields and never calls that masking a guarantee', () => {
+    expect(security.maskTokenShapedFields('{"access_token":"abc","name":"Ada"}')).toBe(
+      '{"access_token":"[masked]","name":"Ada"}'
+    );
+    expect(security.maskTokenShapedFields('{"nested":{"refresh_token":"xyz"}}')).toBe(
+      '{"nested":{"refresh_token":"[masked]"}}'
+    );
+    expect(security.maskTokenShapedFields('<html>not json</html>')).toBe('<html>not json</html>');
+    expect(security.maskTokenShapedFields('{"d":"eyJhbGciOiJub25lIn0.e30."}')).toBe(
+      '{"d":"eyJhbGciOiJub25lIn0.e30."}'
+    );
+    const source = readFileSync(join(process.cwd(), 'extension/security.js'), 'utf8');
+    expect(source).toMatch(/Best-effort masking of obvious token-shaped fields, not a guarantee/);
+    expect(source).not.toMatch(/redact/i);
   });
 
   it('labels the denylist as a guardrail against operator error, not a control', () => {
@@ -5271,5 +5307,223 @@ describe('trusted chrome.debugger tier', () => {
       background.handleBridgeRequest('click', { ref: 'h1', tabId: 2, documentId: 'child-doc' })
     ).rejects.toThrow('CDP_CROSS_ORIGIN_FRAME');
     expect(background.debuggerCommands).toEqual([]);
+  });
+
+  function fireCompletedRequest(
+    background: ReturnType<typeof loadBackgroundHarness>,
+    overrides: {
+      requestId?: string;
+      url?: string;
+      method?: string;
+      status?: number;
+      mimeType?: string;
+      size?: number;
+    } = {}
+  ) {
+    const requestId = overrides.requestId ?? 'req-1';
+    background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
+      requestId,
+      wallTime: 1_700_000_000,
+      request: { url: overrides.url ?? 'https://graph.facebook.com/v19.0/me', method: overrides.method ?? 'GET' }
+    });
+    background.fireDebuggerEvent(2, 'Network.responseReceived', {
+      requestId,
+      response: {
+        status: overrides.status ?? 200,
+        mimeType: overrides.mimeType ?? 'application/json',
+        headers: { 'Set-Cookie': 'session=steal-me', Authorization: 'Bearer secret' }
+      }
+    });
+    background.fireDebuggerEvent(2, 'Network.loadingFinished', {
+      requestId,
+      encodedDataLength: overrides.size ?? 42
+    });
+    return requestId;
+  }
+
+  it('indexes metadata only and omits denylisted origins from the watch index', async () => {
+    const background = loadCdpBackground();
+    const { claim } = await claimAndAttach(background);
+    const watched = await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    expect(watched).toMatchObject({ watching: true, tabId: 2 });
+    expect(background.debuggerCommands).toEqual([
+      {
+        tabId: 2,
+        method: 'Network.enable',
+        params: { maxResourceBufferSize: 10 * 1024 * 1024, maxTotalBufferSize: 100 * 1024 * 1024 }
+      }
+    ]);
+
+    fireCompletedRequest(background);
+    fireCompletedRequest(background, {
+      requestId: 'req-bank',
+      url: 'https://online.chase.com/api/accounts'
+    });
+
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests).toEqual([
+      {
+        requestId: 'req-1',
+        url: 'https://graph.facebook.com/v19.0/me',
+        method: 'GET',
+        status: 200,
+        mimeType: 'application/json',
+        size: 42,
+        timestamp: 1_700_000_000_000
+      }
+    ]);
+    expect(JSON.stringify(listed)).not.toMatch(/Set-Cookie|Authorization|session=steal-me/i);
+  });
+
+  it('evicts oldest index rows first when the per-tab bound is reached', async () => {
+    const background = loadCdpBackground();
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    for (let index = 0; index < 501; index += 1) {
+      fireCompletedRequest(background, {
+        requestId: `req-${index}`,
+        url: `https://graph.facebook.com/${index}`
+      });
+    }
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests).toHaveLength(500);
+    expect(listed.requests[0].requestId).toBe('req-1');
+    expect(listed.requests[499].requestId).toBe('req-500');
+  });
+
+  it('refuses a body read when the allowlist is empty and never calls getResponseBody', async () => {
+    const background = loadCdpBackground();
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background);
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-1' })
+    ).rejects.toThrow('CDP_BODY_ORIGIN_NOT_ALLOWED');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
+  it('refuses a body read for a denylisted origin even when that origin is allowlisted', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://chase.com'],
+        enableCdp: true
+      }
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-bank', url: 'https://chase.com/api/me' });
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId })
+    ).resolves.toEqual({ requests: [] });
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-bank' })
+    ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    expect(background.debuggerCommands.some((command) => command.method === 'Network.getResponseBody')).toBe(false);
+  });
+
+  it('refuses getResponseBody for a denylisted row even if that row is already in the index', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://chase.com'],
+        enableCdp: true
+      }
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    background.rememberNetworkRow(2, {
+      requestId: 'injected-bank',
+      url: 'https://chase.com/api/me',
+      method: 'GET',
+      status: 200,
+      mimeType: 'application/json',
+      size: 20,
+      timestamp: Date.now()
+    });
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', {
+        sessionTabId: claim.sessionTabId,
+        requestId: 'injected-bank'
+      })
+    ).rejects.toThrow('CDP_BODY_RESTRICTED_ORIGIN');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
+  it('returns a masked body for an allowlisted origin and refuses binary and oversized bodies', async () => {
+    const bodies: Record<string, { body: string; base64Encoded: boolean }> = {
+      'req-ok': { body: '{"access_token":"abc","name":"Ada"}', base64Encoded: false },
+      'req-bin': { body: 'aGVsbG8=', base64Encoded: true },
+      'req-huge': { body: 'tiny', base64Encoded: false },
+      'req-oversize-body': { body: 'x'.repeat(1 * 1024 * 1024 + 1), base64Encoded: false }
+    };
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: (_target, method, params) => {
+        if (method !== 'Network.getResponseBody') return {};
+        return bodies[String(params.requestId)] ?? { body: '', base64Encoded: false };
+      }
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-ok', size: 40 });
+    fireCompletedRequest(background, { requestId: 'req-bin', size: 8 });
+    fireCompletedRequest(background, { requestId: 'req-huge', size: 2_000_000 });
+    fireCompletedRequest(background, { requestId: 'req-oversize-body', size: 10 });
+
+    const read = await background.handleBridgeRequest('cdp_response_body', {
+      sessionTabId: claim.sessionTabId,
+      requestId: 'req-ok'
+    });
+    expect(read.body).toBe('{"access_token":"[masked]","name":"Ada"}');
+    expect(read.url).toBe('https://graph.facebook.com/v19.0/me');
+    expect(read.origin).toBe('https://graph.facebook.com');
+    expect(read).not.toHaveProperty('headers');
+    expect(JSON.stringify(read)).not.toMatch(/redact/i);
+
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-bin' })
+    ).rejects.toThrow('CDP_BODY_BINARY_REFUSED');
+    expect(background.debuggerCommands).toEqual([
+      { tabId: 2, method: 'Network.getResponseBody', params: { requestId: 'req-bin' } }
+    ]);
+    try {
+      await background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-bin' });
+      throw new Error('expected binary body to be refused');
+    } catch (error) {
+      expect((error as Error).message).toMatch(/^CDP_BODY_BINARY_REFUSED:/);
+      expect((error as Error).message).not.toContain('aGVsbG8=');
+    }
+
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-huge' })
+    ).rejects.toThrow('CDP_BODY_TOO_LARGE');
+    expect(background.debuggerCommands).toEqual([]);
+
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', {
+        sessionTabId: claim.sessionTabId,
+        requestId: 'req-oversize-body'
+      })
+    ).rejects.toThrow('CDP_BODY_TOO_LARGE');
+    expect(background.debuggerCommands).toEqual([
+      { tabId: 2, method: 'Network.getResponseBody', params: { requestId: 'req-oversize-body' } }
+    ]);
   });
 });
