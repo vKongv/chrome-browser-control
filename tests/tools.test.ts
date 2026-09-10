@@ -40,12 +40,15 @@ describe('registerBrowserTools', () => {
     const bridge = new FakeBridge();
     const count = registerBrowserTools(server, bridge);
 
-    expect(count).toBe(27);
+    expect(count).toBe(30);
     expect([...server.tools.keys()].sort()).toEqual([
       'activate_tab',
       'browser_status',
       'cdp_attach',
       'cdp_detach',
+      'cdp_network_requests',
+      'cdp_network_watch',
+      'cdp_response_body',
       'claim_tab',
       'click',
       'click_at',
@@ -70,6 +73,21 @@ describe('registerBrowserTools', () => {
       'visible_snapshot',
       'wait_for'
     ]);
+  });
+
+  it('does not expose headers or post data and does not describe masking as redaction', () => {
+    const server = new FakeServer();
+    registerBrowserTools(server, new FakeBridge());
+    expect([...server.tools.keys()].some((name) => /cookie|header|postData|getRequestPostData/i.test(name))).toBe(
+      false
+    );
+    for (const name of ['cdp_network_watch', 'cdp_network_requests', 'cdp_response_body']) {
+      const description = String(server.configs.get(name)?.description || '');
+      expect(description).not.toMatch(/redact/i);
+    }
+    expect(String(server.configs.get('cdp_response_body')?.description)).toMatch(
+      /best-effort masking of obvious token-shaped fields, not a guarantee/
+    );
   });
 
   it('forwards navigate calls to the bridge', async () => {
@@ -414,6 +432,9 @@ describe('registerBrowserTools', () => {
     await server.tools.get('keypress')?.({ keys: ['Tab', 'Enter'] });
     await server.tools.get('screenshot')?.({ format: 'jpeg' });
     await server.tools.get('cdp_attach')?.({ sessionTabId: 'tab-1', ttlMs: 600000 });
+    await server.tools.get('cdp_network_watch')?.({ sessionTabId: 'tab-1' });
+    await server.tools.get('cdp_network_requests')?.({ sessionTabId: 'tab-1' });
+    await server.tools.get('cdp_response_body')?.({ sessionTabId: 'tab-1', requestId: 'req-1' });
     await server.tools.get('cdp_detach')?.({ sessionTabId: 'tab-1' });
     await server.tools.get('release_tab')?.({ sessionTabId: 'tab-1' });
     await server.tools.get('finalize_tabs')?.({ keep: [{ tabId: 3, status: 'handoff' }] });
@@ -426,6 +447,9 @@ describe('registerBrowserTools', () => {
       'keypress',
       'screenshot',
       'cdp_attach',
+      'cdp_network_watch',
+      'cdp_network_requests',
+      'cdp_response_body',
       'cdp_detach',
       'release_tab',
       'finalize_tabs'

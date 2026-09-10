@@ -595,6 +595,51 @@ export function registerBrowserTools(
   );
 
   registerTool(
+    'cdp_network_watch',
+    {
+      title: 'Watch network requests',
+      description:
+        'Enable the Network domain on an attached tab and keep an in-memory index of metadata rows only (requestId, url, method, status, mimeType, size, timestamp). No response body is read or stored. Restricted-category origins never enter the index. Requires cdp_attach. Optional patterns narrow which URLs are indexed.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).describe('Claimed tab session id returned by claim_tab.'),
+        patterns: z
+          .array(z.string().min(1))
+          .max(50)
+          .optional()
+          .describe('Optional URL prefixes or globs. Omitted means every non-denylisted request is indexed.')
+      }
+    },
+    async (args) => forward(bridge, 'cdp_network_watch', args)
+  );
+
+  registerTool(
+    'cdp_network_requests',
+    {
+      title: 'List watched network requests',
+      description:
+        'Return the in-memory network request index for an attached tab. Rows are metadata only. Response headers, Set-Cookie, and request post data are never included.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).describe('Claimed tab session id returned by claim_tab.')
+      }
+    },
+    async (args) => forward(bridge, 'cdp_network_requests', args)
+  );
+
+  registerTool(
+    'cdp_response_body',
+    {
+      title: 'Read one response body',
+      description:
+        'Read one response body by requestId from an attached tab. Deny by default: the request origin must be in the popup body-capture allowlist, which does not accept *. Restricted-category origins are refused even when listed. Binary bodies (base64Encoded) are refused. Bodies over the size cap return an error, never a truncated body. Token-shaped JSON fields receive best-effort masking of obvious token-shaped fields, not a guarantee — treat any response body as if it contains credentials. Response headers, Set-Cookie, and Network.getRequestPostData are never exposed.',
+      inputSchema: {
+        sessionTabId: z.string().min(1).describe('Claimed tab session id returned by claim_tab.'),
+        requestId: z.string().min(1).describe('requestId from cdp_network_requests.')
+      }
+    },
+    async (args) => forward(bridge, 'cdp_response_body', args)
+  );
+
+  registerTool(
     'finalize_tabs',
     {
       title: 'Finalize claimed tabs',
