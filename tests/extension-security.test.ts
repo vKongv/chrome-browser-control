@@ -5320,6 +5320,7 @@ describe('trusted chrome.debugger tier', () => {
     background: ReturnType<typeof loadBackgroundHarness>,
     overrides: {
       requestId?: string;
+      loaderId?: string;
       url?: string;
       method?: string;
       status?: number;
@@ -5330,6 +5331,7 @@ describe('trusted chrome.debugger tier', () => {
     const requestId = overrides.requestId ?? 'req-1';
     background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
       requestId,
+      loaderId: overrides.loaderId ?? requestId,
       wallTime: 1_700_000_000,
       request: { url: overrides.url ?? 'https://graph.facebook.com/v19.0/me', method: overrides.method ?? 'GET' }
     });
@@ -5518,6 +5520,104 @@ describe('trusted chrome.debugger tier', () => {
     fireCompletedRequest(background, { requestId: 'req-new' });
     const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
     expect(listed.requests).toEqual([expect.objectContaining({ requestId: 'req-new' })]);
+  });
+
+  it('keeps the new document request that arrives before an allowed navigation commits', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://allowed.example', 'https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: () => ({ body: '{"page":"B"}', base64Encoded: false })
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-old', loaderId: 'loader-a' });
+    background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
+      requestId: 'req-b-doc',
+      loaderId: 'req-b-doc',
+      type: 'Document',
+      wallTime: 1_700_000_010,
+      request: { url: 'https://allowed.example/other', method: 'GET' }
+    });
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://allowed.example/other' });
+    await flushMicrotasks(12);
+
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests.map((row: { requestId: string }) => row.requestId)).toEqual(['req-b-doc']);
+    expect(JSON.stringify(listed)).not.toMatch(/loaderId/);
+
+    background.fireDebuggerEvent(2, 'Network.responseReceived', {
+      requestId: 'req-b-doc',
+      response: {
+        status: 200,
+        url: 'https://allowed.example/other',
+        mimeType: 'text/html',
+        encodedDataLength: 12
+      }
+    });
+    background.fireDebuggerEvent(2, 'Network.loadingFinished', {
+      requestId: 'req-b-doc',
+      encodedDataLength: 12
+    });
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-old' })
+    ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-b-doc' })
+    ).resolves.toMatchObject({
+      requestId: 'req-b-doc',
+      url: 'https://allowed.example/other',
+      body: '{"page":"B"}'
+    });
+  });
+
+  it('refuses an in-flight body read after the index generation changes on navigation', async () => {
+    let releaseBody: () => void = () => undefined;
+    const bodyHold = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: async (_target, method) => {
+        if (method === 'Network.getResponseBody') {
+          await bodyHold;
+          return { body: '{"from":"page-a"}', base64Encoded: false };
+        }
+        return {};
+      }
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-old', loaderId: 'loader-a' });
+    background.debuggerCommands.length = 0;
+
+    const readPromise = background.handleBridgeRequest('cdp_response_body', {
+      sessionTabId: claim.sessionTabId,
+      requestId: 'req-old'
+    });
+    for (let i = 0; i < 20; i += 1) {
+      if (background.debuggerCommands.some((command) => command.method === 'Network.getResponseBody')) break;
+      await Promise.resolve();
+    }
+    expect(background.debuggerCommands).toEqual([
+      { tabId: 2, method: 'Network.getResponseBody', params: { requestId: 'req-old' } }
+    ]);
+
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://allowed.example/other' });
+    await flushMicrotasks(12);
+    releaseBody();
+    await expect(readPromise).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
   });
 
   it('refuses getResponseBody for a denylisted row even if that row is already in the index', async () => {

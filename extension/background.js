@@ -112,7 +112,8 @@ function resetNetworkIndex(tabId, patterns) {
   networkIndexes.set(tabId, {
     patterns: Array.isArray(patterns) ? patterns.map((item) => String(item)) : [],
     byId: new Map(),
-    order: []
+    order: [],
+    generation: 0
   });
 }
 
@@ -153,11 +154,47 @@ function forgetNetworkRow(tabId, requestId) {
   if (at >= 0) index.order.splice(at, 1);
 }
 
-function clearNetworkIndexRows(tabId) {
+function bumpNetworkIndexGeneration(tabId) {
   const index = networkIndexes.get(tabId);
   if (!index) return;
-  index.byId.clear();
-  index.order.length = 0;
+  index.generation = (index.generation || 0) + 1;
+}
+
+function pruneNetworkIndexForMainFrameCommit(tabId, committedUrl) {
+  const index = networkIndexes.get(tabId);
+  if (!index) return;
+  bumpNetworkIndexGeneration(tabId);
+  let keepFrom = -1;
+  for (let i = index.order.length - 1; i >= 0; i -= 1) {
+    const row = index.byId.get(index.order[i]);
+    if (row?.loaderId && row.requestId === row.loaderId && urlsEquivalent(row.url, committedUrl)) {
+      keepFrom = i;
+      break;
+    }
+  }
+  if (keepFrom < 0) {
+    index.byId.clear();
+    index.order.length = 0;
+    return;
+  }
+  for (const requestId of index.order.slice(0, keepFrom)) {
+    forgetNetworkRow(tabId, requestId);
+  }
+}
+
+function requireNetworkRow(tabId, requestId, generation) {
+  const index = networkIndexes.get(tabId);
+  if (!index) {
+    throw cdpError('CDP_NETWORK_NOT_WATCHING', 'cdp_response_body requires cdp_network_watch first');
+  }
+  if ((index.generation || 0) !== generation) {
+    throw cdpError('CDP_REQUEST_NOT_FOUND', `requestId is not in the index: ${requestId}`);
+  }
+  const row = index.byId.get(requestId);
+  if (!row) {
+    throw cdpError('CDP_REQUEST_NOT_FOUND', `requestId is not in the index: ${requestId}`);
+  }
+  return row;
 }
 
 function networkIndexRows(tabId) {
@@ -534,6 +571,7 @@ function handleNetworkEvent(source, method, params) {
     }
     rememberNetworkRow(tabId, {
       requestId,
+      loaderId: params.loaderId || requestId,
       url,
       method: params.request?.method || 'GET',
       status: null,
@@ -593,11 +631,10 @@ async function readResponseBody(params) {
   if (!index) {
     throw cdpError('CDP_NETWORK_NOT_WATCHING', 'cdp_response_body requires cdp_network_watch first');
   }
-  const row = index.byId.get(params.requestId);
-  if (!row) {
-    throw cdpError('CDP_REQUEST_NOT_FOUND', `requestId is not in the index: ${params.requestId}`);
-  }
+  const generation = index.generation || 0;
+  requireNetworkRow(claim.tabId, params.requestId, generation);
   const settings = await getSettings();
+  const row = requireNetworkRow(claim.tabId, params.requestId, generation);
   if (!isBodyCaptureOriginAllowed(row.url, settings.bodyCaptureOrigins)) {
     throw cdpError(
       'CDP_BODY_ORIGIN_NOT_ALLOWED',
@@ -614,6 +651,7 @@ async function readResponseBody(params) {
     );
   }
   const result = await sendCdpCommand(claim.tabId, 'Network.getResponseBody', { requestId: params.requestId });
+  const current = requireNetworkRow(claim.tabId, params.requestId, generation);
   if (result?.base64Encoded === true) {
     throw cdpError('CDP_BODY_BINARY_REFUSED', 'binary response bodies are refused');
   }
@@ -627,17 +665,17 @@ async function readResponseBody(params) {
   }
   let origin = '';
   try {
-    origin = new URL(row.url).origin;
+    origin = new URL(current.url).origin;
   } catch (_error) {
     origin = '';
   }
   return {
-    requestId: row.requestId,
-    url: row.url,
+    requestId: current.requestId,
+    url: current.url,
     origin,
-    method: row.method,
-    status: row.status,
-    mimeType: row.mimeType,
+    method: current.method,
+    status: current.status,
+    mimeType: current.mimeType,
     size: bytes,
     body: maskTokenShapedFields(body)
   };
@@ -2041,15 +2079,14 @@ if (chrome.webNavigation?.onCommitted?.addListener) {
   chrome.webNavigation.onCommitted.addListener((details) => {
     if (!details || details.frameId !== 0 || !Number.isFinite(details.tabId)) return;
     if (!cdpAttachments.has(details.tabId)) return;
+    pruneNetworkIndexForMainFrameCommit(details.tabId, details.url || '');
     void getSettings().then((settings) => {
-      if (!isUrlAllowed(details.url || '', settings.allowedOrigins)) {
-        return detachCdp(details.tabId, {
-          failClosed: true,
-          prefix: 'CDP_ORIGIN_NOT_ALLOWED',
-          detail: `navigated to an origin outside Allowed Origins: ${details.url || 'unknown URL'}`
-        });
-      }
-      clearNetworkIndexRows(details.tabId);
+      if (isUrlAllowed(details.url || '', settings.allowedOrigins)) return;
+      return detachCdp(details.tabId, {
+        failClosed: true,
+        prefix: 'CDP_ORIGIN_NOT_ALLOWED',
+        detail: `navigated to an origin outside Allowed Origins: ${details.url || 'unknown URL'}`
+      });
     });
   });
 }
