@@ -145,6 +145,21 @@ function rememberNetworkRow(tabId, row) {
   index.order.push(row.requestId);
 }
 
+function forgetNetworkRow(tabId, requestId) {
+  const index = networkIndexes.get(tabId);
+  if (!index || !requestId) return;
+  if (!index.byId.delete(requestId)) return;
+  const at = index.order.indexOf(requestId);
+  if (at >= 0) index.order.splice(at, 1);
+}
+
+function clearNetworkIndexRows(tabId) {
+  const index = networkIndexes.get(tabId);
+  if (!index) return;
+  index.byId.clear();
+  index.order.length = 0;
+}
+
 function networkIndexRows(tabId) {
   const index = networkIndexes.get(tabId);
   if (!index) return [];
@@ -513,8 +528,10 @@ function handleNetworkEvent(source, method, params) {
     const url = params.request?.url;
     const requestId = params.requestId;
     if (!requestId || !url) return;
-    if (isRestrictedCategoryOrigin(url)) return;
-    if (!urlMatchesWatchPatterns(url, index.patterns)) return;
+    if (isRestrictedCategoryOrigin(url) || !urlMatchesWatchPatterns(url, index.patterns)) {
+      forgetNetworkRow(tabId, requestId);
+      return;
+    }
     rememberNetworkRow(tabId, {
       requestId,
       url,
@@ -526,9 +543,15 @@ function handleNetworkEvent(source, method, params) {
     });
     return;
   }
-  const row = index.byId.get(params.requestId);
-  if (!row) return;
   if (method === 'Network.responseReceived') {
+    const responseUrl = params.response?.url;
+    if (responseUrl && isRestrictedCategoryOrigin(responseUrl)) {
+      forgetNetworkRow(tabId, params.requestId);
+      return;
+    }
+    const row = index.byId.get(params.requestId);
+    if (!row) return;
+    if (responseUrl) row.url = responseUrl;
     row.status = params.response?.status ?? row.status;
     row.mimeType = params.response?.mimeType ?? row.mimeType;
     if (typeof params.response?.encodedDataLength === 'number') {
@@ -537,6 +560,8 @@ function handleNetworkEvent(source, method, params) {
     return;
   }
   if (method === 'Network.loadingFinished' && typeof params.encodedDataLength === 'number') {
+    const row = index.byId.get(params.requestId);
+    if (!row) return;
     row.size = params.encodedDataLength;
   }
 }
@@ -2017,12 +2042,14 @@ if (chrome.webNavigation?.onCommitted?.addListener) {
     if (!details || details.frameId !== 0 || !Number.isFinite(details.tabId)) return;
     if (!cdpAttachments.has(details.tabId)) return;
     void getSettings().then((settings) => {
-      if (isUrlAllowed(details.url || '', settings.allowedOrigins)) return;
-      return detachCdp(details.tabId, {
-        failClosed: true,
-        prefix: 'CDP_ORIGIN_NOT_ALLOWED',
-        detail: `navigated to an origin outside Allowed Origins: ${details.url || 'unknown URL'}`
-      });
+      if (!isUrlAllowed(details.url || '', settings.allowedOrigins)) {
+        return detachCdp(details.tabId, {
+          failClosed: true,
+          prefix: 'CDP_ORIGIN_NOT_ALLOWED',
+          detail: `navigated to an origin outside Allowed Origins: ${details.url || 'unknown URL'}`
+        });
+      }
+      clearNetworkIndexRows(details.tabId);
     });
   });
 }

@@ -275,10 +275,14 @@
     if (!['http:', 'https:'].includes(url.protocol)) {
       throw new Error(`body-capture allowlist entry must use http:// or https://: ${raw}`);
     }
-    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    const canonical = withCanonicalHostname(url);
+    if (!canonical) {
+      throw new Error(`body-capture allowlist entry must be a valid http(s) origin: ${raw}`);
+    }
+    if (canonical.username || canonical.password || canonical.pathname !== '/' || canonical.search || canonical.hash) {
       throw new Error(`body-capture allowlist entry must be an origin, not a path or URL: ${raw}`);
     }
-    return url.origin;
+    return canonical.origin;
   }
 
   function normalizeBodyCaptureOrigins(input) {
@@ -294,22 +298,41 @@
   }
 
   function isBodyCaptureOriginAllowed(urlInput, origins) {
-    const url = parseHttpUrl(urlInput);
+    const url = canonicalHttpUrl(urlInput);
     if (!url) return false;
     const allowed = Array.isArray(origins) ? origins : normalizeBodyCaptureOrigins(origins);
     if (allowed.length === 0) return false;
     return allowed.includes(url.origin);
   }
 
+  function canonicalHostname(hostname) {
+    return String(hostname || '').toLowerCase().replace(/\.+$/, '');
+  }
+
+  function withCanonicalHostname(url) {
+    const hostname = canonicalHostname(url.hostname);
+    if (!hostname) return null;
+    if (hostname === url.hostname) return url;
+    const copy = new URL(url.href);
+    copy.hostname = hostname;
+    return copy;
+  }
+
+  function canonicalHttpUrl(urlInput) {
+    const url = parseHttpUrl(urlInput);
+    if (!url) return null;
+    return withCanonicalHostname(url);
+  }
+
   function hostnameMatchesRestrictedHost(hostname, listedHost) {
-    const host = String(hostname || '').toLowerCase();
-    const listed = String(listedHost || '').toLowerCase();
+    const host = canonicalHostname(hostname);
+    const listed = canonicalHostname(listedHost);
     if (!host || !listed) return false;
     return host === listed || host.endsWith(`.${listed}`);
   }
 
   function isRestrictedCategoryOrigin(urlInput) {
-    const url = parseHttpUrl(urlInput);
+    const url = canonicalHttpUrl(urlInput);
     if (!url) return false;
     return RESTRICTED_CATEGORY_HOSTS.some((listed) => hostnameMatchesRestrictedHost(url.hostname, listed));
   }

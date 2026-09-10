@@ -690,6 +690,24 @@ describe('body-capture allowlist and restricted-category denylist', () => {
     );
   });
 
+  it('refuses a trailing-dot spelling of a restricted hostname and canonicalizes allowlist origins', () => {
+    expect(security.normalizeBodyCaptureOrigin('https://chase.com.')).toBe('https://chase.com');
+    expect(security.normalizeBodyCaptureOrigin('https://graph.facebook.com.')).toBe('https://graph.facebook.com');
+    expect(security.normalizeBodyCaptureOrigins('https://chase.com.\nhttps://chase.com')).toEqual(['https://chase.com']);
+    expect(security.isRestrictedCategoryOrigin('https://chase.com./api/accounts')).toBe(true);
+    expect(security.isRestrictedCategoryOrigin('https://online.chase.com./api/accounts')).toBe(true);
+    expect(security.isRestrictedCategoryOrigin('https://chase.com../login')).toBe(true);
+    expect(
+      security.isBodyCaptureOriginAllowed('https://graph.facebook.com./v19.0/me', ['https://graph.facebook.com'])
+    ).toBe(true);
+    expect(
+      security.isBodyCapturePermitted(
+        'https://chase.com./api/accounts',
+        security.normalizeBodyCaptureOrigins(['https://chase.com.'])
+      )
+    ).toBe(false);
+  });
+
   it('masks obvious token-shaped JSON fields and never calls that masking a guarantee', () => {
     expect(security.maskTokenShapedFields('{"access_token":"abc","name":"Ada"}')).toBe(
       '{"access_token":"[masked]","name":"Ada"}'
@@ -5413,6 +5431,93 @@ describe('trusted chrome.debugger tier', () => {
       background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-bank' })
     ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
     expect(background.debuggerCommands.some((command) => command.method === 'Network.getResponseBody')).toBe(false);
+  });
+
+  it('drops a reused request id when a redirect lands on a restricted origin', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: () => ({ body: '{"secret":"from-chase"}', base64Encoded: false })
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
+      requestId: 'req-redir',
+      wallTime: 1_700_000_000,
+      request: { url: 'https://graph.facebook.com/start', method: 'GET' }
+    });
+    background.fireDebuggerEvent(2, 'Network.responseReceived', {
+      requestId: 'req-redir',
+      response: { status: 302, url: 'https://graph.facebook.com/start', mimeType: 'text/html' }
+    });
+    background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
+      requestId: 'req-redir',
+      wallTime: 1_700_000_001,
+      redirectResponse: { url: 'https://graph.facebook.com/start', status: 302 },
+      request: { url: 'https://online.chase.com/api/accounts', method: 'GET' }
+    });
+    background.fireDebuggerEvent(2, 'Network.responseReceived', {
+      requestId: 'req-redir',
+      response: {
+        status: 200,
+        url: 'https://online.chase.com/api/accounts',
+        mimeType: 'application/json',
+        encodedDataLength: 24
+      }
+    });
+    background.fireDebuggerEvent(2, 'Network.loadingFinished', {
+      requestId: 'req-redir',
+      encodedDataLength: 24
+    });
+
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests).toEqual([]);
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-redir' })
+    ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    expect(background.debuggerCommands).toEqual([]);
+  });
+
+  it('drops the network index on an allowed main-frame navigation and refuses the stale request id', async () => {
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: () => ({ body: '{"name":"Ada"}', base64Encoded: false })
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-old' });
+    await expect(background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId })).resolves.toMatchObject({
+      requests: [expect.objectContaining({ requestId: 'req-old' })]
+    });
+
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://allowed.example/other' });
+    await flushMicrotasks(12);
+
+    expect(background.debuggerAttached.has(2)).toBe(true);
+    await expect(background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId })).resolves.toEqual({
+      requests: []
+    });
+    background.debuggerCommands.length = 0;
+    await expect(
+      background.handleBridgeRequest('cdp_response_body', { sessionTabId: claim.sessionTabId, requestId: 'req-old' })
+    ).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    expect(background.debuggerCommands).toEqual([]);
+
+    fireCompletedRequest(background, { requestId: 'req-new' });
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests).toEqual([expect.objectContaining({ requestId: 'req-new' })]);
   });
 
   it('refuses getResponseBody for a denylisted row even if that row is already in the index', async () => {
