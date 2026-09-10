@@ -4,6 +4,7 @@ import type { EnsureBrokerResult } from './broker-lifecycle.js';
 import { BrowserBridge } from './bridge.js';
 import { BridgeAction } from './protocol.js';
 import { buildNextAction } from './status-coaching.js';
+import { appendNetworkBodyRead } from './network-body-log.js';
 
 export const ADAPTER_PROTOCOL_VERSION = 1;
 
@@ -630,13 +631,43 @@ export function registerBrowserTools(
     {
       title: 'Read one response body',
       description:
-        'Read one response body by requestId from an attached tab. Deny by default: the request origin must be in the popup body-capture allowlist, which does not accept *. Restricted-category origins are refused even when listed. Binary bodies (base64Encoded) are refused. Bodies over the size cap return an error, never a truncated body. Token-shaped JSON fields receive best-effort masking of obvious token-shaped fields, not a guarantee — treat any response body as if it contains credentials. Response headers, Set-Cookie, and Network.getRequestPostData are never exposed.',
+        'Read one response body by requestId from an attached tab. Deny by default: the request origin must be in the popup body-capture allowlist, which does not accept *. Restricted-category origins are refused even when listed. Binary bodies (base64Encoded) are refused. Bodies over the size cap return an error, never a truncated body. Token-shaped JSON fields receive best-effort masking of obvious token-shaped fields, not a guarantee — treat any response body as if it contains credentials. Response headers, Set-Cookie, and Network.getRequestPostData are never exposed. Each successful read is recorded to an append-only metadata log; body content is never written there.',
       inputSchema: {
         sessionTabId: z.string().min(1).describe('Claimed tab session id returned by claim_tab.'),
         requestId: z.string().min(1).describe('requestId from cdp_network_requests.')
       }
     },
-    async (args) => forward(bridge, 'cdp_response_body', args)
+    async (args) => {
+      try {
+        const result = await bridge.call('cdp_response_body', args);
+        const record = result && typeof result === 'object' ? (result as Record<string, unknown>) : null;
+        if (!record || typeof record.url !== 'string') {
+          return {
+            isError: true,
+            content: [{ type: 'text' as const, text: 'cdp_response_body returned no URL metadata to log' }]
+          };
+        }
+        appendNetworkBodyRead({
+          origin: String(record.origin || ''),
+          url: record.url,
+          method: String(record.method || ''),
+          status: typeof record.status === 'number' ? record.status : null,
+          bytes: typeof record.size === 'number' ? record.size : 0,
+          session: options.ownerId
+        });
+        return toolResult(result);
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text: (error as Error).message || String(error)
+            }
+          ]
+        };
+      }
+    }
   );
 
   registerTool(

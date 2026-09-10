@@ -1,8 +1,13 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { BridgeAction } from '../server/protocol.js';
 import { ADAPTER_PROTOCOL_VERSION, registerBrowserTools, ToolRegistrar } from '../server/tools.js';
 import { buildNextAction } from '../server/status-coaching.js';
+import { countNetworkBodyLogEntries } from '../server/network-body-log.js';
+import { getNetworkBodyLogPath } from '../server/paths.js';
 
 class FakeServer implements ToolRegistrar {
   tools = new Map<string, (args: any) => Promise<any>>();
@@ -88,6 +93,39 @@ describe('registerBrowserTools', () => {
     expect(String(server.configs.get('cdp_response_body')?.description)).toMatch(
       /best-effort masking of obvious token-shaped fields, not a guarantee/
     );
+  });
+
+  it('logs metadata after a successful body read and skips refused reads', async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = mkdtempSync(join(tmpdir(), 'cbc-tools-body-log-'));
+    process.env.HOME = tempHome;
+    try {
+      const server = new FakeServer();
+      const bridge = new FakeBridge();
+      bridge.result = {
+        url: 'https://graph.facebook.com/v19.0/me',
+        origin: 'https://graph.facebook.com',
+        method: 'GET',
+        status: 200,
+        size: 12,
+        body: 'SECRET_BODY'
+      };
+      registerBrowserTools(server, bridge, { ownerId: 'owner-1' });
+      await server.tools.get('cdp_response_body')?.({ sessionTabId: 'tab-1', requestId: 'req-1' });
+      expect(countNetworkBodyLogEntries()).toBe(1);
+      const logged = readFileSync(getNetworkBodyLogPath(), 'utf8');
+      expect(logged).toContain('https://graph.facebook.com/v19.0/me');
+      expect(logged).toContain('owner-1');
+      expect(logged).not.toContain('SECRET_BODY');
+
+      bridge.error = new Error('CDP_BODY_ORIGIN_NOT_ALLOWED: empty');
+      await server.tools.get('cdp_response_body')?.({ sessionTabId: 'tab-1', requestId: 'req-2' });
+      expect(countNetworkBodyLogEntries()).toBe(1);
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
   });
 
   it('forwards navigate calls to the bridge', async () => {

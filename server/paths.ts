@@ -9,6 +9,7 @@ export const BROKER_PID_FILE = 'broker.pid';
 export const BROKER_LOG_FILE = 'broker.log';
 export const INSTALLED_EXTENSION_DIR = 'extension';
 export const INSTALLED_VERSION_FILE = '.installed-version';
+export const NETWORK_BODY_LOG_FILE = 'network-body-reads.log';
 
 export function getUserConfigDir(): string {
   return join(homedir(), USER_CONFIG_DIR_NAME);
@@ -32,6 +33,10 @@ export function getBrokerLogPath(): string {
 
 export function getInstalledVersionPath(): string {
   return join(getUserConfigDir(), INSTALLED_VERSION_FILE);
+}
+
+export function getNetworkBodyLogPath(): string {
+  return join(getUserConfigDir(), NETWORK_BODY_LOG_FILE);
 }
 
 /** Package root (directory containing package.json), from any module in the package. */
