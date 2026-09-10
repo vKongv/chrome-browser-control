@@ -1,6 +1,7 @@
 const bridgeUrl = document.getElementById('bridgeUrl');
 const token = document.getElementById('token');
 const allowedOrigins = document.getElementById('allowedOrigins');
+const bodyCaptureOrigins = document.getElementById('bodyCaptureOrigins');
 const enableDebugger = document.getElementById('enableDebugger');
 const statusEl = document.getElementById('status');
 const save = document.getElementById('save');
@@ -11,9 +12,11 @@ const copyYaml = document.getElementById('copyYaml');
 const {
   DEFAULT_BRIDGE_URL,
   DEFAULT_ALLOWED_ORIGINS,
+  DEFAULT_BODY_CAPTURE_ORIGINS,
   formatAllowedOriginPatternsForDisplay,
   collectOptionalPermissionOrigins,
   normalizeAllowedOriginPatterns,
+  normalizeBodyCaptureOrigins,
   normalizeBridgeUrl,
   validatePairingToken
 } = globalThis.BrowserControlSecurity;
@@ -98,12 +101,18 @@ async function refresh() {
     bridgeUrl: DEFAULT_BRIDGE_URL,
     token: '',
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
+    bodyCaptureOrigins: DEFAULT_BODY_CAPTURE_ORIGINS,
     enableCdp: false,
     status: 'unknown'
   });
   bridgeUrl.value = settings.bridgeUrl;
   token.value = settings.token;
   allowedOrigins.value = formatAllowedOriginPatternsForDisplay(settings.allowedOrigins).join('\n');
+  if (bodyCaptureOrigins) {
+    bodyCaptureOrigins.value = Array.isArray(settings.bodyCaptureOrigins)
+      ? settings.bodyCaptureOrigins.join('\n')
+      : '';
+  }
   setupSnippet.value = jsonConfigTemplate(settings.token || '<generated-token>');
   showStatus(settings.status);
   if (enableDebugger) {
@@ -156,10 +165,12 @@ save.addEventListener('click', async () => {
     const nextBridgeUrl = normalizeBridgeUrl(bridgeUrl.value);
     const nextToken = validatePairingToken(token.value);
     const nextAllowedOrigins = normalizeAllowedOriginPatterns(allowedOrigins.value);
+    const nextBodyCaptureOrigins = normalizeBodyCaptureOrigins(bodyCaptureOrigins?.value || '');
     const settings = {
       bridgeUrl: nextBridgeUrl,
       token: nextToken,
       allowedOrigins: nextAllowedOrigins,
+      bodyCaptureOrigins: nextBodyCaptureOrigins,
       enableCdp: enableDebugger?.checked === true
     };
     const origins = collectOptionalPermissionOrigins(nextAllowedOrigins);
@@ -169,6 +180,9 @@ save.addEventListener('click', async () => {
     });
     bridgeUrl.value = nextBridgeUrl;
     allowedOrigins.value = formatAllowedOriginPatternsForDisplay(nextAllowedOrigins).join('\n');
+    if (bodyCaptureOrigins) {
+      bodyCaptureOrigins.value = nextBodyCaptureOrigins.join('\n');
+    }
     if (!granted) {
       showStatus('saved; optional permission was not granted');
       return;

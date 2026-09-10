@@ -27,6 +27,7 @@ import { isAutoloadEnabled } from '../server/env.js';
 import { DEFAULT_PORT_ENV, DEFAULT_TOKEN_ENV, writeEnvFile } from '../server/env-file.js';
 import * as mcpConfig from '../server/mcp-config.js';
 import * as serverIndex from '../server/index.js';
+import { appendNetworkBodyRead } from '../server/network-body-log.js';
 import {
   getInstalledExtensionPath,
   getInstalledVersionPath,
@@ -137,6 +138,27 @@ describe('cli extension copy diagnostics', () => {
     expect(doctorCode).toBe(1);
     expect(logs).toContain('❌ Extension copy missing — run cbctl setup');
     expect(logs).toContain('❌ Extension copy — missing — run cbctl setup');
+  });
+
+  it('surfaces the response-body log entry count', async () => {
+    useTempHome('cbc-status-body-log-');
+    const { logs } = captureConsole();
+    appendNetworkBodyRead({
+      origin: 'https://example.com',
+      url: 'https://example.com/a',
+      method: 'GET',
+      status: 200,
+      bytes: 1
+    });
+    appendNetworkBodyRead({
+      origin: 'https://example.com',
+      url: 'https://example.com/b',
+      method: 'GET',
+      status: 200,
+      bytes: 2
+    });
+    await runStatus({ positional: ['status'], flags: {} });
+    expect(logs.some((line) => line.includes('Response-body read log 2 entries'))).toBe(true);
   });
 
   it('T2: reports a matching copy as current in both commands', async () => {

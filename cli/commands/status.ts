@@ -11,6 +11,7 @@ import {
 } from '../broker-process.js';
 import type { ParsedArgs } from '../parse-args.js';
 import { getUserConfigPath } from '../../server/paths.js';
+import { countNetworkBodyLogEntries } from '../../server/network-body-log.js';
 
 export async function runStatus(_args: ParsedArgs): Promise<number> {
   const configPath = getUserConfigPath();
@@ -73,6 +74,10 @@ export async function runStatus(_args: ParsedArgs): Promise<number> {
   if (hasConfig && portOpen) {
     console.log(`${authOk ? '✅' : '❌'} Broker auth ${authOk ? 'ok' : 'failed or unreachable'}`);
   }
+  const bodyLogCount = countNetworkBodyLogEntries();
+  console.log(
+    `✅ Response-body read log ${bodyLogCount} ${bodyLogCount === 1 ? 'entry' : 'entries'}`
+  );
 
   return 0;
 }

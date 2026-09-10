@@ -1,5 +1,11 @@
 (function (global) {
-  const ALLOWED_METHODS = Object.freeze(['Input.dispatchMouseEvent', 'Input.dispatchKeyEvent']);
+  const ALLOWED_METHODS = Object.freeze([
+    'Input.dispatchMouseEvent',
+    'Input.dispatchKeyEvent',
+    'Network.enable',
+    'Network.disable',
+    'Network.getResponseBody'
+  ]);
   const DEFAULT_ATTACH_TTL_MS = 600_000;
   const MAX_ATTACH_TTL_MS = 3_600_000;
   const MIN_ATTACH_TTL_MS = 1_000;
@@ -142,6 +148,11 @@
   global.BrowserControlCdp = {
     ALLOWED_METHODS,
     DEFAULT_ATTACH_TTL_MS,
+    NETWORK_ENABLE_PARAMS: Object.freeze({
+      maxResourceBufferSize: 10 * 1024 * 1024,
+      maxTotalBufferSize: 100 * 1024 * 1024
+    }),
+    MAX_NETWORK_INDEX_ROWS: 500,
     assertCdpMethod,
     boundedAttachTtl,
     clickCommands,
