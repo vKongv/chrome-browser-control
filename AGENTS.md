@@ -116,7 +116,7 @@ The suite runs under `happy-dom`. It cannot produce:
 
 A test that simulates one of these by mutating fixture state directly asserts the fixture, not Chrome. If an acceptance criterion needs one of these behaviours, say so and report it as a gap requiring a live-browser check. Do not write a unit test that appears to cover it.
 
-A test named for a branch must fail when that branch is broken. Mutate the branch and rerun the test before trusting it — that's the only way to know the test reaches the code its name claims. Two regressions (`TEC-201`, `TEC-221`) shipped past tests that looked like branch coverage but weren't.
+A test named for a branch must fail when that branch is broken. Mutate the branch and rerun the test before trusting it — that's the only way to know the test reaches the code its name claims. Two tests in this repository have been found passing with the branch named in their own title deleted; see `TEC-201` and `TEC-221` for the write-ups.
 
 ## MCP config generation
 
