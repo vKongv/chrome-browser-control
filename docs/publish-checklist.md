@@ -96,7 +96,7 @@ npx -y chrome-browser-control --help
 
 ## Optional GitHub Release (after npm succeeds)
 
-1. Create annotated tag for the published version (for this release, `v0.4.0`) on the same commit that was published.
+1. Create annotated tag `vX.Y.Z` matching the published npm version on the same commit that was published.
 2. Open a GitHub Release for that tag with install commands (`npm install -g chrome-browser-control`, `npx -y chrome-browser-control setup`) and a short note that publish is manual / no CI publish credentials.
 3. Skip tagging/releasing if npm publish has not succeeded.
 
