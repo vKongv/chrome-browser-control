@@ -249,6 +249,150 @@ describe('extension content core', () => {
     expect(document.querySelector(`[data-cbc-ref="${snapshot.elements[1].ref}"]`)?.textContent).toBe('Save');
   });
 
+  it('names httpbin encapsulating-label form fields from visible label text', () => {
+    const document = makeDocument(`
+      <form>
+        <p><label>Customer name: <input name="custname"></label></p>
+        <p><label>Telephone: <input type=tel name="custtel"></label></p>
+        <p><label>E-mail address: <input type=email name="custemail"></label></p>
+        <p><label> <input type=radio name=size value="small"> Small </label></p>
+        <p><label> <input type=checkbox name="topping" value="bacon"> Bacon </label></p>
+        <p><label>Preferred delivery time: <input type=time name="delivery"></label></p>
+        <p><label>Delivery instructions: <textarea name="comments"></textarea></label></p>
+        <p><button>Submit order</button></p>
+      </form>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Customer name:' },
+      { role: 'textbox', label: 'Telephone:' },
+      { role: 'textbox', label: 'E-mail address:' },
+      { role: 'textbox', label: 'Small' },
+      { role: 'textbox', label: 'Bacon' },
+      { role: 'textbox', label: 'Preferred delivery time:' },
+      { role: 'textbox', label: 'Delivery instructions:' },
+      { role: 'button', label: 'Submit order' }
+    ]);
+  });
+
+  it('computes accessible names from label[for], aria-labelledby, and HTML-AAM precedence', () => {
+    const document = makeDocument(`
+      <label for="named">Account number</label>
+      <input id="named" />
+      <span id="phone-lbl">Work phone</span>
+      <input aria-labelledby="phone-lbl" />
+      <label for="hinted">Real name</label>
+      <input id="hinted" placeholder="Hint only" />
+      <input placeholder="Search" title="Tip" />
+      <label>Notes: <textarea name="notes">leftover draft</textarea></label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Account number' },
+      { role: 'textbox', label: 'Work phone' },
+      { role: 'textbox', label: 'Real name' },
+      { role: 'textbox', label: 'Tip' },
+      { role: 'textbox', label: 'Notes:' }
+    ]);
+  });
+
+  it('ignores associated labels on non-labelable elements', () => {
+    const document = makeDocument(`
+      <label for="link">Wrong label</label><a id="link" href="#">Right link</a>
+      <label for="rolebtn">Wrong role</label><div id="rolebtn" role="button">Own text</div>
+      <label>Wrapped <a href="/w">Right wrapped</a></label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'link', label: 'Right link' },
+      { role: 'button', label: 'Own text' },
+      { role: 'link', label: 'Right wrapped' }
+    ]);
+  });
+
+  it('concatenates multiple associated labels in DOM order', () => {
+    const document = makeDocument(`
+      <label>Outer <input id="x"></label><label for="x">Second</label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Outer Second' }]);
+  });
+
+  it('uses value before title for button-type inputs', () => {
+    const document = makeDocument('<input type="button" value="Save" title="Tooltip">');
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Save' }]);
+  });
+
+  it('includes img and input type=image alt text from associated labels', () => {
+    const document = makeDocument(`
+      <label for="email"><img alt="Email"></label><input id="email">
+      <label for="photo"><input type="image" alt="Portrait"></label><input id="photo">
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Email' },
+      { role: 'textbox', label: '' },
+      { role: 'textbox', label: 'Portrait' }
+    ]);
+  });
+
+  it('does not use value as a name for radio and checkbox without a label', () => {
+    const document = makeDocument(`
+      <input type="radio" name="size" value="small">
+      <input type="checkbox" name="topping" value="bacon">
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: '' },
+      { role: 'textbox', label: '' }
+    ]);
+  });
+
+  it('lets an associated label outrank title', () => {
+    const document = makeDocument(`
+      <label for="titled">Visible</label>
+      <input id="titled" title="Tooltip name">
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Visible' }]);
+  });
+
+  it('associates a wrapping label with only its first labelable descendant', () => {
+    const document = makeDocument(`
+      <label>Search <input name="q"> <button type="submit">Go</button></label>
+      <label>Country <input id="c1"> <select id="c2"><option>X</option></select></label>
+      <label>Range <input id="a"> <input id="b"></label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Search Go' },
+      { role: 'button', label: 'Go' },
+      { role: 'textbox', label: 'Country X' },
+      { role: 'combobox', label: 'X' },
+      { role: 'textbox', label: 'Range' },
+      { role: 'textbox', label: '' }
+    ]);
+  });
+
   it('supports full mode with the legacy verbose fields', () => {
     const document = makeDocument('<button>Save</button><p>Body text</p>');
 

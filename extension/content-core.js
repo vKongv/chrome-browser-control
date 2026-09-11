@@ -78,15 +78,129 @@ function roleFor(element) {
   return tag;
 }
 
+function collapseWhitespace(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function isLabelable(element) {
+  const tag = String(element.tagName || '').toLowerCase();
+  if (tag === 'button' || tag === 'meter' || tag === 'output' || tag === 'progress' || tag === 'select' || tag === 'textarea') {
+    return true;
+  }
+  if (tag !== 'input') return false;
+  return String(element.getAttribute('type') || '').toLowerCase() !== 'hidden';
+}
+
+function isButtonTypeInput(element) {
+  if (String(element.tagName || '').toLowerCase() !== 'input') return false;
+  const type = String(element.getAttribute('type') || '').toLowerCase();
+  return type === 'submit' || type === 'button' || type === 'reset';
+}
+
+function textContentExcluding(root, exclude) {
+  const parts = [];
+  function walk(node) {
+    if (node === exclude) return;
+    if (node.nodeType === 3) {
+      parts.push(node.nodeValue || '');
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const tag = String(node.tagName || '').toLowerCase();
+    if (tag === 'img') {
+      const alt = node.getAttribute('alt');
+      if (alt) parts.push(alt);
+      return;
+    }
+    if (tag === 'input' && String(node.getAttribute('type') || '').toLowerCase() === 'image') {
+      const alt = node.getAttribute('alt');
+      if (alt) parts.push(alt);
+      return;
+    }
+    for (const child of node.childNodes) walk(child);
+  }
+  walk(root);
+  return collapseWhitespace(parts.join(''));
+}
+
+function labelledByName(element) {
+  const raw = element.getAttribute('aria-labelledby');
+  if (!raw) return '';
+  const doc = element.ownerDocument;
+  if (!doc?.getElementById) return '';
+  const parts = [];
+  for (const id of raw.trim().split(/\s+/)) {
+    if (!id) continue;
+    const ref = doc.getElementById(id);
+    if (!ref) continue;
+    const text = collapseWhitespace(ref.innerText || ref.textContent || '');
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
+}
+
+function firstLabelableDescendant(root) {
+  if (!root?.querySelectorAll) return null;
+  for (const candidate of root.querySelectorAll('button, input, meter, output, progress, select, textarea')) {
+    if (isLabelable(candidate)) return candidate;
+  }
+  return null;
+}
+
+function associatedLabelName(element) {
+  if (!isLabelable(element)) return '';
+  const doc = element.ownerDocument;
+  if (!doc?.querySelectorAll) return '';
+  const id = element.getAttribute('id');
+  let wrapping = null;
+  let ancestor = element.parentElement;
+  while (ancestor) {
+    if (String(ancestor.tagName || '').toLowerCase() === 'label') {
+      wrapping = ancestor;
+      break;
+    }
+    ancestor = ancestor.parentElement;
+  }
+  const parts = [];
+  for (const label of doc.querySelectorAll('label')) {
+    const forId = label.getAttribute('for');
+    const explicit = Boolean(id && forId === id);
+    const encapsulated = label === wrapping && !forId && firstLabelableDescendant(label) === element;
+    if (!explicit && !encapsulated) continue;
+    const text = textContentExcluding(label, element);
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
+}
+
 function labelFor(element, limit = 160) {
+  const labelledBy = labelledByName(element);
+  if (labelledBy) return labelledBy.slice(0, limit);
+
   const aria = element.getAttribute('aria-label');
   if (aria) return aria.trim().slice(0, limit);
-  const placeholder = element.getAttribute('placeholder');
-  if (placeholder) return placeholder.trim().slice(0, limit);
+
+  const associated = associatedLabelName(element);
+  if (associated) return associated.slice(0, limit);
+
+  if (isButtonTypeInput(element)) {
+    const value = element.getAttribute('value');
+    if (value) return value.trim().slice(0, limit);
+    const title = element.getAttribute('title');
+    if (title) return title.trim().slice(0, limit);
+    return '';
+  }
+
   const title = element.getAttribute('title');
   if (title) return title.trim().slice(0, limit);
-  const value = element.tagName.toLowerCase() === 'input' ? element.getAttribute('value') : '';
-  const text = value || element.innerText || element.textContent || '';
+
+  const placeholder = element.getAttribute('placeholder');
+  if (placeholder) return placeholder.trim().slice(0, limit);
+
+  const tag = element.tagName.toLowerCase();
+  if (tag === 'input') return '';
+
+  const text = element.innerText || element.textContent || '';
   return text.replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
