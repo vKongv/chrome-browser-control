@@ -2,7 +2,7 @@
 
 Manual-first release path for the public npm package. **Do not** publish from GitHub Actions on push or from pull-request workflows. Prefer interactive `npm login` / 2FA on a maintainer machine. Later automation (if ever approved) must use Trusted Publishing / OIDC, not a long-lived classic `NPM_TOKEN` as the primary path.
 
-Current release target: **`0.4.0`** (keep `package.json`, `package-lock.json`, and `extension/manifest.json` aligned).
+Current release target: **`0.4.1`** (keep `package.json`, `package-lock.json`, and `extension/manifest.json` aligned).
 
 ## Choosing the bump
 
