@@ -137,6 +137,14 @@ function labelledByName(element) {
   return parts.join(' ');
 }
 
+function firstLabelableDescendant(root) {
+  if (!root?.querySelectorAll) return null;
+  for (const candidate of root.querySelectorAll('button, input, meter, output, progress, select, textarea')) {
+    if (isLabelable(candidate)) return candidate;
+  }
+  return null;
+}
+
 function associatedLabelName(element) {
   if (!isLabelable(element)) return '';
   const doc = element.ownerDocument;
@@ -155,7 +163,7 @@ function associatedLabelName(element) {
   for (const label of doc.querySelectorAll('label')) {
     const forId = label.getAttribute('for');
     const explicit = Boolean(id && forId === id);
-    const encapsulated = label === wrapping && !forId;
+    const encapsulated = label === wrapping && !forId && firstLabelableDescendant(label) === element;
     if (!explicit && !encapsulated) continue;
     const text = textContentExcluding(label, element);
     if (text) parts.push(text);

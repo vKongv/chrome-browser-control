@@ -374,6 +374,25 @@ describe('extension content core', () => {
     expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Visible' }]);
   });
 
+  it('associates a wrapping label with only its first labelable descendant', () => {
+    const document = makeDocument(`
+      <label>Search <input name="q"> <button type="submit">Go</button></label>
+      <label>Country <input id="c1"> <select id="c2"><option>X</option></select></label>
+      <label>Range <input id="a"> <input id="b"></label>
+    `);
+
+    const snapshot = buildSnapshotFromDocument(document as unknown as Document);
+
+    expect(snapshot.elements).toMatchObject([
+      { role: 'textbox', label: 'Search Go' },
+      { role: 'button', label: 'Go' },
+      { role: 'textbox', label: 'Country X' },
+      { role: 'combobox', label: 'X' },
+      { role: 'textbox', label: 'Range' },
+      { role: 'textbox', label: '' }
+    ]);
+  });
+
   it('supports full mode with the legacy verbose fields', () => {
     const document = makeDocument('<button>Save</button><p>Body text</p>');
 
