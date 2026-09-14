@@ -34,6 +34,7 @@ const EXTENSION_PROTOCOL_MARKER = {
   protocolVersion: 7,
   features: [
     'cdp-trusted-input',
+    'cdp-response-body',
     'document-targeting',
     'act-observe-budget',
     'act-observe',
@@ -91,6 +92,7 @@ const cdpFailClosed = new Map();
 const cdpTtlTimers = new Map();
 const cdpExpectedDetach = new Set();
 const networkIndexes = new Map();
+let nextNetworkIndexGeneration = 1;
 
 function readBodyCaptureOrigins(raw) {
   try {
@@ -113,8 +115,17 @@ function resetNetworkIndex(tabId, patterns) {
     patterns: Array.isArray(patterns) ? patterns.map((item) => String(item)) : [],
     byId: new Map(),
     order: [],
-    generation: 0
+    generation: nextNetworkIndexGeneration++
   });
+}
+
+function isHttpOrHttpsUrl(url) {
+  try {
+    const protocol = new URL(String(url || '')).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch (_error) {
+    return false;
+  }
 }
 
 function urlMatchesWatchPatterns(url, patterns) {
@@ -578,7 +589,7 @@ function handleNetworkEvent(source, method, params) {
     const url = params.request?.url;
     const requestId = params.requestId;
     if (!requestId || !url) return;
-    if (isRestrictedCategoryOrigin(url) || !urlMatchesWatchPatterns(url, index.patterns)) {
+    if (!isHttpOrHttpsUrl(url) || isRestrictedCategoryOrigin(url) || !urlMatchesWatchPatterns(url, index.patterns)) {
       forgetNetworkRow(tabId, requestId);
       return;
     }

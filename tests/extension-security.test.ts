@@ -122,6 +122,8 @@ function loadBackgroundHarness({
   > = [];
   const runtimeMessageReturns: Array<boolean | void> = [];
   const sessionData: Record<string, unknown> = { ...(sessionStore ?? {}) };
+  let localGetAllowedRemaining: number | null = null;
+  let localGetHold: Promise<void> | undefined;
   const FakeDate = class extends Date {
     static now() {
       return now;
@@ -159,7 +161,16 @@ function loadBackgroundHarness({
   const chrome = {
     storage: {
       local: {
-        get: async (defaults: Record<string, unknown>) => ({ ...defaults, ...settings }),
+        get: async (defaults: Record<string, unknown>) => {
+          if (localGetAllowedRemaining !== null) {
+            if (localGetAllowedRemaining > 0) {
+              localGetAllowedRemaining -= 1;
+            } else if (localGetHold) {
+              await localGetHold;
+            }
+          }
+          return { ...defaults, ...settings };
+        },
         set: async (items: Record<string, unknown>) => {
           localStorageWrites.push(items);
         },
@@ -500,6 +511,10 @@ function loadBackgroundHarness({
     firePermissionsRemoved(removed: { permissions?: string[]; origins?: string[] }) {
       for (const listener of permissionRemovedListeners) listener(removed);
     },
+    holdLocalStorageGetAfter(allowCount: number, promise: Promise<void>) {
+      localGetAllowedRemaining = allowCount;
+      localGetHold = promise;
+    },
     sendRuntimeMessage(message: Record<string, unknown>) {
       return new Promise((resolve) => {
         let settled = false;
@@ -810,6 +825,7 @@ describe('extension background origin enforcement', () => {
       protocolVersion: 7,
       features: expect.arrayContaining([
         'cdp-trusted-input',
+        'cdp-response-body',
         'document-targeting',
         'act-observe',
         'navigate-pending-warning',
@@ -5652,6 +5668,41 @@ describe('trusted chrome.debugger tier', () => {
     expect(background.debuggerCommands).toEqual([]);
   });
 
+  it('refuses a body read when generation changes during settings reload and never calls getResponseBody', async () => {
+    let releaseSettings: () => void = () => undefined;
+    const settingsHold = new Promise<void>((resolve) => {
+      releaseSettings = resolve;
+    });
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: () => ({ body: '{"from":"page-a"}', base64Encoded: false })
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-old', loaderId: 'loader-a' });
+    background.debuggerCommands.length = 0;
+
+    background.holdLocalStorageGetAfter(1, settingsHold);
+    const readPromise = background.handleBridgeRequest('cdp_response_body', {
+      sessionTabId: claim.sessionTabId,
+      requestId: 'req-old'
+    });
+    await flushMicrotasks(20);
+    expect(background.debuggerCommands).toEqual([]);
+
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://allowed.example/other' });
+    await flushMicrotasks(12);
+    releaseSettings();
+    await expect(readPromise).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+    expect(background.debuggerCommands.some((command) => command.method === 'Network.getResponseBody')).toBe(false);
+  });
+
   it('refuses an in-flight body read after the index generation changes on navigation', async () => {
     let releaseBody: () => void = () => undefined;
     const bodyHold = new Promise<void>((resolve) => {
@@ -5694,6 +5745,72 @@ describe('trusted chrome.debugger tier', () => {
     await flushMicrotasks(12);
     releaseBody();
     await expect(readPromise).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+  });
+
+  it('refuses an in-flight body read after a watch reset reuses the request id', async () => {
+    let releaseBody: () => void = () => undefined;
+    const bodyHold = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: async (_target, method) => {
+        if (method === 'Network.getResponseBody') {
+          await bodyHold;
+          return { body: '{"from":"watch-1"}', base64Encoded: false };
+        }
+        return {};
+      }
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, { requestId: 'req-reused' });
+    background.debuggerCommands.length = 0;
+
+    const readPromise = background.handleBridgeRequest('cdp_response_body', {
+      sessionTabId: claim.sessionTabId,
+      requestId: 'req-reused'
+    });
+    for (let i = 0; i < 20; i += 1) {
+      if (background.debuggerCommands.some((command) => command.method === 'Network.getResponseBody')) break;
+      await Promise.resolve();
+    }
+    expect(background.debuggerCommands).toEqual([
+      { tabId: 2, method: 'Network.getResponseBody', params: { requestId: 'req-reused' } }
+    ]);
+
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, {
+      requestId: 'req-reused',
+      url: 'https://graph.facebook.com/v19.0/other'
+    });
+    releaseBody();
+    await expect(readPromise).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+  });
+
+  it('does not index non-http(s) requests including chrome-extension resources', async () => {
+    const background = loadCdpBackground();
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, {
+      requestId: 'req-ext',
+      url: 'chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef/script.js'
+    });
+    fireCompletedRequest(background, {
+      requestId: 'req-data',
+      url: 'data:text/plain,hello'
+    });
+    fireCompletedRequest(background, { requestId: 'req-ok' });
+
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests.map((row: { requestId: string }) => row.requestId)).toEqual(['req-ok']);
+    expect(JSON.stringify(listed)).not.toMatch(/chrome-extension:|data:text\/plain/);
   });
 
   it('refuses getResponseBody for a denylisted row even if that row is already in the index', async () => {
