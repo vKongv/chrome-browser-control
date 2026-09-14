@@ -71,6 +71,30 @@ describe('network body metadata log', () => {
     expect(readFileSync(path, 'utf8')).not.toMatch(/bodyHash|"body"/);
   });
 
+  it('keeps query parameter names in the logged URL and redacts their values', () => {
+    useTempHome();
+    appendNetworkBodyRead({
+      origin: 'https://graph.facebook.com',
+      url: 'https://graph.facebook.com/v19.0/me?access_token=secret-token-value&fields=id,name',
+      method: 'GET',
+      status: 200,
+      bytes: 32,
+      session: 'owner-1'
+    });
+
+    const path = getNetworkBodyLogPath();
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    const text = readFileSync(path, 'utf8');
+    expect(text).not.toMatch(/secret-token-value/);
+    expect(text).not.toMatch(/id,name/);
+    const record = JSON.parse(text.trim());
+    expect(record.url).toBe(
+      'https://graph.facebook.com/v19.0/me?access_token=[redacted]&fields=[redacted]'
+    );
+    expect(record.origin).toBe('https://graph.facebook.com');
+    expect(text).not.toMatch(/bodyHash|"body"/);
+  });
+
   it('counts zero when the log file is absent', () => {
     useTempHome();
     expect(countNetworkBodyLogEntries()).toBe(0);
