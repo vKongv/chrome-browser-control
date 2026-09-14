@@ -168,7 +168,7 @@ function forgetNetworkRow(tabId, requestId) {
 function bumpNetworkIndexGeneration(tabId) {
   const index = networkIndexes.get(tabId);
   if (!index) return;
-  index.generation = (index.generation || 0) + 1;
+  index.generation = nextNetworkIndexGeneration++;
 }
 
 // Marker is requestId === loaderId plus a URL match. That invariant holds for
@@ -607,7 +607,7 @@ function handleNetworkEvent(source, method, params) {
   }
   if (method === 'Network.responseReceived') {
     const responseUrl = params.response?.url;
-    if (responseUrl && isRestrictedCategoryOrigin(responseUrl)) {
+    if (responseUrl && (!isHttpOrHttpsUrl(responseUrl) || isRestrictedCategoryOrigin(responseUrl))) {
       forgetNetworkRow(tabId, params.requestId);
       return;
     }

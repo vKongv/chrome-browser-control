@@ -150,7 +150,7 @@ If your MCP host uses a config file, keep it private and outside the repository.
 
 ## Tools
 
-- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, `extension.cdpEnabled` / `extension.attachedTabs` report the trusted-input tier, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `7` includes the `cdp-trusted-input` feature marker.
+- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, `extension.cdpEnabled` / `extension.attachedTabs` report the trusted-input tier, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `7` includes the `cdp-trusted-input` and `cdp-response-body` feature markers.
 - `name_session`: sets a human-readable session name for status/debugging.
 - `list_tabs`: lists tabs whose URL origin is allowed in the extension popup. When every open tab is filtered out, returns `{ tabs: [], detail, hiddenTabCount, allowedOrigins? }` instead of a bare `[]`. Wildcard mode is labeled clearly in `allowedOrigins`.
 - `list_frames`: lists current frame documents for an allowed tab using Chrome's frame registry. Operable active HTTP(S) documents include a `documentId`; policy-blocked, host-permission-denied, unsupported, fenced, and non-active rows retain hierarchy/status only and redact URL and document identity.
@@ -275,7 +275,7 @@ npm audit
 
 `npm run benchmark:snapshots` is an alias for the same compact-vs-full benchmark. The benchmark prints compact bytes, full bytes, and reduction percentage; compact mode should stay at least 50% smaller on the dense fixture.
 
-After editing files under `extension/`, run `npm run build`, run `cbctl setup`, then reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 30`, extension protocol version `7`, and the `cdp-trusted-input` feature marker when both sides are current.
+After editing files under `extension/`, run `npm run build`, run `cbctl setup`, then reload the unpacked extension on `chrome://extensions` before running browser e2e checks. After adapter/server changes, rebuild and restart the MCP host too. A stale loaded background service worker or tool catalog can keep serving older behavior; `browser_status` should report `adapter.registeredToolCount: 30`, extension protocol version `7`, and the `cdp-trusted-input` and `cdp-response-body` feature markers when both sides are current.
 
 ## Limitations
 

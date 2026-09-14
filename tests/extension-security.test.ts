@@ -840,6 +840,16 @@ describe('extension background origin enforcement', () => {
     });
   });
 
+  it('names cdp-response-body alongside cdp-trusted-input in the protocol 7 currentness check', () => {
+    const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8');
+    const currentness = [...readme.matchAll(/protocol version `7`[^\n]*feature marker/gi)];
+    expect(currentness.length).toBeGreaterThanOrEqual(2);
+    for (const match of currentness) {
+      expect(match[0]).toContain('cdp-trusted-input');
+      expect(match[0]).toContain('cdp-response-body');
+    }
+  });
+
   it('discovers allowed same-origin and cross-origin frames and redacts blocked or unsupported rows', async () => {
     const frames = [
       {
@@ -5794,6 +5804,55 @@ describe('trusted chrome.debugger tier', () => {
     await expect(readPromise).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
   });
 
+  it('refuses an in-flight body read after navigation then a watch reset reuses the request id', async () => {
+    let releaseBody: () => void = () => undefined;
+    const bodyHold = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const background = loadCdpBackground({
+      settings: {
+        bridgeUrl: 'ws://127.0.0.1:8765',
+        token,
+        allowedOrigins: ['https://allowed.example/*'],
+        bodyCaptureOrigins: ['https://graph.facebook.com'],
+        enableCdp: true
+      },
+      debuggerCommandHandler: async (_target, method) => {
+        if (method === 'Network.getResponseBody') {
+          await bodyHold;
+          return { body: '{"from":"watch-1-after-navigation"}', base64Encoded: false };
+        }
+        return {};
+      }
+    });
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    background.fireNavigationCommitted({ tabId: 2, frameId: 0, url: 'https://allowed.example/other' });
+    await flushMicrotasks(12);
+    fireCompletedRequest(background, { requestId: 'req-reused' });
+    background.debuggerCommands.length = 0;
+
+    const readPromise = background.handleBridgeRequest('cdp_response_body', {
+      sessionTabId: claim.sessionTabId,
+      requestId: 'req-reused'
+    });
+    for (let i = 0; i < 20; i += 1) {
+      if (background.debuggerCommands.some((command) => command.method === 'Network.getResponseBody')) break;
+      await Promise.resolve();
+    }
+    expect(background.debuggerCommands).toEqual([
+      { tabId: 2, method: 'Network.getResponseBody', params: { requestId: 'req-reused' } }
+    ]);
+
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    fireCompletedRequest(background, {
+      requestId: 'req-reused',
+      url: 'https://graph.facebook.com/v19.0/other'
+    });
+    releaseBody();
+    await expect(readPromise).rejects.toThrow('CDP_REQUEST_NOT_FOUND');
+  });
+
   it('does not index non-http(s) requests including chrome-extension resources', async () => {
     const background = loadCdpBackground();
     const { claim } = await claimAndAttach(background);
@@ -5811,6 +5870,29 @@ describe('trusted chrome.debugger tier', () => {
     const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
     expect(listed.requests.map((row: { requestId: string }) => row.requestId)).toEqual(['req-ok']);
     expect(JSON.stringify(listed)).not.toMatch(/chrome-extension:|data:text\/plain/);
+  });
+
+  it('forgets a row when responseReceived overwrites the URL with a non-http(s) scheme', async () => {
+    const background = loadCdpBackground();
+    const { claim } = await claimAndAttach(background);
+    await background.handleBridgeRequest('cdp_network_watch', { sessionTabId: claim.sessionTabId });
+    background.fireDebuggerEvent(2, 'Network.requestWillBeSent', {
+      requestId: 'req-overwrite',
+      wallTime: 1_700_000_000,
+      request: { url: 'https://graph.facebook.com/start', method: 'GET' }
+    });
+    background.fireDebuggerEvent(2, 'Network.responseReceived', {
+      requestId: 'req-overwrite',
+      response: {
+        status: 200,
+        url: 'chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef/script.js',
+        mimeType: 'application/javascript'
+      }
+    });
+
+    const listed = await background.handleBridgeRequest('cdp_network_requests', { sessionTabId: claim.sessionTabId });
+    expect(listed.requests).toEqual([]);
+    expect(JSON.stringify(listed)).not.toMatch(/chrome-extension:/);
   });
 
   it('refuses getResponseBody for a denylisted row even if that row is already in the index', async () => {
