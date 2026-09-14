@@ -28,8 +28,8 @@
     "access": "public"
   },
   "bin": {
-    "cbctl": "./dist/cli/main.js",
-    "chrome-browser-control": "./dist/cli/main.js"
+    "cbctl": "dist/cli/main.js",
+    "chrome-browser-control": "dist/cli/main.js"
   },
   "files": [
     "dist",
