@@ -49,7 +49,7 @@ export function buildNextAction(inputs: NextActionInputs): string | undefined {
   }
 
   if (inputs.adapterConnected && !inputs.extensionConnected) {
-    return 'Load the unpacked extension from chrome://extensions, open the popup, enter the same bridge URL and pairing token, then click Save and reconnect.';
+    return 'Wait a few seconds and retry browser_status; the extension reconnects on its own after a broker restart or a network blip. If it is still disconnected, load the unpacked extension from chrome://extensions, check the bridge URL and pairing token in the popup, then click Save and reconnect.';
   }
 
   if (inputs.ready) {

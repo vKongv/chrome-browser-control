@@ -625,7 +625,8 @@ describe('registerBrowserTools', () => {
       extension: { connected: false },
       error: 'No Chrome extension connected to broker'
     });
-    expect(status.nextAction).toContain('extension');
+    expect(status.nextAction).toMatch(/retry browser_status/i);
+    expect(status.nextAction).toContain('Save and reconnect');
   });
 
   it('keeps broker reachable when connect fails after ensureBroker succeeded', async () => {
@@ -759,6 +760,18 @@ describe('registerBrowserTools', () => {
         handshakeTimedOut: true
       })
     ).toContain('pairing handshake');
+  });
+
+  it('coaches retry-first when adapter is connected and extension is not', () => {
+    const action = buildNextAction({
+      ready: false,
+      brokerReachable: true,
+      adapterConnected: true,
+      extensionConnected: false,
+      brokerPort: 8765
+    });
+    expect(action).toMatch(/retry browser_status/i);
+    expect(action).toContain('Save and reconnect');
   });
 
   it('reports port-not-broker coaching from ensureBroker lifecycle', async () => {
