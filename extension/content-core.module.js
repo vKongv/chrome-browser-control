@@ -1712,6 +1712,9 @@ export function waitForCondition(options = {}, documentRef = document) {
   let settleChanged = false;
   let settleLastText;
   let settleSince = 0;
+  // Whether the previous check saw a loading indicator. The quiet interval restarts at the first check that
+  // sees none, so it never includes time spent loading.
+  let wasBusy = false;
   let pending;
   let busy;
 
@@ -1726,11 +1729,13 @@ export function waitForCondition(options = {}, documentRef = document) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
         const scopedText = scopedTextFor(scopeOptions);
         busy = busyIndicatorFor(documentRef, scopeOptions, scopedText);
+        const loadingSeen = Boolean(busy) || wasBusy;
+        wasBusy = Boolean(busy);
 
         if (contentStableMs) {
           const length = scopedText.length;
           if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
-            if (length !== contentStableLastLength || busy) {
+            if (length !== contentStableLastLength || loadingSeen) {
               // Busy time does not count: the quiet interval starts once loading ends.
               contentStableLastLength = length;
               contentStableSince = now;
@@ -1748,7 +1753,7 @@ export function waitForCondition(options = {}, documentRef = document) {
           const hash = textHash(scopedText);
           if (settleBaseline === undefined) settleBaseline = hash;
           else if (hash !== settleBaseline) settleChanged = true;
-          if (scopedText !== settleLastText || busy) {
+          if (scopedText !== settleLastText || loadingSeen) {
             settleLastText = scopedText;
             settleSince = now;
           }

@@ -1999,11 +1999,12 @@ describe('settled waits', () => {
       main.innerHTML = rows(['VE-new-1']);
       const wait = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 5000 }, doc);
       const settled = await settleState(wait);
-      await vi.advanceTimersByTimeAsync(400);
+      // Checks run every 100 ms; loading ends at 350 ms, between two checks.
+      await vi.advanceTimersByTimeAsync(350);
       main.removeAttribute('aria-busy');
-      await vi.advanceTimersByTimeAsync(100);
-      expect(settled()).toBe(false);
       await vi.advanceTimersByTimeAsync(200);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
       await expect(wait).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
     } finally {
       vi.useRealTimers();
@@ -2011,8 +2012,8 @@ describe('settled waits', () => {
   });
 
   it('counts a new document with the same scoped text as a change', async () => {
-    // A second module instance stands in for the content script injected into the new document.
-    const otherInstance = await import('../extension/content-core.module.js?next-document');
+    // A second instance of the generated script stands in for the content script injected into the new document.
+    const otherInstance = loadContentCore();
     vi.useFakeTimers();
     try {
       const html = `<main>${rows(['VE-1'])}</main>`;
@@ -2126,13 +2127,13 @@ describe('settled waits', () => {
       const document = makeDocument(`<main><div role="progressbar"></div>${rows(['VE-1', 'VE-2', 'VE-3'])}</main>`);
       const wait = waitForCondition({ contentStableMs: 200, timeoutMs: 5000 }, document as unknown as Document);
       const settled = await settleState(wait);
-      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(650);
       expect(settled()).toBe(false);
       document.querySelector('[role="progressbar"]')!.remove();
-      // The quiet interval starts when loading ends, not when the text last changed.
-      await vi.advanceTimersByTimeAsync(100);
-      expect(settled()).toBe(false);
+      // The quiet interval starts at the first check after loading ends (700 ms), not at the last busy check.
       await vi.advanceTimersByTimeAsync(200);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
       await expect(wait).resolves.toMatchObject({ matched: true, condition: 'contentStableMs' });
     } finally {
       vi.useRealTimers();
