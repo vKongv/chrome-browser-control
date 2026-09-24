@@ -1629,6 +1629,10 @@ function hasPresenceCondition(options) {
   return Boolean(options.urlIncludes || options.selector || options.textInScope || options.text);
 }
 
+// Identifies this document instance: a baseline taken before a click that loads a new page never matches
+// the new page, even when both render the same scoped text.
+const DOCUMENT_TOKEN = Math.random().toString(36).slice(2, 10);
+
 // 53-bit string hash; wait baselines travel through the background as this instead of the full text.
 function textHash(text) {
   let h1 = 0xdeadbeef;
@@ -1640,7 +1644,7 @@ function textHash(text) {
   }
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return `t${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}:${text.length}`;
+  return `${DOCUMENT_TOKEN}:${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}:${text.length}`;
 }
 
 const BUSY_SELECTOR = '[aria-busy="true"],[role="progressbar"],progress';
@@ -1728,10 +1732,11 @@ function waitForCondition(options = {}, documentRef = document) {
         if (contentStableMs) {
           const length = scopedText.length;
           if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
-            if (length !== contentStableLastLength) {
+            if (length !== contentStableLastLength || busy) {
+              // Busy time does not count: the quiet interval starts once loading ends.
               contentStableLastLength = length;
               contentStableSince = now;
-            } else if (!busy && now - contentStableSince >= contentStableMs) {
+            } else if (now - contentStableSince >= contentStableMs) {
               condition = 'contentStableMs';
             }
           } else {
@@ -1745,11 +1750,11 @@ function waitForCondition(options = {}, documentRef = document) {
           const hash = textHash(scopedText);
           if (settleBaseline === undefined) settleBaseline = hash;
           else if (hash !== settleBaseline) settleChanged = true;
-          if (scopedText !== settleLastText) {
+          if (scopedText !== settleLastText || busy) {
             settleLastText = scopedText;
             settleSince = now;
           }
-          if (settleChanged && !busy && now - settleSince >= settledMs) condition = 'settledMs';
+          if (settleChanged && now - settleSince >= settledMs) condition = 'settledMs';
           pending = !settleChanged ? 'noChange' : busy ? 'busy' : 'changing';
         }
       }

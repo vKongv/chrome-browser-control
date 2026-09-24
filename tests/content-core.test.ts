@@ -1988,6 +1988,48 @@ describe('settled waits', () => {
     }
   });
 
+  it('starts the settle interval when loading ends, not when the text last changed', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main>${rows(['VE-old-1'])}</main>`);
+      const doc = document as unknown as Document;
+      const main = document.querySelector('main')!;
+      const { baselineHash } = probeWaitCondition({ settledMs: 200 }, doc);
+      main.setAttribute('aria-busy', 'true');
+      main.innerHTML = rows(['VE-new-1']);
+      const wait = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 5000 }, doc);
+      const settled = await settleState(wait);
+      await vi.advanceTimersByTimeAsync(400);
+      main.removeAttribute('aria-busy');
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(wait).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts a new document with the same scoped text as a change', async () => {
+    // A second module instance stands in for the content script injected into the new document.
+    const otherInstance = await import('../extension/content-core.module.js?next-document');
+    vi.useFakeTimers();
+    try {
+      const html = `<main>${rows(['VE-1'])}</main>`;
+      const oldDoc = makeDocument(html) as unknown as Document;
+      const newDoc = makeDocument(html) as unknown as Document;
+      const { baselineHash } = otherInstance.probeWaitCondition({ settledMs: 200 }, oldDoc);
+      const sameInstance = probeWaitCondition({ settledMs: 200 }, oldDoc).baselineHash;
+      const same = waitForCondition({ settledMs: 200, baselineHash: sameInstance, timeoutMs: 600 }, newDoc);
+      const replaced = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 600 }, newDoc);
+      await vi.advanceTimersByTimeAsync(700);
+      await expect(same).resolves.toMatchObject({ matched: false, pending: 'noChange' });
+      await expect(replaced).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports noChange when the scoped text never leaves the baseline', async () => {
     vi.useFakeTimers();
     try {
@@ -2087,7 +2129,10 @@ describe('settled waits', () => {
       await vi.advanceTimersByTimeAsync(600);
       expect(settled()).toBe(false);
       document.querySelector('[role="progressbar"]')!.remove();
+      // The quiet interval starts when loading ends, not when the text last changed.
       await vi.advanceTimersByTimeAsync(100);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
       await expect(wait).resolves.toMatchObject({ matched: true, condition: 'contentStableMs' });
     } finally {
       vi.useRealTimers();

@@ -65,6 +65,7 @@ If a page links its own Markdown or raw view (`markdownAlternate` in a snapshot,
 5. Wait and verify after actions.
    - After an action that loads or replaces content (search, filter, open a row, submit), wait on the action itself with `after: { waitFor: { settledMs: 750 } }`. It waits until the scoped content changes, stops changing, and shows no loading indicator (`aria-busy`, an indeterminate progressbar, a "Loading…" line).
    - Do not wait on text or selectors that were on the page before the action: sidebar labels, the URL of a single-page app, old table rows. They match at once. `heldBeforeAction: true` in the wait result means exactly that; wait again with `settledMs`.
+   - `settledMs` only sees loading states that are marked up (`aria-busy`, a progressbar without a value) or written as text ("Loading…"). A CSS-only spinner or skeleton rows can look settled; if the result looks like a loading shell, wait again or raise `settledMs`.
    - A `settledMs` timeout reports `pending`: `noChange` (the action changed nothing in scope; check scope or the action), `busy` (still loading; `busy` says what), `changing` (content never held still; narrow scope or `excludeSelectors`).
    - Use `wait_for` for expected selector/text/URL changes, selector absence, scoped text, or bounded content stability. Its `settledMs` baseline is the text when the wait starts, so a change that finished before the call is missed.
    - Use `page_status` for title, URL, ready state, visibility, viewport, scroll, and lightweight resource counts.
