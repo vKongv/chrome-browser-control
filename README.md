@@ -37,7 +37,14 @@ cbctl doctor
 
 ### Agent skill (separate from npm)
 
-The runtime agent skill under `skills/chrome-browser-control/` is **not** shipped inside the npm package. After installing the CLI, obtain the skill from this repository (or skills.sh) if your agent host uses skills.
+The runtime agent skill under `skills/chrome-browser-control/` is **not** shipped inside the npm package. Install it with [skills.sh](https://skills.sh), which links it into every agent host you pick (Claude Code, Codex, Cursor, and others) and records it for updates:
+
+```bash
+npx skills add vkongv/chrome-browser-control -g -s chrome-browser-control
+npx skills update -g   # later: pull the latest published skill
+```
+
+`skills update` is manual; nothing updates the skill in the background. Remove hand-copied skill folders (for example `~/.claude/skills/chrome-browser-control`) before the first `add` so they do not shadow the tracked install.
 
 CLI commands (`cbctl` or `chrome-browser-control`):
 
