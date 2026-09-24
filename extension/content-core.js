@@ -34,6 +34,18 @@ const MAX_IGNORE_ROLES = 20;
 const DEFAULT_IGNORE_ROLES = ['dialog'];
 const DIALOG_SELECTOR = 'dialog, [role="dialog"], [role="alertdialog"]';
 const MIN_CONTENT_STABLE_TEXT_LENGTH = 50;
+const INPUT_TYPE_ROLES = {
+  button: 'button',
+  submit: 'button',
+  reset: 'button',
+  image: 'button',
+  checkbox: 'checkbox',
+  radio: 'radio',
+  range: 'slider',
+  number: 'spinbutton',
+  search: 'searchbox'
+};
+const DECORATIVE_ROLES = new Set(['img', 'image', 'presentation', 'none', 'graphics-document', 'graphics-object', 'graphics-symbol']);
 const INTERACTIVE_ROLES = new Set([
   'link', 'button', 'textbox', 'searchbox', 'combobox', 'listbox', 'option', 'checkbox', 'radio', 'switch',
   'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'treeitem', 'summary'
@@ -74,10 +86,12 @@ function isHiddenTokenLike(element) {
 function roleFor(element) {
   const explicit = element.getAttribute('role');
   if (explicit) return explicit;
+  if (isEditableRegion(element)) return 'textbox';
   const tag = element.tagName.toLowerCase();
   if (tag === 'a') return 'link';
   if (tag === 'button') return 'button';
-  if (tag === 'input' || tag === 'textarea') return 'textbox';
+  if (tag === 'input') return INPUT_TYPE_ROLES[String(element.getAttribute('type') || '').toLowerCase()] || 'textbox';
+  if (tag === 'textarea') return 'textbox';
   if (tag === 'select') return 'combobox';
   return tag;
 }
@@ -182,7 +196,7 @@ function labelFor(element, limit = 160) {
   if (labelledBy) return labelledBy.slice(0, limit);
 
   const aria = element.getAttribute('aria-label');
-  if (aria) return aria.trim().slice(0, limit);
+  if (aria) return collapseWhitespace(aria).slice(0, limit);
 
   const associated = associatedLabelName(element);
   if (associated) return associated.slice(0, limit);
@@ -209,26 +223,41 @@ function labelFor(element, limit = 160) {
   return imageAltName(element).slice(0, limit);
 }
 
+function isEditableRegion(element) {
+  const value = element.getAttribute('contenteditable');
+  return value !== null && value.toLowerCase() !== 'false';
+}
+
 function isInteractiveElement(element) {
-  return INTERACTIVE_ROLES.has(roleFor(element).toLowerCase()) || element.hasAttribute('contenteditable');
+  if (element.tagName.toLowerCase() === 'input' && String(element.getAttribute('type') || '').toLowerCase() === 'hidden') {
+    return false;
+  }
+  return INTERACTIVE_ROLES.has(roleFor(element).toLowerCase()) || isEditableRegion(element);
+}
+
+function isAriaHiddenBetween(node, root) {
+  for (let current = node; current && current !== root; current = current.parentElement) {
+    if (current.getAttribute?.('aria-hidden') === 'true') return true;
+  }
+  return false;
 }
 
 // Name from content counts <img alt> as text, but innerText leaves alt out, so
 // icon-only controls such as <div role="button"><img alt="Thumbs up"></div> read as "".
 function imageAltName(element) {
   return [...element.querySelectorAll('img[alt]')]
-    .filter((img) => !img.closest('[aria-hidden="true"]'))
+    .filter((img) => !isAriaHiddenBetween(img, element))
     .map((img) => img.getAttribute('alt').trim())
     .filter(Boolean)
     .join(' ');
 }
 
-// aria-hidden="true" marks decoration the page keeps out of the accessibility tree,
-// such as the icon inside an already-named button. Interactive elements stay even
-// under aria-hidden: modal libraries hide the page behind a dialog this way, and a
-// stale aria-hidden must not empty the element list.
+// aria-hidden="true" marks content the page keeps out of the accessibility tree.
+// Only decorative roles (icons, images) are dropped: modal libraries also hide the
+// page behind a dialog this way, and a stale aria-hidden must not remove controls,
+// alerts, or headings from the element list.
 function isAriaHiddenDecoration(element) {
-  return Boolean(element.closest('[aria-hidden="true"]')) && !isInteractiveElement(element);
+  return DECORATIVE_ROLES.has(roleFor(element).toLowerCase()) && Boolean(element.closest('[aria-hidden="true"]'));
 }
 
 function isInteresting(element) {
@@ -605,6 +634,35 @@ function oneLine(text) {
   return text.replace(/\s*\n\s*/g, ' ').trim();
 }
 
+const CONTENT_BLOCK_SELECTOR = 'h1,h2,h3,h4,h5,h6,p,ul,ol,li,dl,table,pre,blockquote';
+// Matches one inline ref marker: [link text](ref=h3) or [role "label" ref=h4].
+const INLINE_REF_PATTERN = /\[(?:[^[\]\\\n]|\\.)*\]\(ref=h[0-9a-z]+\)|\[[A-Za-z-]+(?: "(?:[^"\\\n]|\\.)*")? ref=h[0-9a-z]+\]/g;
+
+// Marker text stays on one line with its delimiters escaped, so a label such as
+// "A] B" cannot end the marker early.
+function escapeMarkerText(value, extra = '') {
+  const pattern = extra ? /[\\[\]"]/g : /[\\[\]]/g;
+  return collapseWhitespace(value).replace(pattern, '\\$&');
+}
+
+function explicitNameFor(element) {
+  return labelledByName(element) || (element.getAttribute('aria-label') || element.getAttribute('title') || '').trim();
+}
+
+// Cut at textLimit, but never inside an inline ref marker.
+function truncateText(text, limit) {
+  if (text.length <= limit) return text;
+  let cut = limit;
+  for (const match of text.matchAll(INLINE_REF_PATTERN)) {
+    if (match.index >= limit) break;
+    if (match.index + match[0].length > limit) {
+      cut = match.index;
+      break;
+    }
+  }
+  return text.slice(0, cut).replace(/\s+$/, '');
+}
+
 function createScopedTextRenderer(scopeRoot, scopeOptions) {
   const excludeSelectors = scopeOptions.excludeSelectors.filter((selector) => {
     try {
@@ -617,8 +675,10 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
   const { ignoreRoles, pruneHiddenDialogs, inlineRefs } = scopeOptions;
 
   function isExcluded(element) {
-    const tag = element.tagName.toLowerCase();
-    if (TEXT_SKIP_TAGS.has(tag)) return true;
+    return TEXT_SKIP_TAGS.has(element.tagName.toLowerCase()) || isScopeExcluded(element);
+  }
+
+  function isScopeExcluded(element) {
     if (element.hidden) return true;
     if (element === scopeRoot) return false;
     if (excludeSelectors.some((selector) => element.matches(selector))) return true;
@@ -735,20 +795,38 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
     parts.push(1, { raw: `${'  '.repeat(Math.max(0, context.listDepth))}${marker}${content}` }, 1);
   }
 
-  // Links keep their text in reading order: [API docs](ref=h3). Other controls
-  // name their role, and their label when they have one: [button "Copy" ref=h4].
-  function inlineRefMarker(element, { ref, role, label }, context) {
-    if (role === 'link') {
+  // A control that holds page content (an editable region, a card link, a button
+  // with a link inside) keeps that content: its marker goes in front instead.
+  function wrapsContent(element) {
+    if (isEditableRegion(element)) return true;
+    if (element.querySelector(CONTENT_BLOCK_SELECTOR)) return true;
+    return [...element.querySelectorAll(INTERESTING_SELECTOR)].some((nested) => inlineRefs.has(nested));
+  }
+
+  function controlMarker(role, label, ref) {
+    return label ? `[${role} "${escapeMarkerText(label, '"')}" ref=${ref}]` : `[${role} ref=${ref}]`;
+  }
+
+  function renderInlineRef(element, inlineRef, style, parts, context) {
+    const { ref, role, label } = inlineRef;
+    const block = isBlockDisplay(style.display);
+    if (block) parts.push(1);
+    if (wrapsContent(element)) {
+      if (context.visible) parts.push(controlMarker(role, explicitNameFor(element), ref), ' ');
+      renderChildren(element, parts, context);
+    } else if (context.visible && role === 'link') {
       const linkParts = [];
       renderChildren(element, linkParts, context);
-      const text = oneLine(joinTextParts(linkParts)) || label;
-      return text ? `[${text}](ref=${ref})` : `[link ref=${ref}]`;
+      const text = oneLine(joinTextParts(linkParts)) || collapseWhitespace(label);
+      parts.push(text ? `[${escapeMarkerText(text)}](ref=${ref})` : `[link ref=${ref}]`);
+    } else if (context.visible) {
+      parts.push(' ', controlMarker(role, label, ref), ' ');
     }
-    return label ? `[${role} "${label.replace(/"/g, '\\"')}" ref=${ref}]` : `[${role} ref=${ref}]`;
+    if (block) parts.push(1);
   }
 
   function renderElement(element, parts, context) {
-    if (isExcluded(element)) return;
+    if (isScopeExcluded(element)) return;
     const style = textStyleFor(element);
     if (style.display === 'none') return;
     const tag = element.tagName.toLowerCase();
@@ -761,13 +839,10 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
 
     const inlineRef = inlineRefs?.get(element);
     if (inlineRef) {
-      if (!visible) return;
-      const block = isBlockDisplay(style.display);
-      if (block) parts.push(1);
-      parts.push(inlineRefMarker(element, inlineRef, childContext));
-      if (block) parts.push(1);
+      renderInlineRef(element, inlineRef, style, parts, childContext);
       return;
     }
+    if (TEXT_SKIP_TAGS.has(tag)) return;
 
     if (tag === 'br') {
       if (context.visible) parts.push({ raw: '\n' });
@@ -1025,8 +1100,8 @@ function bodyTextFor(documentRef) {
   return (documentRef.body?.innerText || documentRef.body?.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
-function textSnapshotMeta(bodyText, textLimit, options) {
-  const textBytesOmitted = Math.max(0, bodyText.length - textLimit);
+function textSnapshotMeta(bodyText, returnedText, textLimit, options) {
+  const textBytesOmitted = Math.max(0, bodyText.length - returnedText.length);
   const meta = {
     textLimitApplied: textLimit,
     textTotalLength: bodyText.length,
@@ -1117,7 +1192,8 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
   cleanupRefStore(documentRef, now);
 
   const bodyText = scopedTextFor({ ...scopeOptions, inlineRefs });
-  const textMeta = textSnapshotMeta(bodyText, textLimit, options);
+  const returnedText = truncateText(bodyText, textLimit);
+  const textMeta = textSnapshotMeta(bodyText, returnedText, textLimit, options);
   const markdownAlternate = markdownAlternateFor(documentRef);
   const scopeMeta = {
     scopeApplied: scopeOptions.scopeApplied,
@@ -1133,7 +1209,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
       url: documentRef.location?.href,
       elements: items,
       omittedElements: Math.max(0, elements.length - selected.length),
-      text: bodyText.slice(0, textLimit),
+      text: returnedText,
       ...textMeta,
       ...scopeMeta
     };
@@ -1145,7 +1221,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
     mode: 'compact',
     elements: items,
     omittedElements: Math.max(0, elements.length - selected.length),
-    textPreview: bodyText.slice(0, textLimit),
+    textPreview: returnedText,
     ...textMeta,
     regions: regionSummaries(documentRef, selected),
     ...scopeMeta

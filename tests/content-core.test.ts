@@ -274,8 +274,8 @@ describe('extension content core', () => {
       { role: 'textbox', label: 'Customer name:' },
       { role: 'textbox', label: 'Telephone:' },
       { role: 'textbox', label: 'E-mail address:' },
-      { role: 'textbox', label: 'Small' },
-      { role: 'textbox', label: 'Bacon' },
+      { role: 'radio', label: 'Small' },
+      { role: 'checkbox', label: 'Bacon' },
       { role: 'textbox', label: 'Preferred delivery time:' },
       { role: 'textbox', label: 'Delivery instructions:' },
       { role: 'button', label: 'Submit order' }
@@ -336,7 +336,7 @@ describe('extension content core', () => {
 
     const snapshot = buildSnapshotFromDocument(document as unknown as Document);
 
-    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Save' }]);
+    expect(snapshot.elements).toMatchObject([{ role: 'button', label: 'Save' }]);
   });
 
   it('includes img and input type=image alt text from associated labels', () => {
@@ -349,7 +349,7 @@ describe('extension content core', () => {
 
     expect(snapshot.elements).toMatchObject([
       { role: 'textbox', label: 'Email' },
-      { role: 'textbox', label: '' },
+      { role: 'button', label: '' },
       { role: 'textbox', label: 'Portrait' }
     ]);
   });
@@ -363,8 +363,8 @@ describe('extension content core', () => {
     const snapshot = buildSnapshotFromDocument(document as unknown as Document);
 
     expect(snapshot.elements).toMatchObject([
-      { role: 'textbox', label: '' },
-      { role: 'textbox', label: '' }
+      { role: 'radio', label: '' },
+      { role: 'checkbox', label: '' }
     ]);
   });
 
@@ -1243,6 +1243,8 @@ describe('extension content core', () => {
           <p style="display:none">Display none copy</p>
           <p style="visibility:hidden">Invisible copy</p>
           <details><summary>More info</summary><p>Collapsed body</p></details>
+          <video>Video fallback copy</video>
+          <canvas>Canvas fallback copy</canvas>
         </main>
       `);
       expect(withoutRefIds(text)).toBe('Visible copy\n\n[summary "More info" ref=*]');
@@ -1378,6 +1380,78 @@ describe('extension content core', () => {
       await expect(
         waitForCondition({ textInScope: 'Read the API docs now', timeoutMs: 50 }, document as unknown as Document)
       ).resolves.toMatchObject({ matched: true, condition: 'textInScope' });
+    });
+
+    it('keeps editable region text and marks only editable regions', () => {
+      const snapshot = snap(`
+        <main>
+          <div contenteditable="true" aria-label="Message">${'draft '.repeat(40)}</div>
+          <p contenteditable="false">${'read only '.repeat(27)}</p>
+        </main>
+      `);
+      const editor = snapshot.elements.find((item: any) => item.label === 'Message');
+      expect(editor.role).toBe('textbox');
+      expect(snapshot.textPreview).toBe(
+        `[textbox "Message" ref=${editor.ref}] ${'draft '.repeat(40).trim()}\n\n${'read only '.repeat(27).trim()}`
+      );
+    });
+
+    it('marks form fields with their label and role but never their value', () => {
+      const snapshot = snap(`
+        <main>
+          <input type="password" value="SECRET" placeholder="Password">
+          <input type="text" value="PRIVATE" placeholder="Name">
+          <input type="submit" value="Send">
+          <input type="checkbox" aria-label="Agree">
+          <select aria-label="Color"><option>Red</option></select>
+          <textarea aria-label="Notes">TYPED</textarea>
+          <input type="hidden" name="csrf" value="TOKEN">
+        </main>
+      `);
+      expect(withoutRefIds(snapshot.textPreview)).toBe(
+        '[textbox "Password" ref=*] [textbox "Name" ref=*] [button "Send" ref=*] [checkbox "Agree" ref=*] [combobox "Color" ref=*] [textbox "Notes" ref=*]'
+      );
+      expect(snapshot.textPreview).not.toMatch(/SECRET|PRIVATE|TYPED|TOKEN/);
+
+      const adjacent = snap('<main>Search<input aria-label="Query"><input type="submit" value="Go"></main>');
+      expect(withoutRefIds(adjacent.textPreview)).toBe('Search [textbox "Query" ref=*] [button "Go" ref=*]');
+    });
+
+    it('keeps nested controls and block content inside interactive wrappers', () => {
+      const nested = snap('<main><button>Save <a href="/help">Help</a></button></main>');
+      const [button, link] = nested.elements;
+      expect(nested.textPreview).toBe(`[button ref=${button.ref}] Save [Help](ref=${link.ref})`);
+
+      const card = snap('<main><a href="/card"><h2>Title</h2><p>Excerpt</p></a></main>');
+      expect(card.textPreview).toBe(`[link ref=${card.elements[0].ref}]\n\n## Title\n\nExcerpt`);
+    });
+
+    it('escapes marker delimiters and never truncates inside a marker', () => {
+      const escaped = snap('<main><a href="/x">A] B) C</a> <button aria-label="First&#10;Second]">x</button></main>');
+      expect(withoutRefIds(escaped.textPreview)).toBe('[A\\] B) C](ref=*) [button "First Second\\]" ref=*]');
+
+      const truncated = snap(`<main><p>${'x'.repeat(495)}</p><button>Go</button></main>`, { textLimit: 500 });
+      expect(truncated.textPreview).toBe('x'.repeat(495));
+      expect(truncated.textBytesOmitted).toBe(truncated.textTotalLength - 495);
+    });
+
+    it('keeps alerts and status under aria-hidden and names hidden controls from alt text', () => {
+      const snapshot = snap(`
+        <main>
+          <div aria-hidden="true">
+            <div role="alert">Failure</div>
+            <div role="status">Pending</div>
+            <span role="img">Decor</span>
+            <button><img alt="Play"></button>
+          </div>
+        </main>
+      `);
+      expect(snapshot.elements.map((item: any) => [item.role, item.label])).toEqual([
+        ['alert', 'Failure'],
+        ['status', 'Pending'],
+        ['button', 'Play']
+      ]);
+      expect(snapshot.ariaHiddenOmitted).toBe(1);
     });
 
     it('drops aria-hidden decoration from the element list but keeps interactive elements', () => {
