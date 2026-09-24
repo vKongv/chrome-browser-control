@@ -1002,6 +1002,8 @@ function isRenderedAnchor(element) {
   let visibility;
   while (current) {
     if (current.hidden) return false;
+    const parent = current.parentElement;
+    if (parent?.tagName.toLowerCase() === 'details' && !parent.open && current.tagName.toLowerCase() !== 'summary') return false;
     const style = textStyleFor(current);
     if (style.display === 'none') return false;
     if (!visibility && (style.visibility === 'hidden' || style.visibility === 'collapse' || style.visibility === 'visible')) {

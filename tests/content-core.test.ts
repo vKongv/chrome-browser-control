@@ -1282,7 +1282,11 @@ describe('extension content core', () => {
     it('ignores Markdown links that are hidden or are not a Markdown view of the page', () => {
       const snapshot = buildSnapshotFromDocument(
         makeDocument(`
-          <main><p>Article</p><a hidden href="/article.md">View as Markdown</a></main>
+          <main>
+            <p>Article</p>
+            <a hidden href="/article.md">View as Markdown</a>
+            <details><summary>More</summary><a href="/collapsed.md">View as Markdown</a></details>
+          </main>
           <footer><a href="https://other.example/guide">Markdown Guide</a></footer>
         `) as unknown as Document
       );
