@@ -34,6 +34,22 @@ const MAX_IGNORE_ROLES = 20;
 const DEFAULT_IGNORE_ROLES = ['dialog'];
 const DIALOG_SELECTOR = 'dialog, [role="dialog"], [role="alertdialog"]';
 const MIN_CONTENT_STABLE_TEXT_LENGTH = 50;
+const INPUT_TYPE_ROLES = {
+  button: 'button',
+  submit: 'button',
+  reset: 'button',
+  image: 'button',
+  checkbox: 'checkbox',
+  radio: 'radio',
+  range: 'slider',
+  number: 'spinbutton',
+  search: 'searchbox'
+};
+const DECORATIVE_ROLES = new Set(['img', 'image', 'presentation', 'none', 'graphics-document', 'graphics-object', 'graphics-symbol']);
+const INTERACTIVE_ROLES = new Set([
+  'link', 'button', 'textbox', 'searchbox', 'combobox', 'listbox', 'option', 'checkbox', 'radio', 'switch',
+  'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'treeitem', 'summary'
+]);
 
 let refTtlMs = DEFAULT_REF_TTL_MS;
 let maxRefs = DEFAULT_MAX_REFS;
@@ -70,10 +86,12 @@ function isHiddenTokenLike(element) {
 function roleFor(element) {
   const explicit = element.getAttribute('role');
   if (explicit) return explicit;
+  if (isEditableRegion(element)) return 'textbox';
   const tag = element.tagName.toLowerCase();
   if (tag === 'a') return 'link';
   if (tag === 'button') return 'button';
-  if (tag === 'input' || tag === 'textarea') return 'textbox';
+  if (tag === 'input') return INPUT_TYPE_ROLES[String(element.getAttribute('type') || '').toLowerCase()] || 'textbox';
+  if (tag === 'textarea') return 'textbox';
   if (tag === 'select') return 'combobox';
   return tag;
 }
@@ -178,7 +196,7 @@ function labelFor(element, limit = 160) {
   if (labelledBy) return labelledBy.slice(0, limit);
 
   const aria = element.getAttribute('aria-label');
-  if (aria) return aria.trim().slice(0, limit);
+  if (aria) return collapseWhitespace(aria).slice(0, limit);
 
   const associated = associatedLabelName(element);
   if (associated) return associated.slice(0, limit);
@@ -200,12 +218,48 @@ function labelFor(element, limit = 160) {
   const tag = element.tagName.toLowerCase();
   if (tag === 'input') return '';
 
-  const text = element.innerText || element.textContent || '';
-  return text.replace(/\s+/g, ' ').trim().slice(0, limit);
+  const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
+  if (text || !isInteractiveElement(element)) return text.slice(0, limit);
+  return imageAltName(element).slice(0, limit);
+}
+
+function isEditableRegion(element) {
+  const value = element.getAttribute('contenteditable');
+  return value !== null && value.toLowerCase() !== 'false';
+}
+
+function isInteractiveElement(element) {
+  return INTERACTIVE_ROLES.has(roleFor(element).toLowerCase()) || isEditableRegion(element);
+}
+
+function isAriaHiddenBetween(node, root) {
+  for (let current = node; current && current !== root; current = current.parentElement) {
+    if (current.getAttribute?.('aria-hidden') === 'true') return true;
+  }
+  return false;
+}
+
+// Name from content counts <img alt> as text, but innerText leaves alt out, so
+// icon-only controls such as <div role="button"><img alt="Thumbs up"></div> read as "".
+function imageAltName(element) {
+  return [...element.querySelectorAll('img[alt]')]
+    .filter((img) => !isAriaHiddenBetween(img, element))
+    .map((img) => img.getAttribute('alt').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+// aria-hidden="true" marks content the page keeps out of the accessibility tree.
+// Only decorative roles (icons, images) are dropped: modal libraries also hide the
+// page behind a dialog this way, and a stale aria-hidden must not remove controls,
+// alerts, or headings from the element list.
+function isAriaHiddenDecoration(element) {
+  return DECORATIVE_ROLES.has(roleFor(element).toLowerCase()) && Boolean(element.closest('[aria-hidden="true"]'));
 }
 
 function isInteresting(element) {
   const tag = element.tagName.toLowerCase();
+  if (tag === 'input' && String(element.getAttribute('type') || '').toLowerCase() === 'hidden') return false;
   if (['a', 'button', 'input', 'textarea', 'select', 'summary'].includes(tag)) return true;
   if (element.getAttribute('role')) return true;
   if (element.hasAttribute('contenteditable')) return true;
@@ -400,18 +454,6 @@ function isInsideHiddenDialogSubtree(element, scopeRoot) {
   return false;
 }
 
-function pruneHiddenDialogSubtrees(originalRoot, cloneRoot) {
-  if (!originalRoot || !cloneRoot) return;
-  const originals = [originalRoot, ...originalRoot.querySelectorAll('*')];
-  const clones = [cloneRoot, ...cloneRoot.querySelectorAll('*')];
-  if (originals.length !== clones.length) return;
-  for (let i = clones.length - 1; i >= 1; i -= 1) {
-    if (roleFor(originals[i]).toLowerCase() !== 'dialog') continue;
-    if (isDialogSubtreeVisible(originals[i])) continue;
-    clones[i].remove();
-  }
-}
-
 function resolveScopeRoot(documentRef = document, scope = 'document') {
   const body = documentRef.body || documentRef.documentElement;
   if (!body) return body;
@@ -501,35 +543,380 @@ function scopeHintFor(root) {
   return { tag, role, selectorHint };
 }
 
-function pruneScopedClone(clone, excludeSelectors, ignoreRoles, originalRoot, pruneHiddenDialogs = false) {
-  if (pruneHiddenDialogs) pruneHiddenDialogSubtrees(originalRoot, clone);
-  for (const selector of excludeSelectors) {
+// Scoped page text is rendered from the live DOM, never from a detached clone:
+// innerText on an unrendered clone degrades to textContent, which drops every
+// block and cell boundary and includes script/style source.
+const TEXT_SKIP_TAGS = new Set([
+  'script', 'style', 'noscript', 'template', 'head', 'title', 'desc', 'meta', 'link',
+  'iframe', 'frame', 'object', 'embed', 'canvas', 'audio', 'video',
+  'select', 'option', 'optgroup', 'datalist', 'textarea', 'input'
+]);
+const TEXT_BLOCK_TAGS = new Set([
+  'address', 'article', 'aside', 'blockquote', 'caption', 'dd', 'details', 'dialog', 'div', 'dl', 'dt',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header',
+  'hgroup', 'hr', 'legend', 'li', 'main', 'menu', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table',
+  'tr', 'ul'
+]);
+const TEXT_PARAGRAPH_TAGS = new Set(['p', 'blockquote', 'figure']);
+const TEXT_TABLE_ROLES = new Set(['table', 'grid', 'treegrid']);
+const TEXT_CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]';
+
+function textStyleFor(element) {
+  const windowRef = element.ownerDocument?.defaultView;
+  let style;
+  try {
+    style = windowRef?.getComputedStyle?.(element);
+  } catch (_error) {
+    style = undefined;
+  }
+  const tag = element.tagName.toLowerCase();
+  const display = style?.display || (TEXT_BLOCK_TAGS.has(tag) ? 'block' : 'inline');
+  const computedWhiteSpace = style?.whiteSpace || '';
+  let whiteSpace = 'normal';
+  if (tag === 'pre' || computedWhiteSpace === 'pre' || computedWhiteSpace === 'pre-wrap' || computedWhiteSpace === 'break-spaces') {
+    whiteSpace = 'pre';
+  } else if (computedWhiteSpace === 'pre-line') {
+    whiteSpace = 'pre-line';
+  }
+  return { display, visibility: style?.visibility || '', whiteSpace };
+}
+
+function isBlockDisplay(display) {
+  return display !== 'none' && display !== 'contents' && !display.startsWith('inline') && display !== 'table-cell';
+}
+
+function isTableLike(element) {
+  const role = String(element.getAttribute('role') || '').toLowerCase();
+  if (TEXT_TABLE_ROLES.has(role)) return true;
+  return element.tagName.toLowerCase() === 'table' && role !== 'presentation' && role !== 'none';
+}
+
+function isTableRow(element) {
+  return element.tagName.toLowerCase() === 'tr' || String(element.getAttribute('role') || '').toLowerCase() === 'row';
+}
+
+function closestAncestor(element, predicate, stop) {
+  let current = element.parentElement;
+  while (current && current !== stop) {
+    if (predicate(current)) return current;
+    current = current.parentElement;
+  }
+  return current === stop && stop && predicate(stop) ? stop : null;
+}
+
+function joinTextParts(parts, { preserveIndent = false } = {}) {
+  let out = '';
+  let pendingBreaks = 0;
+  for (const part of parts) {
+    if (typeof part === 'number') {
+      pendingBreaks = Math.max(pendingBreaks, part);
+      continue;
+    }
+    const raw = typeof part === 'object';
+    let value = raw ? part.raw : part;
+    if (!raw && (!out || pendingBreaks || /\n$/.test(out))) value = value.replace(/^ +/, '');
+    if (!value) continue;
+    if (out && pendingBreaks) {
+      out = out.replace(/[ \n]+$/, '') + '\n'.repeat(pendingBreaks);
+    } else if (!raw && out.endsWith(' ') && value.startsWith(' ')) {
+      value = value.slice(1);
+    }
+    pendingBreaks = 0;
+    out += value;
+  }
+  if (preserveIndent) return out.replace(/^(?:[ \t]*\n)+/, '').replace(/\s+$/, '');
+  return out.replace(/^[ \n]+|[ \n]+$/g, '');
+}
+
+function oneLine(text) {
+  return text.replace(/\s*\n\s*/g, ' ').trim();
+}
+
+const CONTENT_BLOCK_SELECTOR = 'h1,h2,h3,h4,h5,h6,p,ul,ol,li,dl,table,pre,blockquote';
+// The renderer wraps every marker it emits in these private-use characters so
+// truncation knows exactly where markers are. Page text is stripped of them, so
+// text that merely looks like a marker is never mistaken for one.
+const MARKER_OPEN = '\uE000';
+const MARKER_CLOSE = '\uE001';
+const MARKER_SENTINELS = /[\uE000\uE001]/g;
+
+function wrapMarker(marker) {
+  return `${MARKER_OPEN}${marker}${MARKER_CLOSE}`;
+}
+
+function stripMarkerSentinels(text) {
+  return text.replace(MARKER_SENTINELS, '');
+}
+
+// Marker text stays on one line with its delimiters escaped, so a label such as
+// "A] B" cannot end the marker early.
+function escapeMarkerText(value, extra = '') {
+  const pattern = extra ? /[\\[\]"]/g : /[\\[\]]/g;
+  return collapseWhitespace(stripMarkerSentinels(value)).replace(pattern, '\\$&');
+}
+
+function explicitNameFor(element) {
+  return labelledByName(element) || (element.getAttribute('aria-label') || element.getAttribute('title') || '').trim();
+}
+
+// Cut rendered text at `limit` visible characters, never inside a marker, and
+// drop the sentinels.
+function truncateText(text, limit) {
+  let out = '';
+  let index = 0;
+  while (index < text.length) {
+    const open = text.indexOf(MARKER_OPEN, index);
+    const plain = text.slice(index, open === -1 ? text.length : open);
+    if (out.length + plain.length > limit) return out + plain.slice(0, limit - out.length);
+    out += plain;
+    if (open === -1) break;
+    const close = text.indexOf(MARKER_CLOSE, open);
+    const marker = text.slice(open + 1, close);
+    if (out.length + marker.length > limit) return out.replace(/\s+$/, '');
+    out += marker;
+    index = close + 1;
+  }
+  return out;
+}
+
+function createScopedTextRenderer(scopeRoot, scopeOptions) {
+  const excludeSelectors = scopeOptions.excludeSelectors.filter((selector) => {
     try {
-      for (const element of [...clone.querySelectorAll(selector)]) {
-        element.remove();
-      }
+      scopeRoot.matches(selector);
+      return true;
     } catch (_error) {
-      // ignore invalid selectors
+      return false;
+    }
+  });
+  const { ignoreRoles, pruneHiddenDialogs, inlineRefs } = scopeOptions;
+
+  function isExcluded(element) {
+    return TEXT_SKIP_TAGS.has(element.tagName.toLowerCase()) || isScopeExcluded(element);
+  }
+
+  function isScopeExcluded(element) {
+    if (element.hidden) return true;
+    if (element === scopeRoot) return false;
+    if (excludeSelectors.some((selector) => element.matches(selector))) return true;
+    if (isExcludedByRole(element, ignoreRoles)) return true;
+    if (pruneHiddenDialogs && roleFor(element).toLowerCase() === 'dialog' && !isDialogSubtreeVisible(element)) return true;
+    return false;
+  }
+
+  function isInClosedDetails(element) {
+    const parent = element.parentElement;
+    return Boolean(
+      parent && parent.tagName.toLowerCase() === 'details' && !parent.open && element.tagName.toLowerCase() !== 'summary'
+    );
+  }
+
+  function isExcludedBetween(element, stop) {
+    let current = element;
+    while (current && current !== stop) {
+      if (isExcluded(current) || isInClosedDetails(current) || textStyleFor(current).display === 'none') return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
+  // Visibility inherits, so the nearest explicit value between element and stop
+  // wins; otherwise the element inherits the visibility in effect at stop.
+  function visibilityBetween(element, stop, inherited) {
+    let current = element;
+    while (current && current !== stop) {
+      const visibility = textStyleFor(current).visibility;
+      if (visibility === 'hidden' || visibility === 'collapse') return false;
+      if (visibility === 'visible') return true;
+      current = current.parentElement;
+    }
+    return inherited;
+  }
+
+  function renderInto(element, context) {
+    const parts = [];
+    renderChildren(element, parts, { whiteSpace: 'normal', visible: true, listDepth: 0, ...context });
+    return joinTextParts(parts);
+  }
+
+  function renderText(node, parts, context) {
+    if (!context.visible) return;
+    let value = stripMarkerSentinels(String(node.nodeValue || ''));
+    if (context.whiteSpace === 'pre') {
+      parts.push({ raw: value.replace(/\u00a0/g, ' ') });
+      return;
+    }
+    if (context.whiteSpace === 'pre-line') {
+      value.split('\n').forEach((line, index) => {
+        if (index > 0) parts.push({ raw: '\n' });
+        parts.push(line.replace(/[ \t\r\f]+/g, ' ').replace(/\u00a0/g, ' '));
+      });
+      return;
+    }
+    value = value.replace(/[ \t\n\r\f]+/g, ' ').replace(/\u00a0/g, ' ');
+    if (value) parts.push(value);
+  }
+
+  function renderChildren(element, parts, context) {
+    const tag = element.tagName.toLowerCase();
+    const closedDetails = tag === 'details' && !element.open;
+    if (tag === 'ol') {
+      const start = Number.parseInt(element.getAttribute('start') || '1', 10);
+      context = { ...context, list: { element, next: Number.isFinite(start) ? start : 1 } };
+    }
+    for (const child of element.childNodes) {
+      if (child.nodeType === 3) {
+        if (!closedDetails) renderText(child, parts, context);
+      } else if (child.nodeType === 1) {
+        if (closedDetails && child.tagName.toLowerCase() !== 'summary') continue;
+        renderElement(child, parts, context);
+      }
     }
   }
-  for (const element of [...clone.querySelectorAll('*')]) {
-    if (isExcludedByRole(element, ignoreRoles)) element.remove();
+
+  function renderTable(table, parts, context) {
+    const rows = [...table.querySelectorAll('tr, [role="row"]')].filter(
+      (row) => closestAncestor(row, isTableLike, table) === table && !isExcludedBetween(row, table)
+    );
+    const lines = [];
+    for (const row of rows) {
+      const cells = [...row.querySelectorAll(TEXT_CELL_SELECTOR)].filter(
+        (cell) => closestAncestor(cell, isTableRow, row) === row && !isExcludedBetween(cell, row)
+      );
+      const texts = cells.map((cell) =>
+        oneLine(renderInto(cell, { visible: visibilityBetween(cell, table, context.visible) })).replace(/\|/g, '\\|')
+      );
+      if (!texts.some(Boolean)) continue;
+      lines.push(`| ${texts.join(' | ')} |`);
+      if (lines.length === 1) lines.push(`| ${texts.map(() => '---').join(' | ')} |`);
+    }
+    if (!lines.length) return false;
+    const caption = [...table.children].find((child) => child.tagName.toLowerCase() === 'caption');
+    const captionText =
+      caption && !isExcludedBetween(caption, table)
+        ? oneLine(renderInto(caption, { visible: visibilityBetween(caption, table, context.visible) }))
+        : '';
+    parts.push(2);
+    if (captionText) parts.push({ raw: captionText }, 1);
+    parts.push({ raw: lines.join('\n') }, 2);
+    return true;
   }
-  return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
+
+  function renderListItem(element, parts, context) {
+    const list = context.list?.element === element.parentElement ? context.list : undefined;
+    const marker = list ? `${list.next++}. ` : '- ';
+    const itemParts = [];
+    renderChildren(element, itemParts, { ...context, listDepth: context.listDepth + 1 });
+    const content = joinTextParts(itemParts);
+    if (!content) return;
+    parts.push(1, { raw: `${'  '.repeat(Math.max(0, context.listDepth))}${marker}${content}` }, 1);
+  }
+
+  // A control that holds page content (an editable region, a card link, a button
+  // with a link inside) keeps that content: its marker goes in front instead.
+  function wrapsContent(element) {
+    if (isEditableRegion(element)) return true;
+    if (element.querySelector(CONTENT_BLOCK_SELECTOR)) return true;
+    return [...element.querySelectorAll(INTERESTING_SELECTOR)].some((nested) => inlineRefs.has(nested));
+  }
+
+  function controlMarker(role, label, ref) {
+    return wrapMarker(label ? `[${role} "${escapeMarkerText(label, '"')}" ref=${ref}]` : `[${role} ref=${ref}]`);
+  }
+
+  function renderInlineRef(element, inlineRef, style, parts, context) {
+    const { ref, role, label } = inlineRef;
+    const block = isBlockDisplay(style.display);
+    if (block) parts.push(1);
+    if (wrapsContent(element)) {
+      if (context.visible) parts.push(controlMarker(role, explicitNameFor(element), ref), ' ');
+      renderChildren(element, parts, context);
+    } else if (context.visible && role === 'link') {
+      const linkParts = [];
+      renderChildren(element, linkParts, context);
+      const text = oneLine(joinTextParts(linkParts)) || collapseWhitespace(label);
+      parts.push(wrapMarker(text ? `[${escapeMarkerText(text)}](ref=${ref})` : `[link ref=${ref}]`));
+    } else if (context.visible) {
+      parts.push(' ', controlMarker(role, label, ref), ' ');
+    }
+    if (block) parts.push(1);
+  }
+
+  function renderElement(element, parts, context) {
+    if (isScopeExcluded(element)) return;
+    const style = textStyleFor(element);
+    if (style.display === 'none') return;
+    const tag = element.tagName.toLowerCase();
+    const visible = style.visibility === 'hidden' || style.visibility === 'collapse' ? false : style.visibility === 'visible' ? true : context.visible;
+    const childContext = {
+      ...context,
+      visible,
+      whiteSpace: context.whiteSpace === 'pre' ? 'pre' : style.whiteSpace
+    };
+
+    const inlineRef = inlineRefs?.get(element);
+    if (inlineRef) {
+      renderInlineRef(element, inlineRef, style, parts, childContext);
+      return;
+    }
+    if (TEXT_SKIP_TAGS.has(tag)) return;
+
+    if (tag === 'br') {
+      if (context.visible) parts.push({ raw: '\n' });
+      return;
+    }
+    if (isTableLike(element) && renderTable(element, parts, childContext)) return;
+    if (tag === 'li' && context.whiteSpace !== 'pre') {
+      renderListItem(element, parts, childContext);
+      return;
+    }
+    const headingLevel = /^h([1-6])$/.exec(tag)?.[1];
+    if (headingLevel && context.whiteSpace !== 'pre') {
+      const headingParts = [];
+      renderChildren(element, headingParts, childContext);
+      const heading = oneLine(joinTextParts(headingParts));
+      if (heading) parts.push(2, { raw: `${'#'.repeat(Number(headingLevel))} ${heading}` }, 2);
+      return;
+    }
+    if (tag === 'pre' && context.whiteSpace !== 'pre') {
+      const codeParts = [];
+      renderChildren(element, codeParts, { ...childContext, whiteSpace: 'pre' });
+      const code = joinTextParts(codeParts, { preserveIndent: true });
+      if (code) parts.push(2, { raw: `\`\`\`\n${code}\n\`\`\`` }, 2);
+      return;
+    }
+    if (tag === 'code' && context.whiteSpace !== 'pre') {
+      const codeParts = [];
+      renderChildren(element, codeParts, childContext);
+      const code = oneLine(joinTextParts(codeParts));
+      if (code) parts.push(`\`${code}\``);
+      return;
+    }
+
+    const block = isBlockDisplay(style.display);
+    const breaks = TEXT_PARAGRAPH_TAGS.has(tag) ? 2 : 1;
+    if (block) parts.push(breaks);
+    else if (style.display === 'table-cell') parts.push(' ');
+    renderChildren(element, parts, childContext);
+    if (block) parts.push(breaks);
+    else if (style.display === 'table-cell') parts.push(' ');
+  }
+
+  return (root) => renderInto(root, { whiteSpace: textStyleFor(root).whiteSpace });
+}
+
+function scopedTextFor(scopeOptions) {
+  return createScopedTextRenderer(scopeOptions.scopeRoot, scopeOptions)(scopeOptions.scopeRoot);
+}
+
+function textMatches(haystack, needle) {
+  return collapseWhitespace(haystack).includes(collapseWhitespace(needle));
 }
 
 function scopedBodyText(documentRef = document, options = {}) {
   const mode = options?.mode === 'full' ? 'full' : 'compact';
   const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, mode);
   const scopeRoot = scopeOptions.scopeRoot;
-  const clone = scopeRoot.cloneNode(true);
-  const text = pruneScopedClone(
-    clone,
-    scopeOptions.excludeSelectors,
-    scopeOptions.ignoreRoles,
-    scopeRoot,
-    scopeOptions.pruneHiddenDialogs
-  );
+  const text = scopedTextFor(scopeOptions);
   return {
     text,
     scopeRoot,
@@ -549,9 +936,11 @@ function interestingElementsInScope(documentRef, scopeRoot, scopeOptions) {
       !isInsideIgnoredRoleSubtree(element, ignoreRoles) &&
       (!pruneHiddenDialogs || !isInsideHiddenDialogSubtree(element, scopeRoot))
   );
+  const elements = filtered.filter((element) => !isAriaHiddenDecoration(element));
   return {
-    elements: filtered,
-    excludedCount: Math.max(0, allInScope.length - filtered.length)
+    elements,
+    excludedCount: Math.max(0, allInScope.length - filtered.length),
+    ariaHiddenOmitted: filtered.length - elements.length
   };
 }
 
@@ -727,8 +1116,8 @@ function bodyTextFor(documentRef) {
   return (documentRef.body?.innerText || documentRef.body?.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
-function textSnapshotMeta(bodyText, textLimit, options) {
-  const textBytesOmitted = Math.max(0, bodyText.length - textLimit);
+function textSnapshotMeta(bodyText, returnedText, textLimit, options) {
+  const textBytesOmitted = Math.max(0, bodyText.length - returnedText.length);
   const meta = {
     textLimitApplied: textLimit,
     textTotalLength: bodyText.length,
@@ -738,6 +1127,62 @@ function textSnapshotMeta(bodyText, textLimit, options) {
     meta.warning = `Body text truncated at ${textLimit} characters (${textBytesOmitted} omitted). Pass textLimit (max ${MAX_TEXT_LIMIT}) for more.`;
   }
   return meta;
+}
+
+const MARKDOWN_ALTERNATE_TYPES = new Set(['text/markdown', 'text/x-markdown']);
+// "Markdown", "View as Markdown", "Open page in Markdown"; any other label
+// mentioning Markdown must also point at a .md/.mdx file.
+const MARKDOWN_VIEW_LABEL = /^(?:(?:view|open|show|read|see|get)\s+(?:(?:this\s+)?page\s+)?(?:as|in)\s+)?markdown$/i;
+const MARKDOWN_LINK_LABEL = /\bmarkdown\b/i;
+const MARKDOWN_FILE_PATH = /\.mdx?$/i;
+
+function httpUrlFor(element) {
+  const href = String(element.href || '');
+  return /^https?:\/\//i.test(href) ? href : undefined;
+}
+
+function isRenderedAnchor(element) {
+  let current = element;
+  let visibility;
+  while (current) {
+    if (current.hidden) return false;
+    const parent = current.parentElement;
+    if (parent?.tagName.toLowerCase() === 'details' && !parent.open && current.tagName.toLowerCase() !== 'summary') return false;
+    const style = textStyleFor(current);
+    if (style.display === 'none') return false;
+    if (!visibility && (style.visibility === 'hidden' || style.visibility === 'collapse' || style.visibility === 'visible')) {
+      visibility = style.visibility;
+    }
+    current = current.parentElement;
+  }
+  return visibility !== 'hidden' && visibility !== 'collapse';
+}
+
+function isMarkdownViewAnchor(anchor, label) {
+  if (MARKDOWN_VIEW_LABEL.test(label)) return true;
+  if (!MARKDOWN_LINK_LABEL.test(label)) return false;
+  return MARKDOWN_FILE_PATH.test(String(anchor.pathname || ''));
+}
+
+// Pages that publish their own Markdown are cheaper and more exact to read than
+// rendered text. Prefer the declared rel=alternate (source "link"); fall back to
+// a visible "View as Markdown"-style link (source "anchor"), which is inferred.
+function markdownAlternateFor(documentRef) {
+  for (const link of documentRef.querySelectorAll('link[rel][type][href]')) {
+    const rels = String(link.getAttribute('rel')).toLowerCase().split(/\s+/);
+    const type = String(link.getAttribute('type')).toLowerCase().split(';')[0].trim();
+    if (!rels.includes('alternate') || !MARKDOWN_ALTERNATE_TYPES.has(type)) continue;
+    const href = httpUrlFor(link);
+    if (href) return { href, source: 'link' };
+  }
+  const current = documentRef.location?.href;
+  for (const anchor of documentRef.querySelectorAll('a[href]')) {
+    const label = labelFor(anchor, 80);
+    if (label.length > 40 || !isMarkdownViewAnchor(anchor, label) || !isRenderedAnchor(anchor)) continue;
+    const href = httpUrlFor(anchor);
+    if (href && href !== current) return { href, source: 'anchor', label };
+  }
+  return undefined;
 }
 
 function buildSnapshotFromDocument(documentRef = document, options = {}) {
@@ -753,24 +1198,26 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
   const elements = scoped.elements;
   const limit = mode === 'full' ? FULL_ELEMENT_LIMIT : COMPACT_ELEMENT_LIMIT;
   const selected = elements.slice(0, limit);
+  const inlineRefs = new Map();
   const items = selected.map((element) => {
     const ref = refForElement(element, documentRef, now);
-    return mode === 'full' ? fullItemFor(element, ref) : compactItemFor(element, ref);
+    const item = mode === 'full' ? fullItemFor(element, ref) : compactItemFor(element, ref);
+    if (isInteractiveElement(element)) inlineRefs.set(element, { ref, role: item.role, label: item.label });
+    return item;
   });
   cleanupRefStore(documentRef, now);
 
-  const bodyText = pruneScopedClone(
-    scopeRoot.cloneNode(true),
-    scopeOptions.excludeSelectors,
-    scopeOptions.ignoreRoles,
-    scopeRoot,
-    scopeOptions.pruneHiddenDialogs
-  );
-  const textMeta = textSnapshotMeta(bodyText, textLimit, options);
+  const renderedText = scopedTextFor({ ...scopeOptions, inlineRefs });
+  const bodyText = stripMarkerSentinels(renderedText);
+  const returnedText = truncateText(renderedText, textLimit);
+  const textMeta = textSnapshotMeta(bodyText, returnedText, textLimit, options);
+  const markdownAlternate = markdownAlternateFor(documentRef);
   const scopeMeta = {
     scopeApplied: scopeOptions.scopeApplied,
     scopeRoot: scopeHintFor(scopeRoot),
-    excludedCount: scoped.excludedCount
+    excludedCount: scoped.excludedCount,
+    ariaHiddenOmitted: scoped.ariaHiddenOmitted,
+    ...(markdownAlternate ? { markdownAlternate } : {})
   };
 
   if (mode === 'full') {
@@ -779,7 +1226,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
       url: documentRef.location?.href,
       elements: items,
       omittedElements: Math.max(0, elements.length - selected.length),
-      text: bodyText.slice(0, textLimit),
+      text: returnedText,
       ...textMeta,
       ...scopeMeta
     };
@@ -791,7 +1238,7 @@ function buildSnapshotFromDocument(documentRef = document, options = {}) {
     mode: 'compact',
     elements: items,
     omittedElements: Math.max(0, elements.length - selected.length),
-    textPreview: bodyText.slice(0, textLimit),
+    textPreview: returnedText,
     ...textMeta,
     regions: regionSummaries(documentRef, selected),
     ...scopeMeta
@@ -1187,15 +1634,8 @@ function waitForCondition(options = {}, documentRef = document) {
         condition = 'selector';
       } else if (options.textInScope) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
-        const scopeRoot = scopeOptions.scopeRoot;
-        const scopedText = pruneScopedClone(
-          scopeRoot.cloneNode(true),
-          scopeOptions.excludeSelectors,
-          scopeOptions.ignoreRoles,
-          scopeRoot,
-          scopeOptions.pruneHiddenDialogs
-        );
-        if (scopedText.includes(String(options.textInScope))) {
+        const scopedText = scopedTextFor(scopeOptions);
+        if (textMatches(scopedText, String(options.textInScope))) {
           matched = true;
           reason = 'textInScope';
           condition = 'textInScope';
@@ -1206,14 +1646,7 @@ function waitForCondition(options = {}, documentRef = document) {
         condition = 'text';
       } else if (contentStableMs) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
-        const scopeRoot = scopeOptions.scopeRoot;
-        const scopedText = pruneScopedClone(
-          scopeRoot.cloneNode(true),
-          scopeOptions.excludeSelectors,
-          scopeOptions.ignoreRoles,
-          scopeRoot,
-          scopeOptions.pruneHiddenDialogs
-        );
+        const scopedText = scopedTextFor(scopeOptions);
         const length = scopedText.length;
         if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
           if (length === contentStableLastLength) {

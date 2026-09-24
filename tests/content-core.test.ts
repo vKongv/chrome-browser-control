@@ -87,6 +87,11 @@ function runGenerator(root: string, ...args: string[]) {
   return spawnSync(process.execPath, [generatorPath, ...args], { cwd: root, encoding: 'utf8' });
 }
 
+// Refs come from one counter shared across documents; mask them to compare text.
+function withoutRefIds(text: string) {
+  return text.replace(/ref=h[0-9a-z]+/g, 'ref=*');
+}
+
 function makeDocument(html: string) {
   const window = new HappyWindow({ url: 'https://example.test/' });
   window.document.write(html);
@@ -269,8 +274,8 @@ describe('extension content core', () => {
       { role: 'textbox', label: 'Customer name:' },
       { role: 'textbox', label: 'Telephone:' },
       { role: 'textbox', label: 'E-mail address:' },
-      { role: 'textbox', label: 'Small' },
-      { role: 'textbox', label: 'Bacon' },
+      { role: 'radio', label: 'Small' },
+      { role: 'checkbox', label: 'Bacon' },
       { role: 'textbox', label: 'Preferred delivery time:' },
       { role: 'textbox', label: 'Delivery instructions:' },
       { role: 'button', label: 'Submit order' }
@@ -331,7 +336,7 @@ describe('extension content core', () => {
 
     const snapshot = buildSnapshotFromDocument(document as unknown as Document);
 
-    expect(snapshot.elements).toMatchObject([{ role: 'textbox', label: 'Save' }]);
+    expect(snapshot.elements).toMatchObject([{ role: 'button', label: 'Save' }]);
   });
 
   it('includes img and input type=image alt text from associated labels', () => {
@@ -344,7 +349,7 @@ describe('extension content core', () => {
 
     expect(snapshot.elements).toMatchObject([
       { role: 'textbox', label: 'Email' },
-      { role: 'textbox', label: '' },
+      { role: 'button', label: '' },
       { role: 'textbox', label: 'Portrait' }
     ]);
   });
@@ -358,8 +363,8 @@ describe('extension content core', () => {
     const snapshot = buildSnapshotFromDocument(document as unknown as Document);
 
     expect(snapshot.elements).toMatchObject([
-      { role: 'textbox', label: '' },
-      { role: 'textbox', label: '' }
+      { role: 'radio', label: '' },
+      { role: 'checkbox', label: '' }
     ]);
   });
 
@@ -1119,6 +1124,379 @@ describe('extension content core', () => {
     expect(snapshot.excludedCount).toBeGreaterThan(0);
   });
 
+  describe('structured snapshot text', () => {
+    function mainText(html: string, options: Record<string, unknown> = {}) {
+      const snapshot = buildSnapshotFromDocument(makeDocument(html) as unknown as Document, { textLimit: 10_000, ...options });
+      return snapshot.textPreview as string;
+    }
+
+    it('renders tables as Markdown rows instead of gluing cells together', () => {
+      const text = mainText(`
+        <main>
+          <table>
+            <thead><tr><th>Field</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td>Method</td><td>POST</td></tr>
+              <tr><td>Endpoint</td><td><code>/{pageId}/live_videos</code></td></tr>
+              <tr><td>Pipe</td><td>a|b</td></tr>
+            </tbody>
+          </table>
+        </main>
+      `);
+      expect(text).toBe(
+        [
+          '| Field | Value |',
+          '| --- | --- |',
+          '| Method | POST |',
+          '| Endpoint | `/{pageId}/live_videos` |',
+          '| Pipe | a\\|b |'
+        ].join('\n')
+      );
+    });
+
+    it('renders ARIA grid rows and cells as table rows', () => {
+      const text = mainText(`
+        <main>
+          <div role="table">
+            <div role="row"><span role="columnheader">Name</span><span role="columnheader">Type</span></div>
+            <div role="row"><span role="cell">access_token</span><span role="cell">string</span></div>
+          </div>
+        </main>
+      `);
+      expect(text).toBe('| Name | Type |\n| --- | --- |\n| access_token | string |');
+    });
+
+    it('leaves hidden table content out of table rows', () => {
+      const text = mainText(`
+        <main>
+          <table style="visibility:hidden"><tr><td>Hidden table</td></tr></table>
+          <table>
+            <caption style="display:none">Hidden caption</caption>
+            <tr><th>Name</th><th>Type</th></tr>
+            <tr style="visibility:hidden"><td>Hidden row</td><td>x</td></tr>
+            <tr><td>token</td><td style="visibility:hidden">Hidden cell</td></tr>
+          </table>
+          <table style="visibility:hidden"><tr><td style="visibility:visible">Shown cell</td></tr></table>
+          <div role="table">
+            <div role="row"><span role="cell">Open row</span></div>
+            <details><summary>More</summary><div role="row"><span role="cell">Collapsed row</span></div></details>
+          </div>
+        </main>
+      `);
+      expect(text).not.toMatch(/Hidden|Collapsed/);
+      expect(text).toContain('| Name | Type |');
+      expect(text).toContain('| token |  |');
+      expect(text).toContain('| Shown cell |');
+      expect(text).toContain('| Open row |');
+    });
+
+    it('separates blocks and marks headings, lists, and line breaks', () => {
+      const text = mainText(`
+        <main>
+          <h2>Parameters</h2>
+          <div>First block</div><div>Second block</div>
+          <p>Line one<br>Line two</p>
+          <ul><li>Alpha<ul><li>Nested</li></ul></li><li>Beta</li></ul>
+          <ol start="3"><li>Third<ol><li>Inner</li></ol></li><li hidden>Skipped</li><li>Fourth</li></ol>
+        </main>
+      `);
+      expect(text).toBe(
+        [
+          '## Parameters',
+          '',
+          'First block',
+          'Second block',
+          '',
+          'Line one',
+          'Line two',
+          '',
+          '- Alpha',
+          '  - Nested',
+          '- Beta',
+          '3. Third',
+          '  1. Inner',
+          '4. Fourth'
+        ].join('\n')
+      );
+    });
+
+    it('fences preformatted code and keeps its whitespace', () => {
+      const text = mainText(`<main><p>Example:</p><pre><code>curl -X POST \\
+  -F "title=Live"</code></pre></main>`);
+      expect(text).toBe('Example:\n\n```\ncurl -X POST \\\n  -F "title=Live"\n```');
+    });
+
+    it('keeps the leading indentation of the first preformatted line', () => {
+      const text = mainText('<main><pre>  first\n    second\n</pre></main>');
+      expect(text).toBe('```\n  first\n    second\n```');
+    });
+
+    it('leaves out script, style, hidden, and collapsed content', () => {
+      const text = mainText(`
+        <main>
+          <p>Visible copy</p>
+          <script>window.__DATA__ = {"secret": 1}</script>
+          <style>.x { color: red }</style>
+          <noscript>Enable JavaScript</noscript>
+          <template><p>Template copy</p></template>
+          <p hidden>Hidden attribute copy</p>
+          <p style="display:none">Display none copy</p>
+          <p style="visibility:hidden">Invisible copy</p>
+          <details><summary>More info</summary><p>Collapsed body</p></details>
+          <video>Video fallback copy</video>
+          <canvas>Canvas fallback copy</canvas>
+        </main>
+      `);
+      expect(withoutRefIds(text)).toBe('Visible copy\n\n[summary "More info" ref=*]');
+    });
+
+    it('applies excludeSelectors and ignoreRoles against the live document', () => {
+      const text = mainText(
+        `<main><p>Keep me</p><div class="ad">Sponsored</div><aside role="complementary">Related</aside></main>`,
+        { excludeSelectors: ['main > .ad'], ignoreRoles: ['complementary'] }
+      );
+      expect(text).toBe('Keep me');
+    });
+
+    it('matches wait_for textInScope across structural whitespace', async () => {
+      const document = makeDocument('<main><div>Upload</div><div>complete</div></main>');
+      await expect(
+        waitForCondition({ textInScope: 'Upload complete', timeoutMs: 50 }, document as unknown as Document)
+      ).resolves.toMatchObject({ matched: true, condition: 'textInScope' });
+    });
+
+    it('reports a declared Markdown alternate', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument(
+          '<head><link rel="alternate" type="text/markdown" href="/docs/live.md"></head><main><p>Docs</p></main>'
+        ) as unknown as Document
+      );
+      expect(snapshot.markdownAlternate).toEqual({ href: 'https://example.test/docs/live.md', source: 'link' });
+    });
+
+    it('falls back to a short link labelled Markdown', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument('<main><a href="/docs/live?format=md">View as Markdown</a><p>Docs</p></main>') as unknown as Document,
+        { mode: 'full' }
+      );
+      expect(snapshot.markdownAlternate).toEqual({
+        href: 'https://example.test/docs/live?format=md',
+        source: 'anchor',
+        label: 'View as Markdown'
+      });
+    });
+
+    it('ignores Markdown links that are hidden or are not a Markdown view of the page', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument(`
+          <main>
+            <p>Article</p>
+            <a hidden href="/article.md">View as Markdown</a>
+            <details><summary>More</summary><a href="/collapsed.md">View as Markdown</a></details>
+          </main>
+          <footer><a href="https://other.example/guide">Markdown Guide</a></footer>
+        `) as unknown as Document
+      );
+      expect(snapshot).not.toHaveProperty('markdownAlternate');
+    });
+
+    it('accepts a Markdown-labelled link that points at a .md file', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument('<main><a href="/docs/live.md">Download Markdown</a></main>') as unknown as Document
+      );
+      expect(snapshot.markdownAlternate).toEqual({
+        href: 'https://example.test/docs/live.md',
+        source: 'anchor',
+        label: 'Download Markdown'
+      });
+    });
+
+    it('omits markdownAlternate when the page offers none', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument('<main><a href="/guide">A long guide about writing Markdown documents well</a></main>') as unknown as Document
+      );
+      expect(snapshot).not.toHaveProperty('markdownAlternate');
+    });
+  });
+
+  describe('snapshot inline refs and element filtering', () => {
+    function snap(html: string, options: Record<string, unknown> = {}) {
+      return buildSnapshotFromDocument(makeDocument(html) as unknown as Document, { textLimit: 10_000, ...options });
+    }
+
+    it('places element refs in the snapshot text where the elements appear', () => {
+      const snapshot = snap(`
+        <main>
+          <h2>Step 1</h2>
+          <p>Create a broadcast. (<a href="/docs">API docs</a>)</p>
+          <pre>{ "id": 1 }</pre>
+          <div role="button"><svg aria-hidden="true" role="img"></svg></div>
+          <button>Save</button>
+        </main>
+      `);
+      const refs = Object.fromEntries(snapshot.elements.map((item: any) => [item.label || item.role, item.ref]));
+      expect(snapshot.textPreview).toBe(
+        [
+          '## Step 1',
+          '',
+          `Create a broadcast. ([API docs](ref=${refs['API docs']}))`,
+          '',
+          '```',
+          '{ "id": 1 }',
+          '```',
+          '',
+          `[button ref=${refs.button}]`,
+          `[button "Save" ref=${refs.Save}]`
+        ].join('\n')
+      );
+    });
+
+    it('uses the same refs in full-mode text and elements', () => {
+      const snapshot = snap('<main><p>See <a href="/a">guide</a>.</p></main>', { mode: 'full' });
+      const link = snapshot.elements.find((item: any) => item.role === 'link');
+      expect(snapshot.text).toContain(`[guide](ref=${link.ref})`);
+    });
+
+    it('marks table-cell links and escapes quotes in labels', () => {
+      const snapshot = snap(`
+        <main>
+          <table><tr><th>Step</th><th>Docs</th></tr><tr><td>1</td><td><a href="/one">API docs</a></td></tr></table>
+          <button aria-label='Say "hi"'>x</button>
+        </main>
+      `);
+      const [link, button] = snapshot.elements;
+      expect(snapshot.textPreview).toContain(`| 1 | [API docs](ref=${link.ref}) |`);
+      expect(snapshot.textPreview).toContain(`[button "Say \\"hi\\"" ref=${button.ref}]`);
+    });
+
+    it('keeps an invisible control in the element list but out of the text', () => {
+      const snapshot = snap('<main><p>Body</p><button style="visibility:hidden">Ghost</button></main>');
+      expect(snapshot.elements.map((item: any) => item.label)).toContain('Ghost');
+      expect(snapshot.textPreview).toBe('Body');
+    });
+
+    it('matches wait_for text against plain text without refs', async () => {
+      const document = makeDocument('<main><p>Read the <a href="/x">API docs</a> now</p></main>');
+      await expect(
+        waitForCondition({ textInScope: 'Read the API docs now', timeoutMs: 50 }, document as unknown as Document)
+      ).resolves.toMatchObject({ matched: true, condition: 'textInScope' });
+    });
+
+    it('keeps editable region text and marks only editable regions', () => {
+      const snapshot = snap(`
+        <main>
+          <div contenteditable="true" aria-label="Message">${'draft '.repeat(40)}</div>
+          <p contenteditable="false">${'read only '.repeat(27)}</p>
+        </main>
+      `);
+      const editor = snapshot.elements.find((item: any) => item.label === 'Message');
+      expect(editor.role).toBe('textbox');
+      expect(snapshot.textPreview).toBe(
+        `[textbox "Message" ref=${editor.ref}] ${'draft '.repeat(40).trim()}\n\n${'read only '.repeat(27).trim()}`
+      );
+    });
+
+    it('marks form fields with their label and role but never their value', () => {
+      const snapshot = snap(`
+        <main>
+          <input type="password" value="SECRET" placeholder="Password">
+          <input type="text" value="PRIVATE" placeholder="Name">
+          <input type="submit" value="Send">
+          <input type="checkbox" aria-label="Agree">
+          <select aria-label="Color"><option>Red</option></select>
+          <textarea aria-label="Notes">TYPED</textarea>
+          <input type="hidden" name="csrf" value="TOKEN">
+        </main>
+      `);
+      expect(withoutRefIds(snapshot.textPreview)).toBe(
+        '[textbox "Password" ref=*] [textbox "Name" ref=*] [button "Send" ref=*] [checkbox "Agree" ref=*] [combobox "Color" ref=*] [textbox "Notes" ref=*]'
+      );
+      expect(snapshot.textPreview).not.toMatch(/SECRET|PRIVATE|TYPED|TOKEN/);
+      expect(snapshot.elements.map((item: any) => item.role)).toEqual(['textbox', 'textbox', 'button', 'checkbox', 'combobox', 'textbox']);
+
+      const adjacent = snap('<main>Search<input aria-label="Query"><input type="submit" value="Go"></main>');
+      expect(withoutRefIds(adjacent.textPreview)).toBe('Search [textbox "Query" ref=*] [button "Go" ref=*]');
+    });
+
+    it('keeps nested controls and block content inside interactive wrappers', () => {
+      const nested = snap('<main><button>Save <a href="/help">Help</a></button></main>');
+      const [button, link] = nested.elements;
+      expect(nested.textPreview).toBe(`[button ref=${button.ref}] Save [Help](ref=${link.ref})`);
+
+      const card = snap('<main><a href="/card"><h2>Title</h2><p>Excerpt</p></a></main>');
+      expect(card.textPreview).toBe(`[link ref=${card.elements[0].ref}]\n\n## Title\n\nExcerpt`);
+    });
+
+    it('escapes marker delimiters and never truncates inside a marker', () => {
+      const escaped = snap('<main><a href="/x">A] B) C</a> <button aria-label="First&#10;Second]">x</button></main>');
+      expect(withoutRefIds(escaped.textPreview)).toBe('[A\\] B) C](ref=*) [button "First Second\\]" ref=*]');
+
+      const truncated = snap(`<main><p>${'x'.repeat(495)}</p><button>Go</button></main>`, { textLimit: 500 });
+      expect(truncated.textPreview).toBe('x'.repeat(495));
+      expect(truncated.textBytesOmitted).toBe(truncated.textTotalLength - 495);
+    });
+
+    it('truncates page text that only looks like a marker as ordinary text', () => {
+      const lookalike = `[${'x'.repeat(600)}](ref=h3) useful trailing documentation`;
+      const snapshot = snap(`<main><pre>${lookalike}</pre></main>`, { textLimit: 500 });
+      expect(snapshot.textPreview).toBe(`\`\`\`\n${lookalike}`.slice(0, 500));
+
+      // Private-use characters in page text must not act as marker boundaries.
+      const sentinels = snap(`<main><p>${'x'.repeat(495)}\uE000${'y'.repeat(20)}\uE001</p></main>`, { textLimit: 500 });
+      expect(sentinels.textPreview).toBe(`${'x'.repeat(495)}yyyyy`);
+    });
+
+    it('keeps alerts and status under aria-hidden and names hidden controls from alt text', () => {
+      const snapshot = snap(`
+        <main>
+          <div aria-hidden="true">
+            <div role="alert">Failure</div>
+            <div role="status">Pending</div>
+            <span role="img">Decor</span>
+            <button><img alt="Play"></button>
+          </div>
+        </main>
+      `);
+      expect(snapshot.elements.map((item: any) => [item.role, item.label])).toEqual([
+        ['alert', 'Failure'],
+        ['status', 'Pending'],
+        ['button', 'Play']
+      ]);
+      expect(snapshot.ariaHiddenOmitted).toBe(1);
+    });
+
+    it('drops aria-hidden decoration from the element list but keeps interactive elements', () => {
+      const snapshot = snap(`
+        <main>
+          <div role="button" aria-label="Copy"><svg aria-hidden="true" role="img"></svg></div>
+          <div aria-hidden="true"><span role="img">decor</span><a href="/skip">Skip link</a></div>
+        </main>
+      `);
+      expect(snapshot.elements.map((item: any) => [item.role, item.label])).toEqual([
+        ['button', 'Copy'],
+        ['link', 'Skip link']
+      ]);
+      expect(snapshot.ariaHiddenOmitted).toBe(2);
+    });
+
+    it('names icon-only controls from image alt text', () => {
+      const snapshot = snap(`
+        <main>
+          <div role="button"><img alt="Thumbs up icon"></div>
+          <div role="button"><span aria-hidden="true"><img alt="Decorative"></span></div>
+          <div role="region" aria-label="Gallery"><img alt="Photo"></div>
+          <div role="note"><img alt="Not a control"></div>
+        </main>
+      `);
+      expect(snapshot.elements.map((item: any) => [item.role, item.label])).toEqual([
+        ['button', 'Thumbs up icon'],
+        ['button', ''],
+        ['region', 'Gallery'],
+        ['note', '']
+      ]);
+    });
+  });
+
   describe('compact snapshot dialog visibility', () => {
     const VISIBLE_RECT = { x: 20, y: 20, width: 400, height: 280 };
 
@@ -1278,7 +1656,7 @@ describe('extension content core', () => {
       for (const document of [displayNone, hiddenAttr, visibilityHidden, zeroSize, closedNative]) {
         const snapshot = buildSnapshotFromDocument(document as unknown as Document);
         expect(snapshot.scopeApplied).toBe('main');
-        expect(snapshot.textPreview).toBe(base.textPreview);
+        expect(withoutRefIds(snapshot.textPreview)).toBe(withoutRefIds(base.textPreview));
         expect(snapshot.elements.map((item) => item.label)).toEqual(base.elements.map((item) => item.label));
         expect(JSON.stringify(snapshot)).not.toContain('wizard');
       }
@@ -1292,7 +1670,7 @@ describe('extension content core', () => {
       `;
       const snapshot = buildSnapshotFromDocument(makeDocument(html) as unknown as Document);
       expect(snapshot.scopeApplied).toBe('main');
-      expect(snapshot.textPreview).toBe('Main feed content for auditLike');
+      expect(withoutRefIds(snapshot.textPreview)).toBe('Main feed content for audit\n\n[button "Like" ref=*]');
       expect(snapshot.textPreview).not.toContain('Sidebar navigation');
       expect(snapshot.elements.map((item) => item.label)).toEqual(['Like']);
       expect(snapshot.excludedCount).toBe(0);

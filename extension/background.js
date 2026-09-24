@@ -33,6 +33,7 @@ const DEFAULTS = {
 const EXTENSION_PROTOCOL_MARKER = {
   protocolVersion: 7,
   features: [
+    'snapshot-structured-text',
     'cdp-trusted-input',
     'cdp-response-body',
     'document-targeting',
@@ -866,6 +867,7 @@ function sanitizeTab(tab) {
   const lease = getLeaseForTab(tab.id);
   const sanitized = {
     id: tab.id,
+    tabId: tab.id,
     active: tab.active,
     highlighted: tab.highlighted,
     title: tab.title,
@@ -1920,7 +1922,12 @@ async function handleBridgeRequest(action, params = {}) {
     case 'release_tab': {
       const sessionTabId = params.sessionTabId || (params.tabId ? [...claimedTabs.values()].find((claim) => claim.tabId === params.tabId)?.sessionTabId : currentSessionTabId);
       if (!sessionTabId || !claimedTabs.has(sessionTabId)) {
-        throw new Error('No matching claimed tab to release');
+        return {
+          released: false,
+          reason: 'not_claimed',
+          ...(params.sessionTabId ? { sessionTabId: params.sessionTabId } : {}),
+          ...(params.tabId ? { tabId: params.tabId } : {})
+        };
       }
       const claim = claimedTabs.get(sessionTabId);
       claimedTabs.delete(sessionTabId);
@@ -1987,6 +1994,7 @@ async function handleBridgeRequest(action, params = {}) {
       const finalUrl = tab.url || requestedUrl;
       const result = {
         id: tab.id,
+        tabId: tab.id,
         url: finalUrl,
         requestedUrl,
         finalUrl,

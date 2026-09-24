@@ -102,4 +102,4 @@ npx -y chrome-browser-control --help
 
 ## Skill distribution
 
-The agent skill under `skills/chrome-browser-control/` is **not** included in the npm tarball. Install or copy it from the git repository (or skills.sh) separately. See README / AGENTS.
+The agent skill under `skills/chrome-browser-control/` is **not** included in the npm tarball. Users install it with `npx skills add vkongv/chrome-browser-control -g -s chrome-browser-control` and refresh it with `npx skills update -g`; skills.sh reads the skill from the GitHub default branch, so a skill change ships when it merges to `main`, not with the npm publish. See README / AGENTS.

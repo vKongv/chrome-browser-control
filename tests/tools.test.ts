@@ -577,15 +577,6 @@ describe('registerBrowserTools', () => {
         session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
         cdpEnabled: true,
         attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
-      },
-      ping: {
-        pong: true,
-        status: 'connected',
-        protocolVersion: 1,
-        features: ['navigate-pending-warning'],
-        session: { name: 'Docs task', claimedTabs: [{ sessionTabId: 'tab-1', tabId: 2 }] },
-        cdpEnabled: true,
-        attachedTabs: [{ tabId: 2, sessionTabId: 'tab-1', expiresAt: 600000 }]
       }
     });
     expect(status.nextAction).toBeUndefined();
@@ -602,9 +593,9 @@ describe('registerBrowserTools', () => {
 
     expect(status).toMatchObject({
       ready: true,
-      extension: { connected: true, status: 'connected' },
-      ping: { pong: true, status: 'connected' }
+      extension: { connected: true, status: 'connected' }
     });
+    expect(status).not.toHaveProperty('ping');
   });
 
   it('reports browser_status when broker is connected but extension is absent', async () => {

@@ -757,6 +757,7 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('list_tabs')).resolves.toEqual([
       {
         id: 1,
+        tabId: 1,
         active: true,
         highlighted: true,
         title: 'Allowed',
@@ -824,6 +825,7 @@ describe('extension background origin enforcement', () => {
       attachedTabs: [],
       protocolVersion: 7,
       features: expect.arrayContaining([
+        'snapshot-structured-text',
         'cdp-trusted-input',
         'cdp-response-body',
         'document-targeting',
@@ -1505,6 +1507,7 @@ describe('extension background origin enforcement', () => {
     ).resolves.toEqual(
       withNavigateMetadata({
         id: 1,
+        tabId: 1,
         url: 'https://example.com/',
         title: 'Example Domain',
         status: 'complete',
@@ -1594,6 +1597,7 @@ describe('extension background origin enforcement', () => {
     ).resolves.toEqual(
       withNavigateMetadata({
         id: 1,
+        tabId: 1,
         url: 'https://example.com/',
         title: 'Example Domain',
         status: 'complete',
@@ -2288,6 +2292,7 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('list_tabs')).resolves.toEqual([
       {
         id: 1,
+        tabId: 1,
         active: true,
         highlighted: true,
         title: 'Example',
@@ -2326,6 +2331,7 @@ describe('extension background origin enforcement', () => {
     ).resolves.toEqual(
       withNavigateMetadata({
         id: 1,
+        tabId: 1,
         url: 'https://example.com/',
         title: 'Example Domain',
         status: 'loading',
@@ -2367,6 +2373,7 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('navigate', { url: 'https://allowed.example/next' })).resolves.toEqual(
       withNavigateMetadata({
         id: 3,
+        tabId: 3,
         url: 'https://allowed.example/next',
         title: 'New Tab',
         status: 'complete',
@@ -2412,6 +2419,7 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('navigate', { url: 'https://allowed.example/next' })).resolves.toEqual(
       withNavigateMetadata({
         id: 1,
+        tabId: 1,
         url: 'https://allowed.example/next',
         title: 'Allowed',
         status: 'complete',
@@ -2450,6 +2458,7 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('navigate', { sessionTabId: 'tab-1', url: 'https://allowed.example/next' })).resolves.toEqual(
       withNavigateMetadata({
         id: 1,
+        tabId: 1,
         url: 'https://allowed.example/next',
         title: 'Allowed',
         status: 'complete',
@@ -2481,6 +2490,7 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('navigate', { url: 'https://example.com/start' })).resolves.toEqual(
       withNavigateMetadata({
         id: 2,
+        tabId: 2,
         url: 'https://example.com/start',
         title: 'New Tab',
         status: 'complete',
@@ -3694,7 +3704,7 @@ describe('extension background origin enforcement', () => {
 
     await expect(
       background.handleBridgeRequest('release_tab', { sessionTabId: expiredExclusive.sessionTabId })
-    ).rejects.toThrow('No matching claimed tab to release');
+    ).resolves.toEqual({ released: false, reason: 'not_claimed', sessionTabId: expiredExclusive.sessionTabId });
 
     await expect(background.handleBridgeRequest('ping')).resolves.toMatchObject({
       session: {
@@ -3734,9 +3744,11 @@ describe('extension background origin enforcement', () => {
     });
     expect(exclusive.sessionTabId).not.toBe(advisory.sessionTabId);
 
-    await expect(background.handleBridgeRequest('release_tab', { sessionTabId: advisory.sessionTabId })).rejects.toThrow(
-      'No matching claimed tab to release'
-    );
+    await expect(background.handleBridgeRequest('release_tab', { sessionTabId: advisory.sessionTabId })).resolves.toEqual({
+      released: false,
+      reason: 'not_claimed',
+      sessionTabId: advisory.sessionTabId
+    });
 
     await expect(background.handleBridgeRequest('list_tabs')).resolves.toEqual([
       expect.objectContaining({

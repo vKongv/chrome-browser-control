@@ -399,7 +399,6 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
     const rawStatus = typeof ping.status === 'string' ? ping.status : undefined;
     const bridgeStatus =
       rawStatus === 'disconnected' || rawStatus === undefined ? 'connected' : rawStatus;
-    const normalizedPing = { ...ping, status: bridgeStatus };
     const marker = {
       ...(ping.protocolVersion !== undefined ? { protocolVersion: ping.protocolVersion } : {}),
       ...(Array.isArray(ping.features) ? { features: ping.features } : {})
@@ -419,8 +418,7 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
             ...(ping.session !== undefined ? { session: ping.session } : {}),
             ...(typeof ping.cdpEnabled === 'boolean' ? { cdpEnabled: ping.cdpEnabled } : {}),
             ...(Array.isArray(ping.attachedTabs) ? { attachedTabs: ping.attachedTabs } : {})
-          },
-          ping: normalizedPing
+          }
         },
         activeContext,
         {
@@ -552,7 +550,7 @@ export function registerBrowserTools(
     'release_tab',
     {
       title: 'Release claimed tab',
-      description: 'Release a previously claimed tab by sessionTabId or tabId without closing the browser tab.',
+      description: 'Release a previously claimed tab by sessionTabId or tabId without closing the browser tab. Safe to call when nothing is claimed: returns released: false with reason "not_claimed".',
       inputSchema: {
         sessionTabId: z.string().min(1).optional(),
         tabId: OptionalTabId
@@ -697,10 +695,10 @@ export function registerBrowserTools(
     {
       title: 'Snapshot active page',
       description:
-        'Return a simplified DOM snapshot for the current top document or an exact documentId from list_frames. Compact mode (default) returns textPreview only — not text. Full mode returns text. Compact defaults to main-landmark scope when present; a visible modal dialog (aria-modal=true or <dialog> opened with showModal()) takes scope instead. Pass scope: "document" for legacy full-body text including the page behind a modal, ignoreRoles: ["dialog"] or ["alertdialog"] to hide both dialog and alertdialog, or mode: "full" for the unscoped legacy snapshot. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes authoritative document identity and coordinate space.',
+        'Return a simplified DOM snapshot for the current top document or an exact documentId from list_frames. To read page text, use compact mode (default) and raise textLimit (up to 100000): textPreview keeps block structure (# headings, - list items, Markdown table rows, fenced pre blocks). Full mode returns the same text as text plus up to 250 element records with bounds; use it for layout, not reading. Text carries inline refs where interactive elements sit ([API docs](ref=h3), [button \"Save\" ref=h4], [button ref=h5] when unlabeled), using the same refs as elements; they cover only the returned text, and elements stays the complete list. elements omits aria-hidden decoration (ariaHiddenOmitted). When markdownAlternate is present with source "link", the page declares its own Markdown; fetch or navigate to that URL instead. Source "anchor" is inferred from a visible "View as Markdown"-style link; confirm it matches the page. Compact defaults to main-landmark scope when present; a visible modal dialog (aria-modal=true or <dialog> opened with showModal()) takes scope instead. Pass scope: "document" for full-body text including the page behind a modal, ignoreRoles: ["dialog"] or ["alertdialog"] to hide both dialog and alertdialog, or mode: "full" for the unscoped snapshot. Defaults truncate at 500 (compact) or 4000 (full) chars. Response includes authoritative document identity and coordinate space.',
       inputSchema: {
         mode: SnapshotMode.optional().describe(
-          'Snapshot detail mode. Defaults to compact. Use full for text and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
+          'Snapshot detail mode. Defaults to compact, which is also the reading path (raise textLimit for long text). Use full for element bounds and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
         ),
         textLimit: z
           .number()
