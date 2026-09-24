@@ -399,7 +399,6 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
     const rawStatus = typeof ping.status === 'string' ? ping.status : undefined;
     const bridgeStatus =
       rawStatus === 'disconnected' || rawStatus === undefined ? 'connected' : rawStatus;
-    const normalizedPing = { ...ping, status: bridgeStatus };
     const marker = {
       ...(ping.protocolVersion !== undefined ? { protocolVersion: ping.protocolVersion } : {}),
       ...(Array.isArray(ping.features) ? { features: ping.features } : {})
@@ -419,8 +418,7 @@ async function browserStatus(bridge: BridgeLike, context: BrowserStatusContext =
             ...(ping.session !== undefined ? { session: ping.session } : {}),
             ...(typeof ping.cdpEnabled === 'boolean' ? { cdpEnabled: ping.cdpEnabled } : {}),
             ...(Array.isArray(ping.attachedTabs) ? { attachedTabs: ping.attachedTabs } : {})
-          },
-          ping: normalizedPing
+          }
         },
         activeContext,
         {
@@ -552,7 +550,7 @@ export function registerBrowserTools(
     'release_tab',
     {
       title: 'Release claimed tab',
-      description: 'Release a previously claimed tab by sessionTabId or tabId without closing the browser tab.',
+      description: 'Release a previously claimed tab by sessionTabId or tabId without closing the browser tab. Safe to call when nothing is claimed: returns released: false with reason "not_claimed".',
       inputSchema: {
         sessionTabId: z.string().min(1).optional(),
         tabId: OptionalTabId

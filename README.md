@@ -146,16 +146,16 @@ If your MCP host uses a config file, keep it private and outside the repository.
 
 1. Start the broker: `cbctl start`
 2. Run the setup checker: `cbctl doctor`
-3. Confirm from your MCP host by calling the `browser_status` tool. When ready, `extension.status` and `ping.status` should reflect a live bridge connection, and `extension.allowedOrigins` should show your configured scope.
+3. Confirm from your MCP host by calling the `browser_status` tool. When ready, `extension.status` should reflect a live bridge connection, and `extension.allowedOrigins` should show your configured scope.
 
 ## Tools
 
-- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` and `ping.status` reflect the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, `extension.cdpEnabled` / `extension.attachedTabs` report the trusted-input tier, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `7` includes the `cdp-trusted-input` and `cdp-response-body` feature markers.
+- `browser_status`: checks whether the MCP adapter can reach the broker and whether the Chrome extension answers `ping`. When ready, `extension.status` reflects the live bridge connection (not a stale disconnected default), `extension.allowedOrigins` shows the configured scope (including `* (all http/https web origins)` when wildcard mode is enabled), `extension.session` shows session name/claimed tabs, `extension.cdpEnabled` / `extension.attachedTabs` report the trusted-input tier, and `protocolVersion` / `features` confirm the loaded unpacked extension code. Protocol version `7` includes the `cdp-trusted-input` and `cdp-response-body` feature markers.
 - `name_session`: sets a human-readable session name for status/debugging.
 - `list_tabs`: lists tabs whose URL origin is allowed in the extension popup. When every open tab is filtered out, returns `{ tabs: [], detail, hiddenTabCount, allowedOrigins? }` instead of a bare `[]`. Wildcard mode is labeled clearly in `allowedOrigins`.
 - `list_frames`: lists current frame documents for an allowed tab using Chrome's frame registry. Operable active HTTP(S) documents include a `documentId`; policy-blocked, host-permission-denied, unsupported, fenced, and non-active rows retain hierarchy/status only and redact URL and document identity.
 - `claim_tab`: claims an allowed tab for this browser-control session and returns a `sessionTabId`. Claims are routing state, not exclusive browser locks.
-- `release_tab`: releases a claim by `sessionTabId` or `tabId` without closing the tab.
+- `release_tab`: releases a claim by `sessionTabId` or `tabId` without closing the tab. Releasing an unclaimed tab returns `{ released: false, reason: "not_claimed" }`.
 - `finalize_tabs`: releases claim state for the session without closing tabs. Pass `keep` entries to preserve handoff/deliverable claims. Also detaches CDP attachments on every claimed tab, including kept claims.
 - `cdp_attach`: attaches trusted input to a claimed tab (`sessionTabId` required). Off by default until the popup `enableCdp` checkbox is on. The `debugger` permission is required in the manifest; Chrome shows a warning at load. Chrome shows a persistent debugging banner on the attached tab. While attached, `click`, `type`, `keypress`, `click_at`, and matching `perform_actions` steps use CDP. Calling `cdp_attach` again on the same tab refreshes the TTL without tearing down the live socket. Cross-origin iframe clicks fail with `CDP_CROSS_ORIGIN_FRAME`; detach or use a same-origin/top document.
 - `cdp_detach`: detaches trusted input and returns those tools to the content-script path without releasing the claim.

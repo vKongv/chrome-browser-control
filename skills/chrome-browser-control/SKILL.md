@@ -69,7 +69,7 @@ If a page links its own Markdown or raw view (`markdownAlternate` in a snapshot,
    - Prefer one authoritative signal over repeated snapshots of the same fact.
 
 6. Release control.
-   - Call `release_tab` when a claimed tab is no longer needed.
+   - Call `release_tab` when a claimed tab is no longer needed. It returns `released: false` with `reason: "not_claimed"` when there was no claim; that is not an error.
    - Call `finalize_tabs` at the end of larger browser sessions.
    - Claims are routing state only; releasing/finalizing does not close user tabs.
 

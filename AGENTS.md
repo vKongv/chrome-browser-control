@@ -33,7 +33,9 @@ Use this file to resume work without relying on chat history.
 - Visible viewport mode is available through `snapshot({ mode: "visible" })` and `visible_snapshot`; use it for virtualized pages, viewport-bound UI, and coordinate planning.
 - Use `extract_feed_posts` for structured feed/post records (author, text, times, live flags) on feed-like pages.
 - Raise `textLimit` on `snapshot` (up to 100000) to pull more page body text without broker or CDP workarounds.
-- Use `claim_tab` before multi-step browser work, pass the returned `sessionTabId`, then call `release_tab` or `finalize_tabs` when done. Claims do not close tabs.
+- Use `claim_tab` before multi-step browser work, pass the returned `sessionTabId`, then call `release_tab` or `finalize_tabs` when done. Claims do not close tabs. `release_tab` on an unclaimed tab returns `{ released: false, reason: "not_claimed" }` instead of throwing.
+- Tab results from `navigate` and `list_tabs` carry `tabId` (with `id` kept as an alias).
+- `browser_status` reports extension state once, under `extension`; the raw `ping` echo was removed.
 - Advisory claims remain default. Use `claim_tab({ exclusive: true, ttlMs?, owner? })` for fail-fast tab leases across parallel agents; MCP adapter injects `ownerId` per process.
 - Navigate leaves focus alone by default (does not activate a background tab and does not deactivate the focused tab); pass `navigate({ active: true })` only when the tab must become visible. Use `activate_tab` to raise a tab and its window without navigating. It waits (bounded) for `document.visibilityState === "visible"` and returns `visibilityState` / `visible`; `reason` is present only when `visible` is false. Do not treat `focused` as success.
 - Click, type, `click_at`, `keypress`, and matching `perform_actions` steps fail with `DOCUMENT_HIDDEN` when the document is hidden. Call `activate_tab` first, then retry. Pass `allowHidden: true` only when `visibilityState` is `hidden`. If `reason` is `host_permission_denied` or `document_unavailable`, grant permission or reload; `allowHidden` will not help. Read-shaped tools stay unguarded. `perform_actions` scroll steps stay unguarded.
