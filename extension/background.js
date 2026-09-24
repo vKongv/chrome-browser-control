@@ -801,9 +801,13 @@ function claimExpiredError(sessionTabId, expired) {
   return new Error(JSON.stringify(payload));
 }
 
-// An exclusive lease measures idle time: every call that goes through the claim extends it by the claim's TTL.
-function renewLeaseForClaim(claim, now = Date.now()) {
-  if (!claim?.exclusive || !claim.ownerId) return;
+// An exclusive lease measures idle time: every call its owner makes with the claim's sessionTabId extends it
+// by the claim's TTL. callerOwnerId is stamped per MCP adapter process; the broker-wide current-claim fallback
+// and other processes' calls do not renew.
+function renewLeaseForCaller(sessionTabId, callerOwnerId, now = Date.now()) {
+  if (typeof sessionTabId !== 'string' || typeof callerOwnerId !== 'string' || !callerOwnerId) return;
+  const claim = claimedTabs.get(sessionTabId);
+  if (!claim?.exclusive || !claim.ownerId || claim.ownerId !== callerOwnerId) return;
   const lease = tabLeases.get(claim.tabId);
   if (!lease || lease.ownerId !== claim.ownerId || !lease.expiresAt || lease.expiresAt <= now) return;
   const ttlMs = boundedExclusiveLeaseTtl(claim.ttlMs ?? lease.ttlMs ?? claim.expiresAt - claim.claimedAt);
@@ -1020,7 +1024,6 @@ async function resolveSessionTabId(sessionTabId, allowedOrigins, { requireOperab
   if (requireOperable && !isOperableTab(tab, allowedOrigins)) {
     throw new Error(`Claimed tab is no longer operable or allowed: ${tab.url || 'unknown URL'}`);
   }
-  renewLeaseForClaim(claim);
   return claim.tabId;
 }
 
@@ -1851,10 +1854,12 @@ async function listFrames(tabId, allowedOrigins) {
   });
 }
 
-async function handleBridgeRequest(action, params = {}) {
+async function handleBridgeRequest(action, rawParams = {}) {
+  const { callerOwnerId, ...params } = rawParams || {};
   await claimStateReady;
   await cdpStateReady;
   sweepExpiredLeases();
+  renewLeaseForCaller(params.sessionTabId, callerOwnerId);
   const settings = await getSettings();
   switch (action) {
     case 'ping': {

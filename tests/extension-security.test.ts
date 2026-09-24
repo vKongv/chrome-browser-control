@@ -3670,7 +3670,7 @@ describe('extension background origin enforcement', () => {
     ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-c' });
   });
 
-  it('renews an exclusive lease on each call through the claim and expires it after idle ttlMs', async () => {
+  it('renews an exclusive lease on each owner call with its sessionTabId and expires it after idle ttlMs', async () => {
     const tabs = [
       {
         id: 2,
@@ -3697,22 +3697,25 @@ describe('extension background origin enforcement', () => {
       ttlMs: 1000
     });
 
-    // Use the tab every 800ms: total 2400ms is well past the 1000ms TTL counted from the claim.
-    for (let step = 0; step < 3; step += 1) {
+    // Use the tab every 800ms: total 2400ms is well past the 1000ms TTL counted from the claim. The CDP call
+    // fails (CDP is off) but still shows the owner is active.
+    for (const action of ['page_status', 'cdp_detach', 'page_status']) {
       background.advanceTime(800);
-      await expect(
-        background.handleBridgeRequest('page_status', { sessionTabId: claim.sessionTabId })
-      ).resolves.toMatchObject({ action: 'page_status' });
+      await background
+        .handleBridgeRequest(action, { sessionTabId: claim.sessionTabId, callerOwnerId: 'owner-a' })
+        .catch(() => undefined);
     }
     await expect(
       background.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-b', ttlMs: 1000 })
     ).rejects.toThrow('TAB_EXCLUSIVE_CLAIM_CONFLICT');
+    expect(background.sentMessages.at(-1)).toMatchObject({ message: { action: 'page_status', params: {} } });
+    expect(background.sentMessages.at(-1).message.params).not.toHaveProperty('callerOwnerId');
 
     // Idle past the TTL: the lease expires and another owner can take the tab.
     background.advanceTime(1500);
     let error: unknown;
     try {
-      await background.handleBridgeRequest('page_status', { sessionTabId: claim.sessionTabId });
+      await background.handleBridgeRequest('page_status', { sessionTabId: claim.sessionTabId, callerOwnerId: 'owner-a' });
     } catch (caught) {
       error = caught;
     }
@@ -3738,6 +3741,40 @@ describe('extension background origin enforcement', () => {
     await expect(background.handleBridgeRequest('page_status', { sessionTabId: 'tab-unknown' })).rejects.toThrow(
       'No claimed tab for sessionTabId: tab-unknown'
     );
+  });
+
+  it('does not renew an exclusive lease for another caller or the current-claim fallback', async () => {
+    const background = loadBackgroundHarness({
+      settings: { bridgeUrl: 'ws://127.0.0.1:8765', token, allowedOrigins: ['https://allowed.example/*'] },
+      tabs: [
+        {
+          id: 2,
+          active: false,
+          highlighted: false,
+          status: 'complete',
+          title: 'Claimed',
+          url: 'https://allowed.example/claimed',
+          windowId: 1
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action })
+    });
+    const claim = await background.handleBridgeRequest('claim_tab', {
+      tabId: 2,
+      exclusive: true,
+      ownerId: 'owner-a',
+      ttlMs: 1000
+    });
+
+    background.advanceTime(600);
+    await background.handleBridgeRequest('page_status', { sessionTabId: claim.sessionTabId, callerOwnerId: 'owner-b' });
+    await background.handleBridgeRequest('page_status', { callerOwnerId: 'owner-a' });
+    await background.handleBridgeRequest('page_status', { sessionTabId: claim.sessionTabId });
+
+    background.advanceTime(600);
+    await expect(
+      background.handleBridgeRequest('claim_tab', { tabId: 2, exclusive: true, ownerId: 'owner-b', ttlMs: 1000 })
+    ).resolves.toMatchObject({ exclusive: true, ownerId: 'owner-b' });
   });
 
   it('does not reuse expired exclusive sessionTabId for advisory claims', async () => {
