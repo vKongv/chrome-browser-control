@@ -697,10 +697,10 @@ export function registerBrowserTools(
     {
       title: 'Snapshot active page',
       description:
-        'Return a simplified DOM snapshot for the current top document or an exact documentId from list_frames. Compact mode (default) returns textPreview only — not text. Full mode returns text. Compact defaults to main-landmark scope when present; a visible modal dialog (aria-modal=true or <dialog> opened with showModal()) takes scope instead. Pass scope: "document" for legacy full-body text including the page behind a modal, ignoreRoles: ["dialog"] or ["alertdialog"] to hide both dialog and alertdialog, or mode: "full" for the unscoped legacy snapshot. Defaults truncate at 500 (compact) or 4000 (full) chars; pass textLimit (up to 100000) for long page content such as API docs. Response includes authoritative document identity and coordinate space.',
+        'Return a simplified DOM snapshot for the current top document or an exact documentId from list_frames. To read page text, use compact mode (default) and raise textLimit (up to 100000): textPreview keeps block structure (# headings, - list items, Markdown table rows, fenced pre blocks). Full mode returns the same text as text plus up to 250 element records with bounds; use it for layout, not reading. When markdownAlternate is present, the page publishes its own Markdown; fetch or navigate to that URL instead. Compact defaults to main-landmark scope when present; a visible modal dialog (aria-modal=true or <dialog> opened with showModal()) takes scope instead. Pass scope: "document" for full-body text including the page behind a modal, ignoreRoles: ["dialog"] or ["alertdialog"] to hide both dialog and alertdialog, or mode: "full" for the unscoped snapshot. Defaults truncate at 500 (compact) or 4000 (full) chars. Response includes authoritative document identity and coordinate space.',
       inputSchema: {
         mode: SnapshotMode.optional().describe(
-          'Snapshot detail mode. Defaults to compact. Use full for text and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
+          'Snapshot detail mode. Defaults to compact, which is also the reading path (raise textLimit for long text). Use full for element bounds and verbose metadata, or visible for viewport-only refs, bounds, and labels.'
         ),
         textLimit: z
           .number()

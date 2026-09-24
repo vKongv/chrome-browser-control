@@ -1119,6 +1119,144 @@ describe('extension content core', () => {
     expect(snapshot.excludedCount).toBeGreaterThan(0);
   });
 
+  describe('structured snapshot text', () => {
+    function mainText(html: string, options: Record<string, unknown> = {}) {
+      const snapshot = buildSnapshotFromDocument(makeDocument(html) as unknown as Document, { textLimit: 10_000, ...options });
+      return snapshot.textPreview as string;
+    }
+
+    it('renders tables as Markdown rows instead of gluing cells together', () => {
+      const text = mainText(`
+        <main>
+          <table>
+            <thead><tr><th>Field</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td>Method</td><td>POST</td></tr>
+              <tr><td>Endpoint</td><td><code>/{pageId}/live_videos</code></td></tr>
+              <tr><td>Pipe</td><td>a|b</td></tr>
+            </tbody>
+          </table>
+        </main>
+      `);
+      expect(text).toBe(
+        [
+          '| Field | Value |',
+          '| --- | --- |',
+          '| Method | POST |',
+          '| Endpoint | `/{pageId}/live_videos` |',
+          '| Pipe | a\\|b |'
+        ].join('\n')
+      );
+    });
+
+    it('renders ARIA grid rows and cells as table rows', () => {
+      const text = mainText(`
+        <main>
+          <div role="table">
+            <div role="row"><span role="columnheader">Name</span><span role="columnheader">Type</span></div>
+            <div role="row"><span role="cell">access_token</span><span role="cell">string</span></div>
+          </div>
+        </main>
+      `);
+      expect(text).toBe('| Name | Type |\n| --- | --- |\n| access_token | string |');
+    });
+
+    it('separates blocks and marks headings, lists, and line breaks', () => {
+      const text = mainText(`
+        <main>
+          <h2>Parameters</h2>
+          <div>First block</div><div>Second block</div>
+          <p>Line one<br>Line two</p>
+          <ul><li>Alpha<ul><li>Nested</li></ul></li><li>Beta</li></ul>
+          <ol start="3"><li>Third</li><li>Fourth</li></ol>
+        </main>
+      `);
+      expect(text).toBe(
+        [
+          '## Parameters',
+          '',
+          'First block',
+          'Second block',
+          '',
+          'Line one',
+          'Line two',
+          '',
+          '- Alpha',
+          '  - Nested',
+          '- Beta',
+          '3. Third',
+          '4. Fourth'
+        ].join('\n')
+      );
+    });
+
+    it('fences preformatted code and keeps its whitespace', () => {
+      const text = mainText(`<main><p>Example:</p><pre><code>curl -X POST \\
+  -F "title=Live"</code></pre></main>`);
+      expect(text).toBe('Example:\n\n```\ncurl -X POST \\\n  -F "title=Live"\n```');
+    });
+
+    it('leaves out script, style, hidden, and collapsed content', () => {
+      const text = mainText(`
+        <main>
+          <p>Visible copy</p>
+          <script>window.__DATA__ = {"secret": 1}</script>
+          <style>.x { color: red }</style>
+          <noscript>Enable JavaScript</noscript>
+          <template><p>Template copy</p></template>
+          <p hidden>Hidden attribute copy</p>
+          <p style="display:none">Display none copy</p>
+          <p style="visibility:hidden">Invisible copy</p>
+          <details><summary>More info</summary><p>Collapsed body</p></details>
+        </main>
+      `);
+      expect(text).toBe('Visible copy\n\nMore info');
+    });
+
+    it('applies excludeSelectors and ignoreRoles against the live document', () => {
+      const text = mainText(
+        `<main><p>Keep me</p><div class="ad">Sponsored</div><aside role="complementary">Related</aside></main>`,
+        { excludeSelectors: ['main > .ad'], ignoreRoles: ['complementary'] }
+      );
+      expect(text).toBe('Keep me');
+    });
+
+    it('matches wait_for textInScope across structural whitespace', async () => {
+      const document = makeDocument('<main><div>Upload</div><div>complete</div></main>');
+      await expect(
+        waitForCondition({ textInScope: 'Upload complete', timeoutMs: 50 }, document as unknown as Document)
+      ).resolves.toMatchObject({ matched: true, condition: 'textInScope' });
+    });
+
+    it('reports a declared Markdown alternate', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument(
+          '<head><link rel="alternate" type="text/markdown" href="/docs/live.md"></head><main><p>Docs</p></main>'
+        ) as unknown as Document
+      );
+      expect(snapshot.markdownAlternate).toEqual({ href: 'https://example.test/docs/live.md', source: 'link' });
+    });
+
+    it('falls back to a short link labelled Markdown', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument('<main><a href="/docs/live?format=md">View as Markdown</a><p>Docs</p></main>') as unknown as Document,
+        { mode: 'full' }
+      );
+      expect(snapshot.markdownAlternate).toEqual({
+        href: 'https://example.test/docs/live?format=md',
+        source: 'anchor',
+        label: 'View as Markdown'
+      });
+    });
+
+    it('omits markdownAlternate when the page offers none', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument('<main><a href="/guide">A long guide about writing Markdown documents well</a></main>') as unknown as Document
+      );
+      expect(snapshot).not.toHaveProperty('markdownAlternate');
+    });
+  });
+
   describe('compact snapshot dialog visibility', () => {
     const VISIBLE_RECT = { x: 20, y: 20, width: 400, height: 280 };
 
@@ -1292,7 +1430,7 @@ describe('extension content core', () => {
       `;
       const snapshot = buildSnapshotFromDocument(makeDocument(html) as unknown as Document);
       expect(snapshot.scopeApplied).toBe('main');
-      expect(snapshot.textPreview).toBe('Main feed content for auditLike');
+      expect(snapshot.textPreview).toBe('Main feed content for audit\n\nLike');
       expect(snapshot.textPreview).not.toContain('Sidebar navigation');
       expect(snapshot.elements.map((item) => item.label)).toEqual(['Like']);
       expect(snapshot.excludedCount).toBe(0);

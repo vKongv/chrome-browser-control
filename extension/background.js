@@ -33,6 +33,7 @@ const DEFAULTS = {
 const EXTENSION_PROTOCOL_MARKER = {
   protocolVersion: 7,
   features: [
+    'snapshot-structured-text',
     'cdp-trusted-input',
     'cdp-response-body',
     'document-targeting',

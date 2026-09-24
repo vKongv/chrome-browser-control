@@ -824,6 +824,7 @@ describe('extension background origin enforcement', () => {
       attachedTabs: [],
       protocolVersion: 7,
       features: expect.arrayContaining([
+        'snapshot-structured-text',
         'cdp-trusted-input',
         'cdp-response-body',
         'document-targeting',

@@ -398,18 +398,6 @@ function isInsideHiddenDialogSubtree(element, scopeRoot) {
   return false;
 }
 
-function pruneHiddenDialogSubtrees(originalRoot, cloneRoot) {
-  if (!originalRoot || !cloneRoot) return;
-  const originals = [originalRoot, ...originalRoot.querySelectorAll('*')];
-  const clones = [cloneRoot, ...cloneRoot.querySelectorAll('*')];
-  if (originals.length !== clones.length) return;
-  for (let i = clones.length - 1; i >= 1; i -= 1) {
-    if (roleFor(originals[i]).toLowerCase() !== 'dialog') continue;
-    if (isDialogSubtreeVisible(originals[i])) continue;
-    clones[i].remove();
-  }
-}
-
 export function resolveScopeRoot(documentRef = document, scope = 'document') {
   const body = documentRef.body || documentRef.documentElement;
   if (!body) return body;
@@ -499,35 +487,270 @@ function scopeHintFor(root) {
   return { tag, role, selectorHint };
 }
 
-function pruneScopedClone(clone, excludeSelectors, ignoreRoles, originalRoot, pruneHiddenDialogs = false) {
-  if (pruneHiddenDialogs) pruneHiddenDialogSubtrees(originalRoot, clone);
-  for (const selector of excludeSelectors) {
+// Scoped page text is rendered from the live DOM, never from a detached clone:
+// innerText on an unrendered clone degrades to textContent, which drops every
+// block and cell boundary and includes script/style source.
+const TEXT_SKIP_TAGS = new Set([
+  'script', 'style', 'noscript', 'template', 'head', 'title', 'desc', 'meta', 'link',
+  'iframe', 'frame', 'object', 'embed', 'canvas', 'audio', 'video',
+  'select', 'option', 'optgroup', 'datalist', 'textarea', 'input'
+]);
+const TEXT_BLOCK_TAGS = new Set([
+  'address', 'article', 'aside', 'blockquote', 'caption', 'dd', 'details', 'dialog', 'div', 'dl', 'dt',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header',
+  'hgroup', 'hr', 'legend', 'li', 'main', 'menu', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table',
+  'tr', 'ul'
+]);
+const TEXT_PARAGRAPH_TAGS = new Set(['p', 'blockquote', 'figure']);
+const TEXT_TABLE_ROLES = new Set(['table', 'grid', 'treegrid']);
+const TEXT_CELL_SELECTOR = 'td, th, [role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]';
+
+function textStyleFor(element) {
+  const windowRef = element.ownerDocument?.defaultView;
+  let style;
+  try {
+    style = windowRef?.getComputedStyle?.(element);
+  } catch (_error) {
+    style = undefined;
+  }
+  const tag = element.tagName.toLowerCase();
+  const display = style?.display || (TEXT_BLOCK_TAGS.has(tag) ? 'block' : 'inline');
+  const computedWhiteSpace = style?.whiteSpace || '';
+  let whiteSpace = 'normal';
+  if (tag === 'pre' || computedWhiteSpace === 'pre' || computedWhiteSpace === 'pre-wrap' || computedWhiteSpace === 'break-spaces') {
+    whiteSpace = 'pre';
+  } else if (computedWhiteSpace === 'pre-line') {
+    whiteSpace = 'pre-line';
+  }
+  return { display, visibility: style?.visibility || '', whiteSpace };
+}
+
+function isBlockDisplay(display) {
+  return display !== 'none' && display !== 'contents' && !display.startsWith('inline') && display !== 'table-cell';
+}
+
+function isTableLike(element) {
+  const role = String(element.getAttribute('role') || '').toLowerCase();
+  if (TEXT_TABLE_ROLES.has(role)) return true;
+  return element.tagName.toLowerCase() === 'table' && role !== 'presentation' && role !== 'none';
+}
+
+function isTableRow(element) {
+  return element.tagName.toLowerCase() === 'tr' || String(element.getAttribute('role') || '').toLowerCase() === 'row';
+}
+
+function closestAncestor(element, predicate, stop) {
+  let current = element.parentElement;
+  while (current && current !== stop) {
+    if (predicate(current)) return current;
+    current = current.parentElement;
+  }
+  return current === stop && stop && predicate(stop) ? stop : null;
+}
+
+function joinTextParts(parts) {
+  let out = '';
+  let pendingBreaks = 0;
+  for (const part of parts) {
+    if (typeof part === 'number') {
+      pendingBreaks = Math.max(pendingBreaks, part);
+      continue;
+    }
+    const raw = typeof part === 'object';
+    let value = raw ? part.raw : part;
+    if (!raw && (!out || pendingBreaks || /\n$/.test(out))) value = value.replace(/^ +/, '');
+    if (!value) continue;
+    if (out && pendingBreaks) {
+      out = out.replace(/[ \n]+$/, '') + '\n'.repeat(pendingBreaks);
+    } else if (!raw && out.endsWith(' ') && value.startsWith(' ')) {
+      value = value.slice(1);
+    }
+    pendingBreaks = 0;
+    out += value;
+  }
+  return out.replace(/^[ \n]+|[ \n]+$/g, '');
+}
+
+function oneLine(text) {
+  return text.replace(/\s*\n\s*/g, ' ').trim();
+}
+
+function createScopedTextRenderer(scopeRoot, scopeOptions) {
+  const excludeSelectors = scopeOptions.excludeSelectors.filter((selector) => {
     try {
-      for (const element of [...clone.querySelectorAll(selector)]) {
-        element.remove();
-      }
+      scopeRoot.matches(selector);
+      return true;
     } catch (_error) {
-      // ignore invalid selectors
+      return false;
+    }
+  });
+  const { ignoreRoles, pruneHiddenDialogs } = scopeOptions;
+
+  function isExcluded(element) {
+    const tag = element.tagName.toLowerCase();
+    if (TEXT_SKIP_TAGS.has(tag)) return true;
+    if (element.hidden) return true;
+    if (element === scopeRoot) return false;
+    if (excludeSelectors.some((selector) => element.matches(selector))) return true;
+    if (isExcludedByRole(element, ignoreRoles)) return true;
+    if (pruneHiddenDialogs && roleFor(element).toLowerCase() === 'dialog' && !isDialogSubtreeVisible(element)) return true;
+    return false;
+  }
+
+  function isExcludedBetween(element, stop) {
+    let current = element;
+    while (current && current !== stop) {
+      if (isExcluded(current) || textStyleFor(current).display === 'none') return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
+  function renderInto(element, whiteSpace) {
+    const parts = [];
+    renderChildren(element, parts, { whiteSpace, visible: true, listDepth: 0 });
+    return joinTextParts(parts);
+  }
+
+  function renderText(node, parts, context) {
+    if (!context.visible) return;
+    let value = String(node.nodeValue || '');
+    if (context.whiteSpace === 'pre') {
+      parts.push({ raw: value.replace(/ /g, ' ') });
+      return;
+    }
+    if (context.whiteSpace === 'pre-line') {
+      value.split('\n').forEach((line, index) => {
+        if (index > 0) parts.push({ raw: '\n' });
+        parts.push(line.replace(/[ \t\r\f]+/g, ' ').replace(/ /g, ' '));
+      });
+      return;
+    }
+    value = value.replace(/[ \t\n\r\f]+/g, ' ').replace(/ /g, ' ');
+    if (value) parts.push(value);
+  }
+
+  function renderChildren(element, parts, context) {
+    const tag = element.tagName.toLowerCase();
+    const closedDetails = tag === 'details' && !element.open;
+    for (const child of element.childNodes) {
+      if (child.nodeType === 3) {
+        if (!closedDetails) renderText(child, parts, context);
+      } else if (child.nodeType === 1) {
+        if (closedDetails && child.tagName.toLowerCase() !== 'summary') continue;
+        renderElement(child, parts, context);
+      }
     }
   }
-  for (const element of [...clone.querySelectorAll('*')]) {
-    if (isExcludedByRole(element, ignoreRoles)) element.remove();
+
+  function renderTable(table, parts) {
+    const rows = [...table.querySelectorAll('tr, [role="row"]')].filter(
+      (row) => closestAncestor(row, isTableLike, table) === table && !isExcludedBetween(row, table)
+    );
+    const lines = [];
+    for (const row of rows) {
+      const cells = [...row.querySelectorAll(TEXT_CELL_SELECTOR)].filter(
+        (cell) => closestAncestor(cell, isTableRow, row) === row && !isExcludedBetween(cell, row)
+      );
+      const texts = cells.map((cell) => oneLine(renderInto(cell, 'normal')).replace(/\|/g, '\\|'));
+      if (!texts.some(Boolean)) continue;
+      lines.push(`| ${texts.join(' | ')} |`);
+      if (lines.length === 1) lines.push(`| ${texts.map(() => '---').join(' | ')} |`);
+    }
+    if (!lines.length) return false;
+    const caption = [...table.children].find((child) => child.tagName.toLowerCase() === 'caption');
+    const captionText = caption && !isExcluded(caption) ? oneLine(renderInto(caption, 'normal')) : '';
+    parts.push(2);
+    if (captionText) parts.push({ raw: captionText }, 1);
+    parts.push({ raw: lines.join('\n') }, 2);
+    return true;
   }
-  return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
+
+  function renderListItem(element, parts, context) {
+    const parent = element.parentElement;
+    const parentTag = parent?.tagName.toLowerCase();
+    let marker = '- ';
+    if (parentTag === 'ol') {
+      const items = [...parent.children].filter((child) => child.tagName.toLowerCase() === 'li');
+      const start = Number.parseInt(parent.getAttribute('start') || '1', 10);
+      marker = `${(Number.isFinite(start) ? start : 1) + items.indexOf(element)}. `;
+    }
+    const itemParts = [];
+    renderChildren(element, itemParts, { ...context, listDepth: context.listDepth + 1 });
+    const content = joinTextParts(itemParts);
+    if (!content) return;
+    parts.push(1, { raw: `${'  '.repeat(Math.max(0, context.listDepth))}${marker}${content}` }, 1);
+  }
+
+  function renderElement(element, parts, context) {
+    if (isExcluded(element)) return;
+    const style = textStyleFor(element);
+    if (style.display === 'none') return;
+    const tag = element.tagName.toLowerCase();
+    const visible = style.visibility === 'hidden' || style.visibility === 'collapse' ? false : style.visibility === 'visible' ? true : context.visible;
+    const childContext = {
+      ...context,
+      visible,
+      whiteSpace: context.whiteSpace === 'pre' ? 'pre' : style.whiteSpace
+    };
+
+    if (tag === 'br') {
+      if (context.visible) parts.push({ raw: '\n' });
+      return;
+    }
+    if (isTableLike(element) && renderTable(element, parts)) return;
+    if (tag === 'li' && context.whiteSpace !== 'pre') {
+      renderListItem(element, parts, childContext);
+      return;
+    }
+    const headingLevel = /^h([1-6])$/.exec(tag)?.[1];
+    if (headingLevel && context.whiteSpace !== 'pre') {
+      const headingParts = [];
+      renderChildren(element, headingParts, childContext);
+      const heading = oneLine(joinTextParts(headingParts));
+      if (heading) parts.push(2, { raw: `${'#'.repeat(Number(headingLevel))} ${heading}` }, 2);
+      return;
+    }
+    if (tag === 'pre' && context.whiteSpace !== 'pre') {
+      const codeParts = [];
+      renderChildren(element, codeParts, { ...childContext, whiteSpace: 'pre' });
+      const code = joinTextParts(codeParts);
+      if (code) parts.push(2, { raw: `\`\`\`\n${code}\n\`\`\`` }, 2);
+      return;
+    }
+    if (tag === 'code' && context.whiteSpace !== 'pre') {
+      const codeParts = [];
+      renderChildren(element, codeParts, childContext);
+      const code = oneLine(joinTextParts(codeParts));
+      if (code) parts.push(`\`${code}\``);
+      return;
+    }
+
+    const block = isBlockDisplay(style.display);
+    const breaks = TEXT_PARAGRAPH_TAGS.has(tag) ? 2 : 1;
+    if (block) parts.push(breaks);
+    else if (style.display === 'table-cell') parts.push(' ');
+    renderChildren(element, parts, childContext);
+    if (block) parts.push(breaks);
+    else if (style.display === 'table-cell') parts.push(' ');
+  }
+
+  return (root) => renderInto(root, textStyleFor(root).whiteSpace);
+}
+
+function scopedTextFor(scopeOptions) {
+  return createScopedTextRenderer(scopeOptions.scopeRoot, scopeOptions)(scopeOptions.scopeRoot);
+}
+
+function textMatches(haystack, needle) {
+  return collapseWhitespace(haystack).includes(collapseWhitespace(needle));
 }
 
 export function scopedBodyText(documentRef = document, options = {}) {
   const mode = options?.mode === 'full' ? 'full' : 'compact';
   const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, mode);
   const scopeRoot = scopeOptions.scopeRoot;
-  const clone = scopeRoot.cloneNode(true);
-  const text = pruneScopedClone(
-    clone,
-    scopeOptions.excludeSelectors,
-    scopeOptions.ignoreRoles,
-    scopeRoot,
-    scopeOptions.pruneHiddenDialogs
-  );
+  const text = scopedTextFor(scopeOptions);
   return {
     text,
     scopeRoot,
@@ -738,6 +961,35 @@ function textSnapshotMeta(bodyText, textLimit, options) {
   return meta;
 }
 
+const MARKDOWN_ALTERNATE_TYPES = new Set(['text/markdown', 'text/x-markdown']);
+const MARKDOWN_LINK_LABEL = /\bmarkdown\b/i;
+
+function httpUrlFor(element) {
+  const href = String(element.href || '');
+  return /^https?:\/\//i.test(href) ? href : undefined;
+}
+
+// Pages that publish their own Markdown are cheaper and more exact to read than
+// rendered text. Prefer the declared rel=alternate; fall back to a short link
+// labelled "Markdown" ("View as Markdown").
+function markdownAlternateFor(documentRef) {
+  for (const link of documentRef.querySelectorAll('link[rel][type][href]')) {
+    const rels = String(link.getAttribute('rel')).toLowerCase().split(/\s+/);
+    const type = String(link.getAttribute('type')).toLowerCase().split(';')[0].trim();
+    if (!rels.includes('alternate') || !MARKDOWN_ALTERNATE_TYPES.has(type)) continue;
+    const href = httpUrlFor(link);
+    if (href) return { href, source: 'link' };
+  }
+  const current = documentRef.location?.href;
+  for (const anchor of documentRef.querySelectorAll('a[href]')) {
+    const label = labelFor(anchor, 80);
+    if (label.length > 40 || !MARKDOWN_LINK_LABEL.test(label)) continue;
+    const href = httpUrlFor(anchor);
+    if (href && href !== current) return { href, source: 'anchor', label };
+  }
+  return undefined;
+}
+
 export function buildSnapshotFromDocument(documentRef = document, options = {}) {
   const mode = options?.mode === 'full' ? 'full' : options?.mode === 'visible' ? 'visible' : 'compact';
   if (mode === 'visible') return buildVisibleSnapshotFromDocument(documentRef, options);
@@ -757,18 +1009,14 @@ export function buildSnapshotFromDocument(documentRef = document, options = {}) 
   });
   cleanupRefStore(documentRef, now);
 
-  const bodyText = pruneScopedClone(
-    scopeRoot.cloneNode(true),
-    scopeOptions.excludeSelectors,
-    scopeOptions.ignoreRoles,
-    scopeRoot,
-    scopeOptions.pruneHiddenDialogs
-  );
+  const bodyText = scopedTextFor(scopeOptions);
   const textMeta = textSnapshotMeta(bodyText, textLimit, options);
+  const markdownAlternate = markdownAlternateFor(documentRef);
   const scopeMeta = {
     scopeApplied: scopeOptions.scopeApplied,
     scopeRoot: scopeHintFor(scopeRoot),
-    excludedCount: scoped.excludedCount
+    excludedCount: scoped.excludedCount,
+    ...(markdownAlternate ? { markdownAlternate } : {})
   };
 
   if (mode === 'full') {
@@ -1185,15 +1433,8 @@ export function waitForCondition(options = {}, documentRef = document) {
         condition = 'selector';
       } else if (options.textInScope) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
-        const scopeRoot = scopeOptions.scopeRoot;
-        const scopedText = pruneScopedClone(
-          scopeRoot.cloneNode(true),
-          scopeOptions.excludeSelectors,
-          scopeOptions.ignoreRoles,
-          scopeRoot,
-          scopeOptions.pruneHiddenDialogs
-        );
-        if (scopedText.includes(String(options.textInScope))) {
+        const scopedText = scopedTextFor(scopeOptions);
+        if (textMatches(scopedText, String(options.textInScope))) {
           matched = true;
           reason = 'textInScope';
           condition = 'textInScope';
@@ -1204,14 +1445,7 @@ export function waitForCondition(options = {}, documentRef = document) {
         condition = 'text';
       } else if (contentStableMs) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
-        const scopeRoot = scopeOptions.scopeRoot;
-        const scopedText = pruneScopedClone(
-          scopeRoot.cloneNode(true),
-          scopeOptions.excludeSelectors,
-          scopeOptions.ignoreRoles,
-          scopeRoot,
-          scopeOptions.pruneHiddenDialogs
-        );
+        const scopedText = scopedTextFor(scopeOptions);
         const length = scopedText.length;
         if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
           if (length === contentStableLastLength) {

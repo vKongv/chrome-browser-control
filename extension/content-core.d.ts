@@ -44,6 +44,11 @@ export interface FeedPost {
   wasLive?: boolean;
   postUrl?: string;
 }
+export interface MarkdownAlternate {
+  href: string;
+  source: 'link' | 'anchor';
+  label?: string;
+}
 export function resolveScopeRoot(documentRef?: Document, scope?: SnapshotScope): Element;
 export function scopedBodyText(
   documentRef?: Document,
@@ -74,6 +79,7 @@ export function buildSnapshotFromDocument(documentRef?: Document, options?: Snap
   scopeApplied?: AppliedSnapshotScope;
   scopeRoot?: ScopeRootHint;
   excludedCount?: number;
+  markdownAlternate?: MarkdownAlternate;
 };
 export function buildVisibleSnapshotFromDocument(documentRef?: Document, options?: SnapshotOptions): {
   title: string;

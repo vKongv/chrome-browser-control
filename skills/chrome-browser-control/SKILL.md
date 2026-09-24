@@ -21,7 +21,7 @@ Use `chrome_browser_control` when the task needs at least one of:
 - JS-rendered or virtualized content a fetch cannot see
 - screenshots or on-page verification after an action
 
-If a direct fetch fails or returns an empty shell page, escalate to the browser. Stop and ask the user on login walls, MFA, consent screens, password entry, or ambiguous account choice (SSO already signed into Chrome may continue without asking).
+If a page links its own Markdown or raw view (`markdownAlternate` in a snapshot, "View as Markdown", `.md` links), read that instead of rendered HTML. If a direct fetch fails or returns an empty shell page, escalate to the browser. Stop and ask the user on login walls, MFA, consent screens, password entry, or ambiguous account choice (SSO already signed into Chrome may continue without asking).
 
 ## Standard Workflow
 
@@ -48,7 +48,8 @@ If a direct fetch fails or returns an empty shell page, escalate to the browser.
    - Use `visible_snapshot` for viewport-bound UI, virtualized pages, coordinate planning, and before visual interactions.
    - Use compact `snapshot` for broad page orientation. Compact defaults to main-landmark scope when present; a visible modal (`aria-modal="true"` or `<dialog>` opened with `showModal()`) takes scope instead. Pass `scope: "document"` for legacy full-body text (including the page behind a modal). Tune with `excludeSelectors` or `ignoreRoles` when chrome noise persists. Compact/main still default to ignoring `dialog` when no visible dialog is open; a visible non-modal `role="dialog"` is included but does not take scope.
    - Use `extract_feed_posts` for structured post records (author, text, times, live flags) on feed-like pages. Times and LIVE flags may be omitted when the DOM does not expose them — report honest gaps instead of guessing.
-   - Use `snapshot({ mode: "full", textLimit })` only when long page text is needed.
+   - To read page text (docs, articles, API references), use compact `snapshot({ textLimit })`. `textPreview` keeps block structure: `#` headings, `-` list items, Markdown table rows, fenced `pre` blocks. `mode: "full"` adds up to 250 element records with bounds and is for layout work, not reading.
+   - If a snapshot returns `markdownAlternate`, the page publishes its own Markdown. Fetch that URL (or `navigate` to it when a fetch cannot reach it) and read it instead of the rendered text.
    - Use `extract_elements` for bounded selector extraction instead of raw JavaScript evaluation.
 
 4. Act from fresh state.
@@ -119,7 +120,7 @@ If a needed capability is in the limits list, stop and tell the user what is mis
 - Post-action synchronization: `wait_for`.
 - Debugging: `page_status`, then `console_logs`.
 - Visual proof: `screenshot` (optionally cropped) when the user asks for pixels or DOM tools are insufficient.
-- Long document text: `snapshot` with a higher `textLimit`.
+- Long document text: compact `snapshot` with a higher `textLimit`; follow `markdownAlternate` when present.
 
 Avoid large snapshots when a query or selector extraction will do. Prefer bounded outputs with explicit limits and omitted counts.
 
