@@ -160,10 +160,32 @@ export function waitForCondition(
     selectorAbsent?: boolean;
     textInScope?: string;
     contentStableMs?: number;
+    settledMs?: number;
+    baselineHash?: string;
     timeoutMs?: number;
   },
   documentRef?: Document
-): Promise<{ matched: boolean; reason: string; condition: string; elapsedMs: number; title?: string; url?: string }>;
+): Promise<{
+  matched: boolean;
+  reason: string;
+  condition: string;
+  elapsedMs: number;
+  title?: string;
+  url?: string;
+  pending?: 'noChange' | 'busy' | 'changing';
+  busy?: { kind: 'aria-busy' | 'progressbar' | 'loadingText'; text?: string };
+}>;
+export function probeWaitCondition(
+  params?: SnapshotScopeOptions & {
+    text?: string;
+    selector?: string;
+    urlIncludes?: string;
+    selectorAbsent?: boolean;
+    textInScope?: string;
+    settledMs?: number;
+  },
+  documentRef?: Document
+): { held?: boolean; baselineHash?: string };
 export function pageStatus(documentRef?: Document): Record<string, unknown>;
 export function installConsoleCapture(windowRef?: Window): { installed: boolean };
 export function getConsoleLogs(params?: { levels?: string[]; limit?: number }): {

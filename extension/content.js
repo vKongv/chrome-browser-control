@@ -59,6 +59,9 @@
         case 'wait_for':
           result = core.waitForCondition(message.params || {}, document);
           break;
+        case 'wait_probe':
+          result = core.probeWaitCondition(message.params || {}, document);
+          break;
         case 'page_status':
           result = core.pageStatus(document);
           break;

@@ -181,7 +181,7 @@ If your MCP host uses a config file, keep it private and outside the repository.
 - `screenshot`: captures the visible viewport of an allowed tab as a data URL. Optional `ref` or `bounds` (+ `padding`) crop after capture; empty crops fail before `captureVisibleTab`. Uncropped responses omit crop fields. MV3 capture is viewport-only; inactive target tabs may be activated before capture. Chrome requires `<all_urls>` or `activeTab` for `captureVisibleTab`; this extension requests optional `<all_urls>` only in wildcard (`*`) mode, so wildcard screenshots need that popup grant.
 - `keypress`: dispatches common DOM keyboard events to the page. Browser/OS-level shortcuts are not guaranteed under MV3. Fails with `DOCUMENT_HIDDEN` when the document is hidden unless `allowHidden: true`. Supports `after` observations.
 - `click_at`: dispatches mouse events at viewport coordinates. Fails with `DOCUMENT_HIDDEN` when the document is hidden unless `allowHidden: true`. Supports `after` observations.
-- `wait_for`: waits for bounded selector/text/URL-substring conditions and returns match/timeout evidence.
+- `wait_for`: waits for bounded selector/text/URL-substring, selector-absence, scoped-text, content-stability, or settled-change conditions and returns match/timeout evidence. Conditions are alternatives; the first that holds wins. `settledMs` waits until scoped text changes, then holds still that long with nothing in scope loading (`aria-busy="true"`, an indeterminate progressbar, or a "Loading…" line); `contentStableMs` also waits while scope is loading. A timeout reports `pending` (`noChange`, `busy`, `changing`) and `busy`.
 - `page_status`: returns title, URL, ready/visibility state, viewport/scroll state, and resource counts by initiator type. It does not expose request headers or response bodies.
 - `console_logs`: returns bounded console logs captured after the content script was injected. It cannot see older page console history.
 - `collect_scroll`: scrolls a bounded number of steps (hard ceiling when `until` is set), extracts selected elements each step, optionally targets a nested scroll container via `scroll`, applies an aggregate item cap (`maxItems`, default 100), and optionally dedupes by text or href for lazy feeds. Optional `until.noNewItemsForSteps` / `until.stopBeforeDatetime` (ISO-8601; requires `includeTimes`) set `stoppedReason`. Results include omitted/truncated counts. Supports `after` observations.
@@ -205,14 +205,14 @@ For `perform_actions`, `after` applies to the whole batch only: individual steps
 {
   "ref": "h12",
   "after": {
-    "waitFor": { "selector": ".results", "timeoutMs": 5000 },
+    "waitFor": { "settledMs": 750, "timeoutMs": 8000 },
     "snapshot": { "mode": "visible", "limit": 40 },
     "pageStatus": true
   }
 }
 ```
 
-`after.waitFor` must include at least one of `text`, `selector`, or `urlIncludes`; `timeoutMs` is optional and capped at `20000` so the full act-then-observe chain stays within the default broker request timeout. `after.snapshot` may be `true` for default snapshot options or an object with `mode`, `textLimit`, and/or `limit`. Invalid `after` requests are rejected before the base action runs.
+`after.waitFor` must include at least one wait condition. To wait for the result of the action, use `settledMs`: the extension records the scoped text before the action runs, and the wait returns once that text has changed and held still for `settledMs` with nothing in scope loading. After `navigate`, the loaded page counts as changed. For `text`, `selector`, `selectorAbsent`, `textInScope`, and `urlIncludes`, the extension also checks the condition before the action and returns `heldBeforeAction`; `true` means the match may be something that was already on the page. `timeoutMs` is optional and capped at `20000` so the full act-then-observe chain stays within the default broker request timeout. `after.snapshot` may be `true` for default snapshot options or an object with `mode`, `textLimit`, and/or `limit`. Invalid `after` requests are rejected before the base action runs.
 
 If the base action succeeds but an `after` observation fails, the response still includes the base action result and sets `after` to `{ "ok": false, "error": "..." }`.
 

@@ -33,6 +33,7 @@ const DEFAULTS = {
 const EXTENSION_PROTOCOL_MARKER = {
   protocolVersion: 7,
   features: [
+    'wait-settled',
     'snapshot-structured-text',
     'cdp-trusted-input',
     'cdp-response-body',
@@ -1267,6 +1268,7 @@ function hasWaitCondition(args = {}) {
   if (args.selectorAbsent === true && typeof args.selector === 'string' && args.selector.trim().length > 0) return true;
   if (typeof args.textInScope === 'string' && args.textInScope.trim().length > 0) return true;
   if (typeof args.contentStableMs === 'number' && Number.isFinite(args.contentStableMs) && args.contentStableMs > 0) return true;
+  if (typeof args.settledMs === 'number' && Number.isFinite(args.settledMs) && args.settledMs > 0) return true;
   return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && args[key].trim().length > 0);
 }
 
@@ -1291,7 +1293,7 @@ function validateAfterRequest(after) {
       throw new Error('after.waitFor must be an object');
     }
     if (!hasWaitCondition(after.waitFor)) {
-      throw new Error('after.waitFor requires at least one wait condition');
+      throw new Error('after.waitFor requires at least one wait condition; to wait for the action\'s result, pass settledMs (for example 750)');
     }
   }
   if (after.snapshot !== undefined) normalizeSnapshotAfter(after.snapshot);
@@ -1324,23 +1326,34 @@ function budgetAfterWaitForParams(waitFor, startedAt = Date.now()) {
     ...waitFor,
     timeoutMs
   };
-  if (typeof waitFor.contentStableMs === 'number' && Number.isFinite(waitFor.contentStableMs)) {
-    next.contentStableMs = Math.max(1, Math.min(Math.floor(waitFor.contentStableMs), timeoutMs));
+  for (const key of ['contentStableMs', 'settledMs']) {
+    if (typeof waitFor[key] === 'number' && Number.isFinite(waitFor[key])) {
+      next[key] = Math.max(1, Math.min(Math.floor(waitFor[key]), timeoutMs));
+    }
   }
   return next;
 }
 
-async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { startedAt = Date.now(), documentId } = {}) {
+// Before an act-then-observe action runs, record whether after.waitFor already holds and the scoped text
+// baseline that settledMs compares against. A failed probe leaves the wait to take its baseline itself.
+async function probeAfterWaitFor(tabId, after, allowedOrigins, { documentId, waitForLoad = true } = {}) {
+  if (!after || typeof after !== 'object' || !after.waitFor) return undefined;
+  try {
+    return await sendToContent(tabId, 'wait_probe', after.waitFor, allowedOrigins, { waitForLoad, documentId });
+  } catch (_error) {
+    return undefined;
+  }
+}
+
+async function runAfterObservations(tabId, after = {}, allowedOrigins = [], { startedAt = Date.now(), documentId, probe } = {}) {
   const observations = {};
   await waitForTabComplete(tabId);
   if (after.waitFor !== undefined) {
-    observations.waitFor = await sendToContent(
-      tabId,
-      'wait_for',
-      budgetAfterWaitForParams(after.waitFor, startedAt),
-      allowedOrigins,
-      { waitForLoad: false, documentId }
-    );
+    const waitParams = budgetAfterWaitForParams(after.waitFor, startedAt);
+    if (typeof probe?.baselineHash === 'string') waitParams.baselineHash = probe.baselineHash;
+    const waited = await sendToContent(tabId, 'wait_for', waitParams, allowedOrigins, { waitForLoad: false, documentId });
+    observations.waitFor =
+      typeof probe?.held === 'boolean' && waited && typeof waited === 'object' ? { ...waited, heldBeforeAction: probe.held } : waited;
   }
   if (after.snapshot !== undefined) {
     observations.snapshot = await sendToContent(tabId, 'snapshot', normalizeSnapshotAfter(after.snapshot), allowedOrigins, {
@@ -1377,8 +1390,9 @@ async function runPageActionWithAfter(action, params, allowedOrigins) {
   validateAfterRequest(after);
   const tabId = await resolvePageActionTabId(baseParams, allowedOrigins);
   const documentId = baseParams.documentId;
+  const probe = await probeAfterWaitFor(tabId, after, allowedOrigins, { documentId });
   const result = await runRoutedPageAction(tabId, action, baseParams, allowedOrigins, { documentId });
-  return await withAfterResult(result, tabId, after, allowedOrigins, { startedAt, documentId });
+  return await withAfterResult(result, tabId, after, allowedOrigins, { startedAt, documentId, probe });
 }
 
 function validatePerformActionStep(step, index) {
@@ -1419,6 +1433,7 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
     allowedOrigins
   );
   const documentId = baseParams.documentId;
+  const probe = await probeAfterWaitFor(tabId, after, allowedOrigins, { documentId });
   const steps = [];
   for (let index = 0; index < actions.length; index += 1) {
     const step = actions[index];
@@ -1461,7 +1476,7 @@ async function runPerformActionsWithAfter(params, allowedOrigins) {
       };
     }
   }
-  return await withAfterResult(batchSummary, tabId, after, allowedOrigins, { startedAt, documentId });
+  return await withAfterResult(batchSummary, tabId, after, allowedOrigins, { startedAt, documentId, probe });
 }
 
 async function hasExactHostPermission(origin) {
@@ -2067,7 +2082,8 @@ async function handleBridgeRequest(action, rawParams = {}) {
         result.warning = 'Navigation did not finish loading within 15s; tab may still be loading.';
         result.pending = true;
       }
-      return await withAfterResult(result, tabId, after, settings.allowedOrigins, { startedAt });
+      // The page was replaced, so settledMs treats the loaded page as changed (an empty baseline never matches).
+      return await withAfterResult(result, tabId, after, settings.allowedOrigins, { startedAt, probe: { baselineHash: '' } });
     }
     case 'activate_tab': {
       const tabId = await resolvePageActionTabId(params, settings.allowedOrigins);

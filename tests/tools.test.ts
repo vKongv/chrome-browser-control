@@ -367,6 +367,18 @@ describe('registerBrowserTools', () => {
     expect(bridge.calls).toEqual([]);
   });
 
+  it('forwards settledMs as a wait condition in wait_for and after.waitFor', async () => {
+    const server = new FakeServer();
+    const bridge = new FakeBridge();
+    registerBrowserTools(server, bridge);
+
+    await server.tools.get('wait_for')?.({ settledMs: 500, timeoutMs: 1000 });
+    expect(bridge.calls.at(-1)).toEqual({ action: 'wait_for', params: { settledMs: 500, timeoutMs: 1000 } });
+
+    await server.tools.get('click')?.({ ref: 'h1', after: { waitFor: { settledMs: 500 } } });
+    expect(bridge.calls.at(-1)).toMatchObject({ action: 'click', params: { after: { waitFor: { settledMs: 500 } } } });
+  });
+
   it('rejects empty after.waitFor before calling the bridge', async () => {
     const server = new FakeServer();
     const bridge = new FakeBridge();
@@ -376,7 +388,7 @@ describe('registerBrowserTools', () => {
 
     expect(result).toMatchObject({
       isError: true,
-      content: [{ text: 'after.waitFor requires at least one wait condition' }]
+      content: [{ text: 'after.waitFor requires at least one wait condition; to wait for the action\'s result, pass settledMs (for example 750)' }]
     });
     expect(bridge.calls).toEqual([]);
   });
@@ -439,7 +451,7 @@ describe('registerBrowserTools', () => {
     });
     expect(invalidAfter).toMatchObject({
       isError: true,
-      content: [{ text: 'after.waitFor requires at least one wait condition' }]
+      content: [{ text: 'after.waitFor requires at least one wait condition; to wait for the action\'s result, pass settledMs (for example 750)' }]
     });
     expect(bridge.calls).toEqual([]);
   });

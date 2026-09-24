@@ -1139,7 +1139,7 @@ function httpUrlFor(element) {
   return /^https?:\/\//i.test(href) ? href : undefined;
 }
 
-function isRenderedAnchor(element) {
+function isRendered(element) {
   let current = element;
   let visibility;
   while (current) {
@@ -1176,7 +1176,7 @@ function markdownAlternateFor(documentRef) {
   const current = documentRef.location?.href;
   for (const anchor of documentRef.querySelectorAll('a[href]')) {
     const label = labelFor(anchor, 80);
-    if (label.length > 40 || !isMarkdownViewAnchor(anchor, label) || !isRenderedAnchor(anchor)) continue;
+    if (label.length > 40 || !isMarkdownViewAnchor(anchor, label) || !isRendered(anchor)) continue;
     const href = httpUrlFor(anchor);
     if (href && href !== current) return { href, source: 'anchor', label };
   }
@@ -1600,79 +1600,171 @@ export function pageStatus(documentRef = document) {
   };
 }
 
+function positiveMs(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : undefined;
+}
+
+// Conditions that ask "is this on the page now?". They are alternatives: the first one that holds wins.
+function presenceConditionMet(options, documentRef) {
+  if (options.urlIncludes && String(documentRef.location?.href || '').includes(String(options.urlIncludes))) {
+    return 'urlIncludes';
+  }
+  if (options.selector) {
+    const present = Boolean(documentRef.querySelector(String(options.selector)));
+    if (options.selectorAbsent === true ? !present : present) {
+      return options.selectorAbsent === true ? 'selectorAbsent' : 'selector';
+    }
+  }
+  if (options.textInScope) {
+    const scopedText = scopedTextFor(resolveSnapshotScopeOptions(documentRef, options, 'compact'));
+    if (textMatches(scopedText, String(options.textInScope))) return 'textInScope';
+  }
+  if (options.text && bodyTextFor(documentRef).includes(String(options.text))) return 'text';
+  return null;
+}
+
+function hasPresenceCondition(options) {
+  return Boolean(options.urlIncludes || options.selector || options.textInScope || options.text);
+}
+
+// 53-bit string hash; wait baselines travel through the background as this instead of the full text.
+function textHash(text) {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `t${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}:${text.length}`;
+}
+
+const BUSY_SELECTOR = '[aria-busy="true"],[role="progressbar"],progress';
+// A line or table cell that is only a loading message: "Loading", "Loading…", "Loading messages...".
+const LOADING_TEXT = /^loading(?:\s.{0,40}?)?(?:\.{3}|…)$|^loading$/i;
+
+function isIndeterminateProgress(element) {
+  if (element.tagName.toLowerCase() === 'progress') return !element.hasAttribute('value');
+  return String(element.getAttribute('role') || '').toLowerCase() === 'progressbar' && !element.hasAttribute('aria-valuenow');
+}
+
+function loadingTextLine(text) {
+  for (const line of text.split('\n')) {
+    const cells = line.replace(/^\s*(?:#{1,6}\s+|[-*]\s+|\d+\.\s+)/, '').replace(/^\s*\||\|\s*$/g, '').split('|');
+    for (const cell of cells) {
+      const value = cell.trim();
+      if (value.length <= 50 && LOADING_TEXT.test(value)) return value;
+    }
+  }
+  return undefined;
+}
+
+// What still says "loading" in scope: aria-busy on the scope or inside it, an indeterminate progress
+// indicator, or a line of scoped text that is only a loading message. Hidden and excluded subtrees do not count.
+function busyIndicatorFor(documentRef, scopeOptions, scopedText) {
+  const { scopeRoot, excludeSelectors, ignoreRoles, pruneHiddenDialogs } = scopeOptions;
+  for (let current = scopeRoot; current; current = current.parentElement) {
+    if (current.getAttribute?.('aria-busy') === 'true') return { kind: 'aria-busy' };
+  }
+  for (const element of scopeRoot.querySelectorAll(BUSY_SELECTOR)) {
+    if (
+      isInsideExcludedSubtree(element, excludeSelectors, documentRef) ||
+      isInsideIgnoredRoleSubtree(element, ignoreRoles) ||
+      (pruneHiddenDialogs && isInsideHiddenDialogSubtree(element, scopeRoot)) ||
+      !isRendered(element)
+    ) {
+      continue;
+    }
+    if (element.getAttribute('aria-busy') === 'true') return { kind: 'aria-busy' };
+    if (isIndeterminateProgress(element)) return { kind: 'progressbar' };
+  }
+  const line = loadingTextLine(scopedText);
+  return line ? { kind: 'loadingText', text: line } : undefined;
+}
+
+// Run before an act-then-observe action: whether the wait's presence condition already holds, and a
+// baseline of scoped text for settledMs.
+export function probeWaitCondition(options = {}, documentRef = document) {
+  const result = {};
+  if (hasPresenceCondition(options)) result.held = presenceConditionMet(options, documentRef) !== null;
+  if (positiveMs(options.settledMs)) {
+    result.baselineHash = textHash(scopedTextFor(resolveSnapshotScopeOptions(documentRef, options, 'compact')));
+  }
+  return result;
+}
+
 export function waitForCondition(options = {}, documentRef = document) {
   const timeoutMs = boundedLimit(options.timeoutMs, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
   const started = Date.now();
+  const contentStableMs = positiveMs(options.contentStableMs);
+  const settledMs = positiveMs(options.settledMs);
   let contentStableLastLength = -1;
   let contentStableSince = 0;
-  const contentStableMs =
-    typeof options.contentStableMs === 'number' && Number.isFinite(options.contentStableMs)
-      ? Math.max(1, Math.floor(options.contentStableMs))
-      : undefined;
+  // settledMs: scoped text must differ from the baseline (taken before the action, or at the first check),
+  // then hold still for settledMs with nothing in scope still loading.
+  let settleBaseline = typeof options.baselineHash === 'string' ? options.baselineHash : undefined;
+  let settleChanged = false;
+  let settleLastText;
+  let settleSince = 0;
+  let pending;
+  let busy;
 
   return new Promise((resolve) => {
     const check = () => {
-      let matched = false;
-      let reason = 'timeout';
-      let condition = 'timeout';
+      const now = Date.now();
+      let condition = presenceConditionMet(options, documentRef);
+      pending = undefined;
+      busy = undefined;
 
-      if (options.urlIncludes && String(documentRef.location?.href || '').includes(String(options.urlIncludes))) {
-        matched = true;
-        reason = 'urlIncludes';
-        condition = 'urlIncludes';
-      } else if (options.selectorAbsent === true) {
-        if (options.selector && !documentRef.querySelector(String(options.selector))) {
-          matched = true;
-          reason = 'selectorAbsent';
-          condition = 'selectorAbsent';
-        }
-      } else if (options.selector && documentRef.querySelector(String(options.selector))) {
-        matched = true;
-        reason = 'selector';
-        condition = 'selector';
-      } else if (options.textInScope) {
+      if (!condition && (contentStableMs || settledMs)) {
         const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
         const scopedText = scopedTextFor(scopeOptions);
-        if (textMatches(scopedText, String(options.textInScope))) {
-          matched = true;
-          reason = 'textInScope';
-          condition = 'textInScope';
-        }
-      } else if (options.text && bodyTextFor(documentRef).includes(String(options.text))) {
-        matched = true;
-        reason = 'text';
-        condition = 'text';
-      } else if (contentStableMs) {
-        const scopeOptions = resolveSnapshotScopeOptions(documentRef, options, 'compact');
-        const scopedText = scopedTextFor(scopeOptions);
-        const length = scopedText.length;
-        if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
-          if (length === contentStableLastLength) {
-            if (Date.now() - contentStableSince >= contentStableMs) {
-              matched = true;
-              reason = 'contentStableMs';
+        busy = busyIndicatorFor(documentRef, scopeOptions, scopedText);
+
+        if (contentStableMs) {
+          const length = scopedText.length;
+          if (length >= MIN_CONTENT_STABLE_TEXT_LENGTH) {
+            if (length !== contentStableLastLength) {
+              contentStableLastLength = length;
+              contentStableSince = now;
+            } else if (!busy && now - contentStableSince >= contentStableMs) {
               condition = 'contentStableMs';
             }
           } else {
-            contentStableLastLength = length;
-            contentStableSince = Date.now();
+            contentStableLastLength = -1;
+            contentStableSince = 0;
           }
-        } else {
-          contentStableLastLength = -1;
-          contentStableSince = 0;
+          pending = busy ? 'busy' : 'changing';
+        }
+
+        if (!condition && settledMs) {
+          const hash = textHash(scopedText);
+          if (settleBaseline === undefined) settleBaseline = hash;
+          else if (hash !== settleBaseline) settleChanged = true;
+          if (scopedText !== settleLastText) {
+            settleLastText = scopedText;
+            settleSince = now;
+          }
+          if (settleChanged && !busy && now - settleSince >= settledMs) condition = 'settledMs';
+          pending = !settleChanged ? 'noChange' : busy ? 'busy' : 'changing';
         }
       }
 
-      const elapsedMs = Date.now() - started;
-      if (matched || elapsedMs >= timeoutMs) {
-        resolve({
-          matched,
-          reason,
-          condition,
+      const elapsedMs = now - started;
+      if (condition || elapsedMs >= timeoutMs) {
+        const result = {
+          matched: Boolean(condition),
+          reason: condition || 'timeout',
+          condition: condition || 'timeout',
           elapsedMs,
           title: documentRef.title,
           url: documentRef.location?.href
-        });
+        };
+        if (!condition && pending) result.pending = pending;
+        if (!condition && busy) result.busy = busy;
+        resolve(result);
         return;
       }
       setTimeout(check, 100);
@@ -1970,6 +2062,7 @@ globalThis.BrowserControlContentCore = {
   prepareTrustedType,
   prepareTrustedClickAt,
   prepareTrustedKeypress,
+  probeWaitCondition,
   waitForCondition,
   pageStatus,
   installConsoleCapture,

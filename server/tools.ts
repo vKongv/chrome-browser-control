@@ -85,7 +85,7 @@ const AfterWaitFor = z
     urlIncludes: z.string().min(1).max(500).optional(),
     selectorAbsent: z.boolean().optional().describe('Wait until selector is absent from the document.'),
     textInScope: z.string().min(1).max(500).optional().describe('Wait for substring in scoped page text.'),
-    scope: SnapshotScope.optional().describe('Scope for textInScope and contentStableMs waits.'),
+    scope: SnapshotScope.optional().describe('Scope for textInScope, contentStableMs, and settledMs waits.'),
     excludeSelectors: SnapshotScopeOptions.excludeSelectors,
     ignoreRoles: SnapshotScopeOptions.ignoreRoles,
     contentStableMs: z
@@ -94,11 +94,20 @@ const AfterWaitFor = z
       .positive()
       .max(20_000)
       .optional()
-      .describe('Wait until scoped text length is stable for this many milliseconds (capped at after.waitFor timeoutMs).'),
+      .describe('Wait until scoped text length is stable for this many milliseconds and nothing in scope is loading (capped at after.waitFor timeoutMs).'),
+    settledMs: z
+      .number()
+      .int()
+      .positive()
+      .max(20_000)
+      .optional()
+      .describe(
+        'Wait until scoped text has changed from before the action, then held still this many milliseconds with nothing in scope loading. Use this to wait for the result of the action (500-1000 is typical).'
+      ),
     timeoutMs: z.number().int().positive().max(20_000).optional()
   })
   .refine((value) => hasWaitCondition(value), {
-    message: 'after.waitFor requires at least one wait condition'
+    message: 'after.waitFor requires at least one wait condition; to wait for the action\'s result, pass settledMs (for example 750)'
   })
   .refine(
     (value) =>
@@ -106,6 +115,11 @@ const AfterWaitFor = z
       typeof value.timeoutMs !== 'number' ||
       value.contentStableMs <= value.timeoutMs,
     { message: 'after.waitFor contentStableMs cannot exceed timeoutMs' }
+  )
+  .refine(
+    (value) =>
+      typeof value.settledMs !== 'number' || typeof value.timeoutMs !== 'number' || value.settledMs <= value.timeoutMs,
+    { message: 'after.waitFor settledMs cannot exceed timeoutMs' }
   );
 const AfterSnapshot = z.union([
   z.literal(true),
@@ -118,7 +132,9 @@ const AfterSnapshot = z.union([
 ]);
 const AfterObservation = z
   .object({
-    waitFor: AfterWaitFor.optional().describe('Wait for text, selector, or URL substring after the action.'),
+    waitFor: AfterWaitFor.optional().describe(
+      'Wait after the action. Conditions are alternatives; the first that holds wins. Prefer settledMs to wait for the action\'s result. The result has heldBeforeAction: true when a text/selector/URL condition already held before the action, so its match proves nothing.'
+    ),
     snapshot: AfterSnapshot.optional().describe('Collect a snapshot after the action. Use true for default snapshot options.'),
     pageStatus: z.boolean().optional().describe('Collect page_status after the action.')
   })
@@ -174,6 +190,7 @@ function hasWaitCondition(args: Record<string, unknown> = {}): boolean {
   if (args.selectorAbsent === true && typeof args.selector === 'string' && args.selector.trim().length > 0) return true;
   if (typeof args.textInScope === 'string' && args.textInScope.trim().length > 0) return true;
   if (typeof args.contentStableMs === 'number' && Number.isFinite(args.contentStableMs) && args.contentStableMs > 0) return true;
+  if (typeof args.settledMs === 'number' && Number.isFinite(args.settledMs) && args.settledMs > 0) return true;
   return ['text', 'selector', 'urlIncludes'].some((key) => typeof args[key] === 'string' && String(args[key]).trim().length > 0);
 }
 
@@ -186,7 +203,7 @@ function validateAfterObservation(args: Record<string, unknown> = {}): string | 
   if (!after || typeof after !== 'object' || Array.isArray(after)) return null;
   const waitFor = (after as Record<string, unknown>).waitFor;
   if (waitFor !== undefined && (!waitFor || typeof waitFor !== 'object' || Array.isArray(waitFor) || !hasWaitCondition(waitFor as Record<string, unknown>))) {
-    return 'after.waitFor requires at least one wait condition';
+    return 'after.waitFor requires at least one wait condition; to wait for the action\'s result, pass settledMs (for example 750)';
   }
   if (!isValidAfterSnapshot((after as Record<string, unknown>).snapshot)) {
     return 'after.snapshot must be true or an object';
@@ -938,14 +955,14 @@ export function registerBrowserTools(
     {
       title: 'Wait for page condition',
       description:
-        'Wait for text, selector, URL substring, selector absence, scoped text, or bounded content stability in the target page.',
+        'Wait for text, selector, URL substring, selector absence, scoped text, content stability, or a settled change in the target page. Conditions are alternatives: the first that holds wins. text/selector/urlIncludes match anything already on the page (sidebar labels, old rows, a URL a single-page app set before loading data), so after a click prefer the action\'s after.waitFor with settledMs. contentStableMs and settledMs also wait while scope shows aria-busy, an indeterminate progressbar, or a "Loading…" line. A timeout reports pending (noChange, busy, changing) and busy.',
       inputSchema: {
         text: z.string().min(1).max(500).optional(),
         selector: z.string().min(1).max(500).optional(),
         urlIncludes: z.string().min(1).max(500).optional(),
         selectorAbsent: z.boolean().optional().describe('Wait until selector is absent from the document.'),
         textInScope: z.string().min(1).max(500).optional().describe('Wait for substring in scoped page text.'),
-        scope: SnapshotScope.optional().describe('Scope for textInScope and contentStableMs waits.'),
+        scope: SnapshotScope.optional().describe('Scope for textInScope, contentStableMs, and settledMs waits.'),
         excludeSelectors: SnapshotScopeOptions.excludeSelectors,
         ignoreRoles: SnapshotScopeOptions.ignoreRoles,
         contentStableMs: z
@@ -954,7 +971,16 @@ export function registerBrowserTools(
           .positive()
           .max(30_000)
           .optional()
-          .describe('Wait until scoped text length is stable for this many milliseconds.'),
+          .describe('Wait until scoped text length is stable for this many milliseconds and nothing in scope is loading.'),
+        settledMs: z
+          .number()
+          .int()
+          .positive()
+          .max(30_000)
+          .optional()
+          .describe(
+            'Wait until scoped text changes from its text when the wait starts, then holds still this many milliseconds with nothing in scope loading. A change that finished before this call is missed; use the action\'s after.waitFor.settledMs instead.'
+          ),
         timeoutMs: z.number().int().positive().max(30_000).optional(),
         ...OptionalDocumentTarget
       }
