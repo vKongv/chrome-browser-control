@@ -2045,6 +2045,21 @@ describe('settled waits', () => {
     }
   });
 
+  it('reports busy, not noChange, when old rows stay under a loading indicator', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main>${rows(['VE-old-1'])}</main>`);
+      const doc = document as unknown as Document;
+      const { baselineHash } = probeWaitCondition({ settledMs: 200 }, doc);
+      document.querySelector('main')!.setAttribute('aria-busy', 'true');
+      const wait = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 1000 }, doc);
+      await vi.advanceTimersByTimeAsync(1100);
+      await expect(wait).resolves.toMatchObject({ matched: false, pending: 'busy', busy: { kind: 'aria-busy' } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('takes its own baseline at the first check when none is passed', async () => {
     vi.useFakeTimers();
     try {

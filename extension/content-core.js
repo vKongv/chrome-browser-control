@@ -1760,7 +1760,8 @@ function waitForCondition(options = {}, documentRef = document) {
             settleSince = now;
           }
           if (settleChanged && now - settleSince >= settledMs) condition = 'settledMs';
-          pending = !settleChanged ? 'noChange' : busy ? 'busy' : 'changing';
+          // Still loading outranks unchanged: a refresh can keep the old rows under aria-busy until data arrives.
+          pending = busy ? 'busy' : !settleChanged ? 'noChange' : 'changing';
         }
       }
 
