@@ -79,6 +79,7 @@ export function buildSnapshotFromDocument(documentRef?: Document, options?: Snap
   scopeApplied?: AppliedSnapshotScope;
   scopeRoot?: ScopeRootHint;
   excludedCount?: number;
+  ariaHiddenOmitted?: number;
   markdownAlternate?: MarkdownAlternate;
 };
 export function buildVisibleSnapshotFromDocument(documentRef?: Document, options?: SnapshotOptions): {

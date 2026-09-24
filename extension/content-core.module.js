@@ -32,6 +32,10 @@ const MAX_IGNORE_ROLES = 20;
 const DEFAULT_IGNORE_ROLES = ['dialog'];
 const DIALOG_SELECTOR = 'dialog, [role="dialog"], [role="alertdialog"]';
 const MIN_CONTENT_STABLE_TEXT_LENGTH = 50;
+const INTERACTIVE_ROLES = new Set([
+  'link', 'button', 'textbox', 'searchbox', 'combobox', 'listbox', 'option', 'checkbox', 'radio', 'switch',
+  'slider', 'spinbutton', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'treeitem', 'summary'
+]);
 
 let refTtlMs = DEFAULT_REF_TTL_MS;
 let maxRefs = DEFAULT_MAX_REFS;
@@ -198,8 +202,31 @@ function labelFor(element, limit = 160) {
   const tag = element.tagName.toLowerCase();
   if (tag === 'input') return '';
 
-  const text = element.innerText || element.textContent || '';
-  return text.replace(/\s+/g, ' ').trim().slice(0, limit);
+  const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
+  if (text || !isInteractiveElement(element)) return text.slice(0, limit);
+  return imageAltName(element).slice(0, limit);
+}
+
+function isInteractiveElement(element) {
+  return INTERACTIVE_ROLES.has(roleFor(element).toLowerCase()) || element.hasAttribute('contenteditable');
+}
+
+// Name from content counts <img alt> as text, but innerText leaves alt out, so
+// icon-only controls such as <div role="button"><img alt="Thumbs up"></div> read as "".
+function imageAltName(element) {
+  return [...element.querySelectorAll('img[alt]')]
+    .filter((img) => !img.closest('[aria-hidden="true"]'))
+    .map((img) => img.getAttribute('alt').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+// aria-hidden="true" marks decoration the page keeps out of the accessibility tree,
+// such as the icon inside an already-named button. Interactive elements stay even
+// under aria-hidden: modal libraries hide the page behind a dialog this way, and a
+// stale aria-hidden must not empty the element list.
+function isAriaHiddenDecoration(element) {
+  return Boolean(element.closest('[aria-hidden="true"]')) && !isInteractiveElement(element);
 }
 
 function isInteresting(element) {
@@ -585,7 +612,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
       return false;
     }
   });
-  const { ignoreRoles, pruneHiddenDialogs } = scopeOptions;
+  const { ignoreRoles, pruneHiddenDialogs, inlineRefs } = scopeOptions;
 
   function isExcluded(element) {
     const tag = element.tagName.toLowerCase();
@@ -706,6 +733,18 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
     parts.push(1, { raw: `${'  '.repeat(Math.max(0, context.listDepth))}${marker}${content}` }, 1);
   }
 
+  // Links keep their text in reading order: [API docs](ref=h3). Other controls
+  // name their role, and their label when they have one: [button "Copy" ref=h4].
+  function inlineRefMarker(element, { ref, role, label }, context) {
+    if (role === 'link') {
+      const linkParts = [];
+      renderChildren(element, linkParts, context);
+      const text = oneLine(joinTextParts(linkParts)) || label;
+      return text ? `[${text}](ref=${ref})` : `[link ref=${ref}]`;
+    }
+    return label ? `[${role} "${label.replace(/"/g, '\\"')}" ref=${ref}]` : `[${role} ref=${ref}]`;
+  }
+
   function renderElement(element, parts, context) {
     if (isExcluded(element)) return;
     const style = textStyleFor(element);
@@ -717,6 +756,16 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
       visible,
       whiteSpace: context.whiteSpace === 'pre' ? 'pre' : style.whiteSpace
     };
+
+    const inlineRef = inlineRefs?.get(element);
+    if (inlineRef) {
+      if (!visible) return;
+      const block = isBlockDisplay(style.display);
+      if (block) parts.push(1);
+      parts.push(inlineRefMarker(element, inlineRef, childContext));
+      if (block) parts.push(1);
+      return;
+    }
 
     if (tag === 'br') {
       if (context.visible) parts.push({ raw: '\n' });
@@ -794,9 +843,11 @@ function interestingElementsInScope(documentRef, scopeRoot, scopeOptions) {
       !isInsideIgnoredRoleSubtree(element, ignoreRoles) &&
       (!pruneHiddenDialogs || !isInsideHiddenDialogSubtree(element, scopeRoot))
   );
+  const elements = filtered.filter((element) => !isAriaHiddenDecoration(element));
   return {
-    elements: filtered,
-    excludedCount: Math.max(0, allInScope.length - filtered.length)
+    elements,
+    excludedCount: Math.max(0, allInScope.length - filtered.length),
+    ariaHiddenOmitted: filtered.length - elements.length
   };
 }
 
@@ -1054,19 +1105,23 @@ export function buildSnapshotFromDocument(documentRef = document, options = {}) 
   const elements = scoped.elements;
   const limit = mode === 'full' ? FULL_ELEMENT_LIMIT : COMPACT_ELEMENT_LIMIT;
   const selected = elements.slice(0, limit);
+  const inlineRefs = new Map();
   const items = selected.map((element) => {
     const ref = refForElement(element, documentRef, now);
-    return mode === 'full' ? fullItemFor(element, ref) : compactItemFor(element, ref);
+    const item = mode === 'full' ? fullItemFor(element, ref) : compactItemFor(element, ref);
+    if (isInteractiveElement(element)) inlineRefs.set(element, { ref, role: item.role, label: item.label });
+    return item;
   });
   cleanupRefStore(documentRef, now);
 
-  const bodyText = scopedTextFor(scopeOptions);
+  const bodyText = scopedTextFor({ ...scopeOptions, inlineRefs });
   const textMeta = textSnapshotMeta(bodyText, textLimit, options);
   const markdownAlternate = markdownAlternateFor(documentRef);
   const scopeMeta = {
     scopeApplied: scopeOptions.scopeApplied,
     scopeRoot: scopeHintFor(scopeRoot),
     excludedCount: scoped.excludedCount,
+    ariaHiddenOmitted: scoped.ariaHiddenOmitted,
     ...(markdownAlternate ? { markdownAlternate } : {})
   };
 

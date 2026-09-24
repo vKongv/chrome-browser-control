@@ -87,6 +87,11 @@ function runGenerator(root: string, ...args: string[]) {
   return spawnSync(process.execPath, [generatorPath, ...args], { cwd: root, encoding: 'utf8' });
 }
 
+// Refs come from one counter shared across documents; mask them to compare text.
+function withoutRefIds(text: string) {
+  return text.replace(/ref=h[0-9a-z]+/g, 'ref=*');
+}
+
 function makeDocument(html: string) {
   const window = new HappyWindow({ url: 'https://example.test/' });
   window.document.write(html);
@@ -1240,7 +1245,7 @@ describe('extension content core', () => {
           <details><summary>More info</summary><p>Collapsed body</p></details>
         </main>
       `);
-      expect(text).toBe('Visible copy\n\nMore info');
+      expect(withoutRefIds(text)).toBe('Visible copy\n\n[summary "More info" ref=*]');
     });
 
     it('applies excludeSelectors and ignoreRoles against the live document', () => {
@@ -1309,6 +1314,101 @@ describe('extension content core', () => {
         makeDocument('<main><a href="/guide">A long guide about writing Markdown documents well</a></main>') as unknown as Document
       );
       expect(snapshot).not.toHaveProperty('markdownAlternate');
+    });
+  });
+
+  describe('snapshot inline refs and element filtering', () => {
+    function snap(html: string, options: Record<string, unknown> = {}) {
+      return buildSnapshotFromDocument(makeDocument(html) as unknown as Document, { textLimit: 10_000, ...options });
+    }
+
+    it('places element refs in the snapshot text where the elements appear', () => {
+      const snapshot = snap(`
+        <main>
+          <h2>Step 1</h2>
+          <p>Create a broadcast. (<a href="/docs">API docs</a>)</p>
+          <pre>{ "id": 1 }</pre>
+          <div role="button"><svg aria-hidden="true" role="img"></svg></div>
+          <button>Save</button>
+        </main>
+      `);
+      const refs = Object.fromEntries(snapshot.elements.map((item: any) => [item.label || item.role, item.ref]));
+      expect(snapshot.textPreview).toBe(
+        [
+          '## Step 1',
+          '',
+          `Create a broadcast. ([API docs](ref=${refs['API docs']}))`,
+          '',
+          '```',
+          '{ "id": 1 }',
+          '```',
+          '',
+          `[button ref=${refs.button}]`,
+          `[button "Save" ref=${refs.Save}]`
+        ].join('\n')
+      );
+    });
+
+    it('uses the same refs in full-mode text and elements', () => {
+      const snapshot = snap('<main><p>See <a href="/a">guide</a>.</p></main>', { mode: 'full' });
+      const link = snapshot.elements.find((item: any) => item.role === 'link');
+      expect(snapshot.text).toContain(`[guide](ref=${link.ref})`);
+    });
+
+    it('marks table-cell links and escapes quotes in labels', () => {
+      const snapshot = snap(`
+        <main>
+          <table><tr><th>Step</th><th>Docs</th></tr><tr><td>1</td><td><a href="/one">API docs</a></td></tr></table>
+          <button aria-label='Say "hi"'>x</button>
+        </main>
+      `);
+      const [link, button] = snapshot.elements;
+      expect(snapshot.textPreview).toContain(`| 1 | [API docs](ref=${link.ref}) |`);
+      expect(snapshot.textPreview).toContain(`[button "Say \\"hi\\"" ref=${button.ref}]`);
+    });
+
+    it('keeps an invisible control in the element list but out of the text', () => {
+      const snapshot = snap('<main><p>Body</p><button style="visibility:hidden">Ghost</button></main>');
+      expect(snapshot.elements.map((item: any) => item.label)).toContain('Ghost');
+      expect(snapshot.textPreview).toBe('Body');
+    });
+
+    it('matches wait_for text against plain text without refs', async () => {
+      const document = makeDocument('<main><p>Read the <a href="/x">API docs</a> now</p></main>');
+      await expect(
+        waitForCondition({ textInScope: 'Read the API docs now', timeoutMs: 50 }, document as unknown as Document)
+      ).resolves.toMatchObject({ matched: true, condition: 'textInScope' });
+    });
+
+    it('drops aria-hidden decoration from the element list but keeps interactive elements', () => {
+      const snapshot = snap(`
+        <main>
+          <div role="button" aria-label="Copy"><svg aria-hidden="true" role="img"></svg></div>
+          <div aria-hidden="true"><span role="img">decor</span><a href="/skip">Skip link</a></div>
+        </main>
+      `);
+      expect(snapshot.elements.map((item: any) => [item.role, item.label])).toEqual([
+        ['button', 'Copy'],
+        ['link', 'Skip link']
+      ]);
+      expect(snapshot.ariaHiddenOmitted).toBe(2);
+    });
+
+    it('names icon-only controls from image alt text', () => {
+      const snapshot = snap(`
+        <main>
+          <div role="button"><img alt="Thumbs up icon"></div>
+          <div role="button"><span aria-hidden="true"><img alt="Decorative"></span></div>
+          <div role="region" aria-label="Gallery"><img alt="Photo"></div>
+          <div role="note"><img alt="Not a control"></div>
+        </main>
+      `);
+      expect(snapshot.elements.map((item: any) => [item.role, item.label])).toEqual([
+        ['button', 'Thumbs up icon'],
+        ['button', ''],
+        ['region', 'Gallery'],
+        ['note', '']
+      ]);
     });
   });
 
@@ -1471,7 +1571,7 @@ describe('extension content core', () => {
       for (const document of [displayNone, hiddenAttr, visibilityHidden, zeroSize, closedNative]) {
         const snapshot = buildSnapshotFromDocument(document as unknown as Document);
         expect(snapshot.scopeApplied).toBe('main');
-        expect(snapshot.textPreview).toBe(base.textPreview);
+        expect(withoutRefIds(snapshot.textPreview)).toBe(withoutRefIds(base.textPreview));
         expect(snapshot.elements.map((item) => item.label)).toEqual(base.elements.map((item) => item.label));
         expect(JSON.stringify(snapshot)).not.toContain('wizard');
       }
@@ -1485,7 +1585,7 @@ describe('extension content core', () => {
       `;
       const snapshot = buildSnapshotFromDocument(makeDocument(html) as unknown as Document);
       expect(snapshot.scopeApplied).toBe('main');
-      expect(snapshot.textPreview).toBe('Main feed content for audit\n\nLike');
+      expect(withoutRefIds(snapshot.textPreview)).toBe('Main feed content for audit\n\n[button "Like" ref=*]');
       expect(snapshot.textPreview).not.toContain('Sidebar navigation');
       expect(snapshot.elements.map((item) => item.label)).toEqual(['Like']);
       expect(snapshot.excludedCount).toBe(0);
