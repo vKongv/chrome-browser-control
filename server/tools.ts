@@ -527,7 +527,7 @@ export function registerBrowserTools(
           .positive()
           .max(3_600_000)
           .optional()
-          .describe('Exclusive lease TTL in milliseconds. Defaults to 300000 (5 minutes).'),
+          .describe('Exclusive lease idle timeout in milliseconds. Defaults to 300000 (5 minutes). Every call that passes this claim\'s sessionTabId (or uses it as the current claim) extends the lease, so the TTL only runs out while the claim sits unused. An expired sessionTabId fails with TAB_CLAIM_EXPIRED; claim again.'),
         owner: z.string().min(1).max(120).optional().describe('Optional human-readable owner label for conflict diagnostics.')
       }
     },
