@@ -1161,6 +1161,30 @@ describe('extension content core', () => {
       expect(text).toBe('| Name | Type |\n| --- | --- |\n| access_token | string |');
     });
 
+    it('leaves hidden table content out of table rows', () => {
+      const text = mainText(`
+        <main>
+          <table style="visibility:hidden"><tr><td>Hidden table</td></tr></table>
+          <table>
+            <caption style="display:none">Hidden caption</caption>
+            <tr><th>Name</th><th>Type</th></tr>
+            <tr style="visibility:hidden"><td>Hidden row</td><td>x</td></tr>
+            <tr><td>token</td><td style="visibility:hidden">Hidden cell</td></tr>
+          </table>
+          <table style="visibility:hidden"><tr><td style="visibility:visible">Shown cell</td></tr></table>
+          <div role="table">
+            <div role="row"><span role="cell">Open row</span></div>
+            <details><summary>More</summary><div role="row"><span role="cell">Collapsed row</span></div></details>
+          </div>
+        </main>
+      `);
+      expect(text).not.toMatch(/Hidden|Collapsed/);
+      expect(text).toContain('| Name | Type |');
+      expect(text).toContain('| token |  |');
+      expect(text).toContain('| Shown cell |');
+      expect(text).toContain('| Open row |');
+    });
+
     it('separates blocks and marks headings, lists, and line breaks', () => {
       const text = mainText(`
         <main>
@@ -1168,7 +1192,7 @@ describe('extension content core', () => {
           <div>First block</div><div>Second block</div>
           <p>Line one<br>Line two</p>
           <ul><li>Alpha<ul><li>Nested</li></ul></li><li>Beta</li></ul>
-          <ol start="3"><li>Third</li><li>Fourth</li></ol>
+          <ol start="3"><li>Third<ol><li>Inner</li></ol></li><li hidden>Skipped</li><li>Fourth</li></ol>
         </main>
       `);
       expect(text).toBe(
@@ -1185,6 +1209,7 @@ describe('extension content core', () => {
           '  - Nested',
           '- Beta',
           '3. Third',
+          '  1. Inner',
           '4. Fourth'
         ].join('\n')
       );
@@ -1194,6 +1219,11 @@ describe('extension content core', () => {
       const text = mainText(`<main><p>Example:</p><pre><code>curl -X POST \\
   -F "title=Live"</code></pre></main>`);
       expect(text).toBe('Example:\n\n```\ncurl -X POST \\\n  -F "title=Live"\n```');
+    });
+
+    it('keeps the leading indentation of the first preformatted line', () => {
+      const text = mainText('<main><pre>  first\n    second\n</pre></main>');
+      expect(text).toBe('```\n  first\n    second\n```');
     });
 
     it('leaves out script, style, hidden, and collapsed content', () => {
@@ -1246,6 +1276,27 @@ describe('extension content core', () => {
         href: 'https://example.test/docs/live?format=md',
         source: 'anchor',
         label: 'View as Markdown'
+      });
+    });
+
+    it('ignores Markdown links that are hidden or are not a Markdown view of the page', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument(`
+          <main><p>Article</p><a hidden href="/article.md">View as Markdown</a></main>
+          <footer><a href="https://other.example/guide">Markdown Guide</a></footer>
+        `) as unknown as Document
+      );
+      expect(snapshot).not.toHaveProperty('markdownAlternate');
+    });
+
+    it('accepts a Markdown-labelled link that points at a .md file', () => {
+      const snapshot = buildSnapshotFromDocument(
+        makeDocument('<main><a href="/docs/live.md">Download Markdown</a></main>') as unknown as Document
+      );
+      expect(snapshot.markdownAlternate).toEqual({
+        href: 'https://example.test/docs/live.md',
+        source: 'anchor',
+        label: 'Download Markdown'
       });
     });
 

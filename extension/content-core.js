@@ -550,7 +550,7 @@ function closestAncestor(element, predicate, stop) {
   return current === stop && stop && predicate(stop) ? stop : null;
 }
 
-function joinTextParts(parts) {
+function joinTextParts(parts, { preserveIndent = false } = {}) {
   let out = '';
   let pendingBreaks = 0;
   for (const part of parts) {
@@ -570,6 +570,7 @@ function joinTextParts(parts) {
     pendingBreaks = 0;
     out += value;
   }
+  if (preserveIndent) return out.replace(/^(?:[ \t]*\n)+/, '').replace(/\s+$/, '');
   return out.replace(/^[ \n]+|[ \n]+$/g, '');
 }
 
@@ -599,18 +600,38 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
     return false;
   }
 
+  function isInClosedDetails(element) {
+    const parent = element.parentElement;
+    return Boolean(
+      parent && parent.tagName.toLowerCase() === 'details' && !parent.open && element.tagName.toLowerCase() !== 'summary'
+    );
+  }
+
   function isExcludedBetween(element, stop) {
     let current = element;
     while (current && current !== stop) {
-      if (isExcluded(current) || textStyleFor(current).display === 'none') return true;
+      if (isExcluded(current) || isInClosedDetails(current) || textStyleFor(current).display === 'none') return true;
       current = current.parentElement;
     }
     return false;
   }
 
-  function renderInto(element, whiteSpace) {
+  // Visibility inherits, so the nearest explicit value between element and stop
+  // wins; otherwise the element inherits the visibility in effect at stop.
+  function visibilityBetween(element, stop, inherited) {
+    let current = element;
+    while (current && current !== stop) {
+      const visibility = textStyleFor(current).visibility;
+      if (visibility === 'hidden' || visibility === 'collapse') return false;
+      if (visibility === 'visible') return true;
+      current = current.parentElement;
+    }
+    return inherited;
+  }
+
+  function renderInto(element, context) {
     const parts = [];
-    renderChildren(element, parts, { whiteSpace, visible: true, listDepth: 0 });
+    renderChildren(element, parts, { whiteSpace: 'normal', visible: true, listDepth: 0, ...context });
     return joinTextParts(parts);
   }
 
@@ -618,23 +639,27 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
     if (!context.visible) return;
     let value = String(node.nodeValue || '');
     if (context.whiteSpace === 'pre') {
-      parts.push({ raw: value.replace(/ /g, ' ') });
+      parts.push({ raw: value.replace(/\u00a0/g, ' ') });
       return;
     }
     if (context.whiteSpace === 'pre-line') {
       value.split('\n').forEach((line, index) => {
         if (index > 0) parts.push({ raw: '\n' });
-        parts.push(line.replace(/[ \t\r\f]+/g, ' ').replace(/ /g, ' '));
+        parts.push(line.replace(/[ \t\r\f]+/g, ' ').replace(/\u00a0/g, ' '));
       });
       return;
     }
-    value = value.replace(/[ \t\n\r\f]+/g, ' ').replace(/ /g, ' ');
+    value = value.replace(/[ \t\n\r\f]+/g, ' ').replace(/\u00a0/g, ' ');
     if (value) parts.push(value);
   }
 
   function renderChildren(element, parts, context) {
     const tag = element.tagName.toLowerCase();
     const closedDetails = tag === 'details' && !element.open;
+    if (tag === 'ol') {
+      const start = Number.parseInt(element.getAttribute('start') || '1', 10);
+      context = { ...context, list: { element, next: Number.isFinite(start) ? start : 1 } };
+    }
     for (const child of element.childNodes) {
       if (child.nodeType === 3) {
         if (!closedDetails) renderText(child, parts, context);
@@ -645,7 +670,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
     }
   }
 
-  function renderTable(table, parts) {
+  function renderTable(table, parts, context) {
     const rows = [...table.querySelectorAll('tr, [role="row"]')].filter(
       (row) => closestAncestor(row, isTableLike, table) === table && !isExcludedBetween(row, table)
     );
@@ -654,14 +679,19 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
       const cells = [...row.querySelectorAll(TEXT_CELL_SELECTOR)].filter(
         (cell) => closestAncestor(cell, isTableRow, row) === row && !isExcludedBetween(cell, row)
       );
-      const texts = cells.map((cell) => oneLine(renderInto(cell, 'normal')).replace(/\|/g, '\\|'));
+      const texts = cells.map((cell) =>
+        oneLine(renderInto(cell, { visible: visibilityBetween(cell, table, context.visible) })).replace(/\|/g, '\\|')
+      );
       if (!texts.some(Boolean)) continue;
       lines.push(`| ${texts.join(' | ')} |`);
       if (lines.length === 1) lines.push(`| ${texts.map(() => '---').join(' | ')} |`);
     }
     if (!lines.length) return false;
     const caption = [...table.children].find((child) => child.tagName.toLowerCase() === 'caption');
-    const captionText = caption && !isExcluded(caption) ? oneLine(renderInto(caption, 'normal')) : '';
+    const captionText =
+      caption && !isExcludedBetween(caption, table)
+        ? oneLine(renderInto(caption, { visible: visibilityBetween(caption, table, context.visible) }))
+        : '';
     parts.push(2);
     if (captionText) parts.push({ raw: captionText }, 1);
     parts.push({ raw: lines.join('\n') }, 2);
@@ -669,14 +699,8 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
   }
 
   function renderListItem(element, parts, context) {
-    const parent = element.parentElement;
-    const parentTag = parent?.tagName.toLowerCase();
-    let marker = '- ';
-    if (parentTag === 'ol') {
-      const items = [...parent.children].filter((child) => child.tagName.toLowerCase() === 'li');
-      const start = Number.parseInt(parent.getAttribute('start') || '1', 10);
-      marker = `${(Number.isFinite(start) ? start : 1) + items.indexOf(element)}. `;
-    }
+    const list = context.list?.element === element.parentElement ? context.list : undefined;
+    const marker = list ? `${list.next++}. ` : '- ';
     const itemParts = [];
     renderChildren(element, itemParts, { ...context, listDepth: context.listDepth + 1 });
     const content = joinTextParts(itemParts);
@@ -700,7 +724,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
       if (context.visible) parts.push({ raw: '\n' });
       return;
     }
-    if (isTableLike(element) && renderTable(element, parts)) return;
+    if (isTableLike(element) && renderTable(element, parts, childContext)) return;
     if (tag === 'li' && context.whiteSpace !== 'pre') {
       renderListItem(element, parts, childContext);
       return;
@@ -716,7 +740,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
     if (tag === 'pre' && context.whiteSpace !== 'pre') {
       const codeParts = [];
       renderChildren(element, codeParts, { ...childContext, whiteSpace: 'pre' });
-      const code = joinTextParts(codeParts);
+      const code = joinTextParts(codeParts, { preserveIndent: true });
       if (code) parts.push(2, { raw: `\`\`\`\n${code}\n\`\`\`` }, 2);
       return;
     }
@@ -737,7 +761,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
     else if (style.display === 'table-cell') parts.push(' ');
   }
 
-  return (root) => renderInto(root, textStyleFor(root).whiteSpace);
+  return (root) => renderInto(root, { whiteSpace: textStyleFor(root).whiteSpace });
 }
 
 function scopedTextFor(scopeOptions) {
@@ -964,16 +988,41 @@ function textSnapshotMeta(bodyText, textLimit, options) {
 }
 
 const MARKDOWN_ALTERNATE_TYPES = new Set(['text/markdown', 'text/x-markdown']);
+// "Markdown", "View as Markdown", "Open page in Markdown"; any other label
+// mentioning Markdown must also point at a .md/.mdx file.
+const MARKDOWN_VIEW_LABEL = /^(?:(?:view|open|show|read|see|get)\s+(?:(?:this\s+)?page\s+)?(?:as|in)\s+)?markdown$/i;
 const MARKDOWN_LINK_LABEL = /\bmarkdown\b/i;
+const MARKDOWN_FILE_PATH = /\.mdx?$/i;
 
 function httpUrlFor(element) {
   const href = String(element.href || '');
   return /^https?:\/\//i.test(href) ? href : undefined;
 }
 
+function isRenderedAnchor(element) {
+  let current = element;
+  let visibility;
+  while (current) {
+    if (current.hidden) return false;
+    const style = textStyleFor(current);
+    if (style.display === 'none') return false;
+    if (!visibility && (style.visibility === 'hidden' || style.visibility === 'collapse' || style.visibility === 'visible')) {
+      visibility = style.visibility;
+    }
+    current = current.parentElement;
+  }
+  return visibility !== 'hidden' && visibility !== 'collapse';
+}
+
+function isMarkdownViewAnchor(anchor, label) {
+  if (MARKDOWN_VIEW_LABEL.test(label)) return true;
+  if (!MARKDOWN_LINK_LABEL.test(label)) return false;
+  return MARKDOWN_FILE_PATH.test(String(anchor.pathname || ''));
+}
+
 // Pages that publish their own Markdown are cheaper and more exact to read than
-// rendered text. Prefer the declared rel=alternate; fall back to a short link
-// labelled "Markdown" ("View as Markdown").
+// rendered text. Prefer the declared rel=alternate (source "link"); fall back to
+// a visible "View as Markdown"-style link (source "anchor"), which is inferred.
 function markdownAlternateFor(documentRef) {
   for (const link of documentRef.querySelectorAll('link[rel][type][href]')) {
     const rels = String(link.getAttribute('rel')).toLowerCase().split(/\s+/);
@@ -985,7 +1034,7 @@ function markdownAlternateFor(documentRef) {
   const current = documentRef.location?.href;
   for (const anchor of documentRef.querySelectorAll('a[href]')) {
     const label = labelFor(anchor, 80);
-    if (label.length > 40 || !MARKDOWN_LINK_LABEL.test(label)) continue;
+    if (label.length > 40 || !isMarkdownViewAnchor(anchor, label) || !isRenderedAnchor(anchor)) continue;
     const href = httpUrlFor(anchor);
     if (href && href !== current) return { href, source: 'anchor', label };
   }
