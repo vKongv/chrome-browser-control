@@ -227,9 +227,6 @@ function isEditableRegion(element) {
 }
 
 function isInteractiveElement(element) {
-  if (element.tagName.toLowerCase() === 'input' && String(element.getAttribute('type') || '').toLowerCase() === 'hidden') {
-    return false;
-  }
   return INTERACTIVE_ROLES.has(roleFor(element).toLowerCase()) || isEditableRegion(element);
 }
 
@@ -260,6 +257,7 @@ function isAriaHiddenDecoration(element) {
 
 function isInteresting(element) {
   const tag = element.tagName.toLowerCase();
+  if (tag === 'input' && String(element.getAttribute('type') || '').toLowerCase() === 'hidden') return false;
   if (['a', 'button', 'input', 'textarea', 'select', 'summary'].includes(tag)) return true;
   if (element.getAttribute('role')) return true;
   if (element.hasAttribute('contenteditable')) return true;
@@ -633,32 +631,50 @@ function oneLine(text) {
 }
 
 const CONTENT_BLOCK_SELECTOR = 'h1,h2,h3,h4,h5,h6,p,ul,ol,li,dl,table,pre,blockquote';
-// Matches one inline ref marker: [link text](ref=h3) or [role "label" ref=h4].
-const INLINE_REF_PATTERN = /\[(?:[^[\]\\\n]|\\.)*\]\(ref=h[0-9a-z]+\)|\[[A-Za-z-]+(?: "(?:[^"\\\n]|\\.)*")? ref=h[0-9a-z]+\]/g;
+// The renderer wraps every marker it emits in these private-use characters so
+// truncation knows exactly where markers are. Page text is stripped of them, so
+// text that merely looks like a marker is never mistaken for one.
+const MARKER_OPEN = '\uE000';
+const MARKER_CLOSE = '\uE001';
+const MARKER_SENTINELS = /[\uE000\uE001]/g;
+
+function wrapMarker(marker) {
+  return `${MARKER_OPEN}${marker}${MARKER_CLOSE}`;
+}
+
+function stripMarkerSentinels(text) {
+  return text.replace(MARKER_SENTINELS, '');
+}
 
 // Marker text stays on one line with its delimiters escaped, so a label such as
 // "A] B" cannot end the marker early.
 function escapeMarkerText(value, extra = '') {
   const pattern = extra ? /[\\[\]"]/g : /[\\[\]]/g;
-  return collapseWhitespace(value).replace(pattern, '\\$&');
+  return collapseWhitespace(stripMarkerSentinels(value)).replace(pattern, '\\$&');
 }
 
 function explicitNameFor(element) {
   return labelledByName(element) || (element.getAttribute('aria-label') || element.getAttribute('title') || '').trim();
 }
 
-// Cut at textLimit, but never inside an inline ref marker.
+// Cut rendered text at `limit` visible characters, never inside a marker, and
+// drop the sentinels.
 function truncateText(text, limit) {
-  if (text.length <= limit) return text;
-  let cut = limit;
-  for (const match of text.matchAll(INLINE_REF_PATTERN)) {
-    if (match.index >= limit) break;
-    if (match.index + match[0].length > limit) {
-      cut = match.index;
-      break;
-    }
+  let out = '';
+  let index = 0;
+  while (index < text.length) {
+    const open = text.indexOf(MARKER_OPEN, index);
+    const plain = text.slice(index, open === -1 ? text.length : open);
+    if (out.length + plain.length > limit) return out + plain.slice(0, limit - out.length);
+    out += plain;
+    if (open === -1) break;
+    const close = text.indexOf(MARKER_CLOSE, open);
+    const marker = text.slice(open + 1, close);
+    if (out.length + marker.length > limit) return out.replace(/\s+$/, '');
+    out += marker;
+    index = close + 1;
   }
-  return text.slice(0, cut).replace(/\s+$/, '');
+  return out;
 }
 
 function createScopedTextRenderer(scopeRoot, scopeOptions) {
@@ -722,7 +738,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
 
   function renderText(node, parts, context) {
     if (!context.visible) return;
-    let value = String(node.nodeValue || '');
+    let value = stripMarkerSentinels(String(node.nodeValue || ''));
     if (context.whiteSpace === 'pre') {
       parts.push({ raw: value.replace(/\u00a0/g, ' ') });
       return;
@@ -802,7 +818,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
   }
 
   function controlMarker(role, label, ref) {
-    return label ? `[${role} "${escapeMarkerText(label, '"')}" ref=${ref}]` : `[${role} ref=${ref}]`;
+    return wrapMarker(label ? `[${role} "${escapeMarkerText(label, '"')}" ref=${ref}]` : `[${role} ref=${ref}]`);
   }
 
   function renderInlineRef(element, inlineRef, style, parts, context) {
@@ -816,7 +832,7 @@ function createScopedTextRenderer(scopeRoot, scopeOptions) {
       const linkParts = [];
       renderChildren(element, linkParts, context);
       const text = oneLine(joinTextParts(linkParts)) || collapseWhitespace(label);
-      parts.push(text ? `[${escapeMarkerText(text)}](ref=${ref})` : `[link ref=${ref}]`);
+      parts.push(wrapMarker(text ? `[${escapeMarkerText(text)}](ref=${ref})` : `[link ref=${ref}]`));
     } else if (context.visible) {
       parts.push(' ', controlMarker(role, label, ref), ' ');
     }
@@ -1189,8 +1205,9 @@ export function buildSnapshotFromDocument(documentRef = document, options = {}) 
   });
   cleanupRefStore(documentRef, now);
 
-  const bodyText = scopedTextFor({ ...scopeOptions, inlineRefs });
-  const returnedText = truncateText(bodyText, textLimit);
+  const renderedText = scopedTextFor({ ...scopeOptions, inlineRefs });
+  const bodyText = stripMarkerSentinels(renderedText);
+  const returnedText = truncateText(renderedText, textLimit);
   const textMeta = textSnapshotMeta(bodyText, returnedText, textLimit, options);
   const markdownAlternate = markdownAlternateFor(documentRef);
   const scopeMeta = {

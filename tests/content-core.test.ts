@@ -1412,6 +1412,7 @@ describe('extension content core', () => {
         '[textbox "Password" ref=*] [textbox "Name" ref=*] [button "Send" ref=*] [checkbox "Agree" ref=*] [combobox "Color" ref=*] [textbox "Notes" ref=*]'
       );
       expect(snapshot.textPreview).not.toMatch(/SECRET|PRIVATE|TYPED|TOKEN/);
+      expect(snapshot.elements.map((item: any) => item.role)).toEqual(['textbox', 'textbox', 'button', 'checkbox', 'combobox', 'textbox']);
 
       const adjacent = snap('<main>Search<input aria-label="Query"><input type="submit" value="Go"></main>');
       expect(withoutRefIds(adjacent.textPreview)).toBe('Search [textbox "Query" ref=*] [button "Go" ref=*]');
@@ -1433,6 +1434,16 @@ describe('extension content core', () => {
       const truncated = snap(`<main><p>${'x'.repeat(495)}</p><button>Go</button></main>`, { textLimit: 500 });
       expect(truncated.textPreview).toBe('x'.repeat(495));
       expect(truncated.textBytesOmitted).toBe(truncated.textTotalLength - 495);
+    });
+
+    it('truncates page text that only looks like a marker as ordinary text', () => {
+      const lookalike = `[${'x'.repeat(600)}](ref=h3) useful trailing documentation`;
+      const snapshot = snap(`<main><pre>${lookalike}</pre></main>`, { textLimit: 500 });
+      expect(snapshot.textPreview).toBe(`\`\`\`\n${lookalike}`.slice(0, 500));
+
+      // Private-use characters in page text must not act as marker boundaries.
+      const sentinels = snap(`<main><p>${'x'.repeat(495)}\uE000${'y'.repeat(20)}\uE001</p></main>`, { textLimit: 500 });
+      expect(sentinels.textPreview).toBe(`${'x'.repeat(495)}yyyyy`);
     });
 
     it('keeps alerts and status under aria-hidden and names hidden controls from alt text', () => {
