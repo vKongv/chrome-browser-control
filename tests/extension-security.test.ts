@@ -825,6 +825,7 @@ describe('extension background origin enforcement', () => {
       attachedTabs: [],
       protocolVersion: 7,
       features: expect.arrayContaining([
+        'wait-settled',
         'snapshot-structured-text',
         'cdp-trusted-input',
         'cdp-response-body',
@@ -1557,6 +1558,7 @@ describe('extension background origin enforcement', () => {
       }
     }));
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'wait_probe', params: { selector: '.ready', timeoutMs: 1000 } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'wait_for', params: { selector: '.ready', timeoutMs: 1000 } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'snapshot', params: { mode: 'visible', limit: 2 } } },
@@ -1612,6 +1614,99 @@ describe('extension background origin enforcement', () => {
       { tabId: 1, message: { target: 'cbc-content', action: 'snapshot', params: {} } },
       { tabId: 1, message: { target: 'cbc-content', action: 'page_status', params: {} } }
     ]);
+  });
+
+  it('probes after.waitFor before the action and hands its baseline to the wait', async () => {
+    const tabs = [
+      {
+        id: 1,
+        active: true,
+        highlighted: true,
+        title: 'Example Domain',
+        url: 'https://example.com/',
+        windowId: 1,
+        status: 'complete'
+      }
+    ];
+    const settings = { bridgeUrl: 'ws://127.0.0.1:8765', token, allowedOrigins: ['https://example.com/*'] };
+    const background = loadBackgroundHarness({
+      settings,
+      tabs,
+      contentResult: (_tabId, message) =>
+        message.action === 'wait_probe'
+          ? { held: true, baselineHash: 'tbase:10' }
+          : { action: message.action, params: message.params }
+    });
+
+    const clicked = await background.handleBridgeRequest('click', {
+      tabId: 1,
+      ref: 'h1',
+      after: { waitFor: { text: 'Logs', settledMs: 500, timeoutMs: 1000 } }
+    });
+    expect(clicked.after.waitFor).toMatchObject({
+      action: 'wait_for',
+      params: { text: 'Logs', settledMs: 500, timeoutMs: 1000, baselineHash: 'tbase:10' },
+      heldBeforeAction: true
+    });
+    expect(
+      background.sentMessages
+        .filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')
+        .map((entry: { message: Record<string, unknown> }) => entry.message.action)
+    ).toEqual(['wait_probe', 'click', 'wait_for']);
+
+    const batch = await background.handleBridgeRequest('perform_actions', {
+      tabId: 1,
+      actions: [{ action: 'click', ref: 'h1' }],
+      after: { waitFor: { settledMs: 500, timeoutMs: 1000 } }
+    });
+    expect(batch.after.waitFor).toMatchObject({ params: { baselineHash: 'tbase:10' }, heldBeforeAction: true });
+
+    // A probe that fails leaves the wait to take its own baseline and reports no heldBeforeAction.
+    const failingProbe = loadBackgroundHarness({
+      settings,
+      tabs,
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params }),
+      sendMessageError: (message) => (message.action === 'wait_probe' ? new Error('probe failed') : undefined)
+    });
+    const unprobed = await failingProbe.handleBridgeRequest('click', {
+      tabId: 1,
+      ref: 'h1',
+      after: { waitFor: { settledMs: 500, timeoutMs: 1000 } }
+    });
+    expect(unprobed.after.waitFor).toMatchObject({ action: 'wait_for', params: { settledMs: 500, timeoutMs: 1000 } });
+    expect(unprobed.after.waitFor.params).not.toHaveProperty('baselineHash');
+    expect(unprobed.after.waitFor).not.toHaveProperty('heldBeforeAction');
+  });
+
+  it('settles navigate after.waitFor against an empty baseline without probing the old page', async () => {
+    const background = loadBackgroundHarness({
+      settings: { bridgeUrl: 'ws://127.0.0.1:8765', token, allowedOrigins: ['https://example.com/*'] },
+      tabs: [
+        {
+          id: 1,
+          active: true,
+          highlighted: true,
+          title: 'Old',
+          url: 'https://example.com/old',
+          windowId: 1,
+          _navigateFinal: { title: 'Example Domain', url: 'https://example.com/' }
+        }
+      ],
+      contentResult: (_tabId, message) => ({ action: message.action, params: message.params })
+    });
+
+    const navigated = await background.handleBridgeRequest('navigate', {
+      tabId: 1,
+      url: 'https://example.com/',
+      after: { waitFor: { settledMs: 500, timeoutMs: 1000 } }
+    });
+    expect(navigated.after.waitFor).toMatchObject({ params: { settledMs: 500, timeoutMs: 1000, baselineHash: '' } });
+    expect(navigated.after.waitFor).not.toHaveProperty('heldBeforeAction');
+    expect(
+      background.sentMessages
+        .filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')
+        .map((entry: { message: Record<string, unknown> }) => entry.message.action)
+    ).toEqual(['wait_for']);
   });
 
   it('rejects empty after.waitFor before running an action or observations', async () => {
@@ -2060,6 +2155,7 @@ describe('extension background origin enforcement', () => {
       error: 'Action batch skipped after because the request time budget is nearly exhausted (3000ms remaining)'
     });
     expect(background.sentMessages.filter((entry: { message: Record<string, unknown> }) => entry.message.action !== 'ping')).toEqual([
+      { tabId: 1, message: { target: 'cbc-content', action: 'wait_probe', params: { text: 'Done', timeoutMs: 1000 } } },
       { tabId: 1, message: { target: 'cbc-content', action: 'click', params: { ref: 'h1' } } }
     ]);
   });

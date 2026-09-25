@@ -63,7 +63,11 @@ If a page links its own Markdown or raw view (`markdownAlternate` in a snapshot,
    - After navigation, reload, major DOM changes, or stale-ref errors, collect fresh state.
 
 5. Wait and verify after actions.
-   - Use `wait_for` for expected selector/text/URL changes, selector absence, scoped text, or bounded content stability.
+   - After an action that loads or replaces content (search, filter, open a row, submit), wait on the action itself with `after: { waitFor: { settledMs: 750 } }`. It waits until the scoped content changes, stops changing, and shows no loading indicator (`aria-busy`, an indeterminate progressbar, a "Loading…" line).
+   - Do not wait on text or selectors that were on the page before the action: sidebar labels, the URL of a single-page app, old table rows. They match at once. `heldBeforeAction: true` in the wait result means exactly that; wait again with `settledMs`.
+   - `settledMs` only sees loading states that are marked up (`aria-busy`, a progressbar without a value) or written as text ("Loading…"). A CSS-only spinner or skeleton rows can look settled; if the result looks like a loading shell, wait again or raise `settledMs`.
+   - A `settledMs` timeout reports `pending`: `noChange` (the action changed nothing in scope; check scope or the action), `busy` (still loading; `busy` says what), `changing` (content never held still; narrow scope or `excludeSelectors`).
+   - Use `wait_for` for expected selector/text/URL changes, selector absence, scoped text, or bounded content stability. Its `settledMs` baseline is the text when the wait starts, so a change that finished before the call is missed.
    - Use `page_status` for title, URL, ready state, visibility, viewport, scroll, and lightweight resource counts.
    - Use `console_logs` for logs captured after content-script injection.
    - Prefer `after: { waitFor, snapshot, pageStatus }` when the wait or verification is directly caused by the action; observations run in that order.
@@ -137,7 +141,7 @@ Use `after` to combine an action with its immediate verification:
 {
   "ref": "h12",
   "after": {
-    "waitFor": { "selector": ".results", "timeoutMs": 5000 },
+    "waitFor": { "settledMs": 750, "timeoutMs": 8000 },
     "snapshot": { "mode": "visible", "limit": 40 },
     "pageStatus": true
   }
@@ -149,7 +153,7 @@ Rules:
 - For `perform_actions`, `after` is top-level only; skipped when any step fails. Partial failures return `failedIndex`, `completedCount`, and per-step `steps` — inspect them instead of assuming rollback.
 - Exclusive tab claims do not gate page actions; use exclusive leases for parallel-agent discipline, not as an action lock.
 - Observations run as `waitFor`, then `snapshot`, then `pageStatus`.
-- `waitFor` must include at least one wait condition (`text`, `selector`, `urlIncludes`, `selectorAbsent` + `selector`, `textInScope`, or `contentStableMs`); `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
+- `waitFor` must include at least one wait condition (`settledMs`, `text`, `selector`, `urlIncludes`, `selectorAbsent` + `selector`, `textInScope`, or `contentStableMs`). Conditions are alternatives; the first that holds wins. `timeoutMs` is capped at `20000` for act-then-observe so the whole tool call fits inside the broker request timeout.
 - `snapshot` can be `true` or options with `mode`, `textLimit`, and/or `limit`.
 - If the base action succeeds but an observation fails, inspect `after.ok === false` and `after.error`; do not assume the base action was rolled back.
 

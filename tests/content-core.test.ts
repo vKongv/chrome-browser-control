@@ -54,6 +54,7 @@ const {
   prepareTrustedKeypress,
   queryElements,
   waitForCondition,
+  probeWaitCondition,
   performType
 } = loadContentCore();
 
@@ -1941,5 +1942,232 @@ describe('extension content core', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('settled waits', () => {
+  const rows = (ids: string[]) =>
+    `<table><tr><th>SID</th><th>Status</th></tr>${ids.map((id) => `<tr><td>${id}</td><td>Expired</td></tr>`).join('')}</table>`;
+
+  async function settleState(promise: Promise<unknown>) {
+    let settled = false;
+    promise.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    return () => settled;
+  }
+
+  it('waits past a loading state for the rows an action produced', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<nav>Logs</nav><main>${rows(['VE-old-1', 'VE-old-2'])}</main>`);
+      const doc = document as unknown as Document;
+      const main = document.querySelector('main')!;
+
+      // Before the action: the sidebar text already holds, and the scoped text becomes the baseline.
+      expect(probeWaitCondition({ text: 'Logs' }, doc)).toEqual({ held: true });
+      const probe = probeWaitCondition({ settledMs: 300 }, doc);
+      expect(probe.held).toBeUndefined();
+      expect(probe.baselineHash).toEqual(expect.any(String));
+
+      // The action swaps the table for a plain "Loading..." line that outlasts settledMs.
+      main.innerHTML = '<p>Loading...</p>';
+      const wait = waitForCondition({ settledMs: 300, baselineHash: probe.baselineHash, timeoutMs: 5000 }, doc);
+      const settled = await settleState(wait);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(settled()).toBe(false);
+
+      main.innerHTML = rows(['VE-new-1']);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(wait).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts the settle interval when loading ends, not when the text last changed', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main>${rows(['VE-old-1'])}</main>`);
+      const doc = document as unknown as Document;
+      const main = document.querySelector('main')!;
+      const { baselineHash } = probeWaitCondition({ settledMs: 200 }, doc);
+      main.setAttribute('aria-busy', 'true');
+      main.innerHTML = rows(['VE-new-1']);
+      const wait = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 5000 }, doc);
+      const settled = await settleState(wait);
+      // Checks run every 100 ms; loading ends at 350 ms, between two checks.
+      await vi.advanceTimersByTimeAsync(350);
+      main.removeAttribute('aria-busy');
+      await vi.advanceTimersByTimeAsync(200);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(wait).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts a new document with the same scoped text as a change', async () => {
+    // A second instance of the generated script stands in for the content script injected into the new document.
+    const otherInstance = loadContentCore();
+    vi.useFakeTimers();
+    try {
+      const html = `<main>${rows(['VE-1'])}</main>`;
+      const oldDoc = makeDocument(html) as unknown as Document;
+      const newDoc = makeDocument(html) as unknown as Document;
+      const { baselineHash } = otherInstance.probeWaitCondition({ settledMs: 200 }, oldDoc);
+      const sameInstance = probeWaitCondition({ settledMs: 200 }, oldDoc).baselineHash;
+      const same = waitForCondition({ settledMs: 200, baselineHash: sameInstance, timeoutMs: 600 }, newDoc);
+      const replaced = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 600 }, newDoc);
+      await vi.advanceTimersByTimeAsync(700);
+      await expect(same).resolves.toMatchObject({ matched: false, pending: 'noChange' });
+      await expect(replaced).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports noChange when the scoped text never leaves the baseline', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main>${rows(['VE-old-1'])}</main>`);
+      const doc = document as unknown as Document;
+      const { baselineHash } = probeWaitCondition({ settledMs: 200 }, doc);
+      const wait = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 1000 }, doc);
+      await vi.advanceTimersByTimeAsync(1100);
+      await expect(wait).resolves.toMatchObject({ matched: false, condition: 'timeout', pending: 'noChange' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports busy, not noChange, when old rows stay under a loading indicator', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main>${rows(['VE-old-1'])}</main>`);
+      const doc = document as unknown as Document;
+      const { baselineHash } = probeWaitCondition({ settledMs: 200 }, doc);
+      document.querySelector('main')!.setAttribute('aria-busy', 'true');
+      const wait = waitForCondition({ settledMs: 200, baselineHash, timeoutMs: 1000 }, doc);
+      await vi.advanceTimersByTimeAsync(1100);
+      await expect(wait).resolves.toMatchObject({ matched: false, pending: 'busy', busy: { kind: 'aria-busy' } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('takes its own baseline at the first check when none is passed', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main>${rows(['VE-old-1'])}</main>`);
+      const doc = document as unknown as Document;
+      const wait = waitForCondition({ settledMs: 200, timeoutMs: 5000 }, doc);
+      const settled = await settleState(wait);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(settled()).toBe(false);
+      document.querySelector('main')!.innerHTML = rows(['VE-new-1']);
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(wait).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats an empty baseline as changed, so a freshly loaded page only has to hold still', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main>${rows(['VE-1'])}</main>`);
+      const wait = waitForCondition({ settledMs: 200, baselineHash: '', timeoutMs: 5000 }, document as unknown as Document);
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(wait).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['aria-busy on the scope root', '<main aria-busy="true">{rows}</main>', { kind: 'aria-busy' }],
+    ['aria-busy inside scope', '<main><div aria-busy="true">{rows}</div></main>', { kind: 'aria-busy' }],
+    ['an indeterminate progressbar', '<main><div role="progressbar"></div>{rows}</main>', { kind: 'progressbar' }],
+    ['an indeterminate progress element', '<main><progress></progress>{rows}</main>', { kind: 'progressbar' }],
+    [
+      'a loading table cell',
+      '<main><table><tr><th>SID</th></tr><tr><td>Loading…</td></tr></table>{rows}</main>',
+      { kind: 'loadingText', text: 'Loading…' }
+    ],
+    ['a loading list item', '<main><ul><li>Loading messages...</li></ul>{rows}</main>', { kind: 'loadingText', text: 'Loading messages...' }]
+  ])('does not settle while scope shows %s', async (_name, html, busy) => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(html.replace('{rows}', rows(['VE-1'])));
+      const wait = waitForCondition({ settledMs: 200, baselineHash: '', timeoutMs: 1000 }, document as unknown as Document);
+      await vi.advanceTimersByTimeAsync(1100);
+      await expect(wait).resolves.toMatchObject({ matched: false, pending: 'busy', busy });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['a determinate progressbar', '<main><div role="progressbar" aria-valuenow="40"></div>{rows}</main>'],
+    ['a determinate progress element', '<main><progress value="40" max="100"></progress>{rows}</main>'],
+    ['a hidden spinner', '<main><div role="progressbar" style="display:none"></div>{rows}</main>'],
+    ['aria-busy="false"', '<main aria-busy="false">{rows}</main>'],
+    ['a spinner in an excluded subtree', '<main><aside class="chat"><div role="progressbar"></div></aside>{rows}</main>'],
+    ['a spinner in a closed details', '<main><details><summary>More</summary><div role="progressbar"></div></details>{rows}</main>'],
+    ['a heading that starts with Loading', '<main><h2>Loading dock schedule</h2>{rows}</main>'],
+    ['a spinner in an ignored role', '<main><div role="log"><div role="progressbar"></div></div>{rows}</main>']
+  ])('settles when scope only has %s', async (_name, html) => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(html.replace('{rows}', rows(['VE-1'])));
+      const wait = waitForCondition(
+        { settledMs: 200, baselineHash: '', excludeSelectors: ['.chat'], ignoreRoles: ['log'], timeoutMs: 1000 },
+        document as unknown as Document
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(wait).resolves.toMatchObject({ matched: true, condition: 'settledMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('holds contentStableMs while scope is busy and releases it when loading ends', async () => {
+    vi.useFakeTimers();
+    try {
+      const document = makeDocument(`<main><div role="progressbar"></div>${rows(['VE-1', 'VE-2', 'VE-3'])}</main>`);
+      const wait = waitForCondition({ contentStableMs: 200, timeoutMs: 5000 }, document as unknown as Document);
+      const settled = await settleState(wait);
+      await vi.advanceTimersByTimeAsync(650);
+      expect(settled()).toBe(false);
+      document.querySelector('[role="progressbar"]')!.remove();
+      // The quiet interval starts at the first check after loading ends (700 ms), not at the last busy check.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(wait).resolves.toMatchObject({ matched: true, condition: 'contentStableMs' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats conditions as alternatives, including selectorAbsent', async () => {
+    const document = makeDocument('<main><div id="spinner"></div><p>Ready</p></main>');
+    await expect(
+      waitForCondition({ selector: '#spinner', selectorAbsent: true, text: 'Ready', timeoutMs: 50 }, document as unknown as Document)
+    ).resolves.toMatchObject({ matched: true, condition: 'text' });
+  });
+
+  it('probes presence conditions without a settle baseline', () => {
+    const document = makeDocument('<nav>Logs</nav><main><p>Old</p></main>');
+    const doc = document as unknown as Document;
+    expect(probeWaitCondition({ selector: '.missing' }, doc)).toEqual({ held: false });
+    expect(probeWaitCondition({ textInScope: 'Old' }, doc)).toEqual({ held: true });
+    expect(probeWaitCondition({ selector: '.missing', selectorAbsent: true }, doc)).toEqual({ held: true });
+    expect(probeWaitCondition({ contentStableMs: 100 }, doc)).toEqual({});
   });
 });
