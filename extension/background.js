@@ -88,6 +88,10 @@ let nextClaimId = 1;
 let currentSessionTabId = '';
 const claimedTabs = new Map();
 const tabLeases = new Map();
+// sessionTabId -> { tabId, expiredAt } for exclusive claims whose lease ran out, so a later
+// call can say the claim expired instead of reporting an unknown sessionTabId.
+const expiredClaims = new Map();
+const MAX_EXPIRED_CLAIMS = 50;
 const cdpAttachments = new Map();
 const cdpFailClosed = new Map();
 const cdpTtlTimers = new Map();
@@ -256,7 +260,8 @@ function serializeClaimState() {
     nextClaimId,
     currentSessionTabId,
     claimedTabs: [...claimedTabs.entries()],
-    tabLeases: [...tabLeases.entries()]
+    tabLeases: [...tabLeases.entries()],
+    expiredClaims: [...expiredClaims.entries()]
   };
 }
 
@@ -300,6 +305,16 @@ function applyStoredClaimState(stored) {
       const tabId = Number(rawTabId);
       if (!Number.isFinite(tabId) || !lease || typeof lease !== 'object') continue;
       tabLeases.set(tabId, lease);
+    }
+  }
+
+  if (Array.isArray(stored.expiredClaims)) {
+    expiredClaims.clear();
+    for (const entry of stored.expiredClaims.slice(-MAX_EXPIRED_CLAIMS)) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const [sessionTabId, expired] = entry;
+      if (typeof sessionTabId !== 'string' || !sessionTabId || !expired || typeof expired !== 'object') continue;
+      expiredClaims.set(sessionTabId, { tabId: Number(expired.tabId), expiredAt: Number(expired.expiredAt) });
     }
   }
 
@@ -752,6 +767,7 @@ function sweepExpiredLeases(now = Date.now()) {
       for (const [sessionTabId, claim] of [...claimedTabs.entries()]) {
         if (claim.tabId !== tabId || !claim.exclusive || claim.ownerId !== lease.ownerId) continue;
         claimedTabs.delete(sessionTabId);
+        rememberExpiredClaim(sessionTabId, tabId, lease?.expiresAt || now);
         if (currentSessionTabId === sessionTabId) currentSessionTabId = claimedTabs.keys().next().value || '';
       }
     }
@@ -764,6 +780,42 @@ function sweepExpiredLeases(now = Date.now()) {
     }
     void persistClaimState();
   }
+}
+
+function rememberExpiredClaim(sessionTabId, tabId, expiredAt) {
+  expiredClaims.delete(sessionTabId);
+  expiredClaims.set(sessionTabId, { tabId, expiredAt });
+  while (expiredClaims.size > MAX_EXPIRED_CLAIMS) {
+    expiredClaims.delete(expiredClaims.keys().next().value);
+  }
+}
+
+function claimExpiredError(sessionTabId, expired) {
+  const payload = {
+    code: 'TAB_CLAIM_EXPIRED',
+    sessionTabId,
+    tabId: expired.tabId,
+    expiredAt: expired.expiredAt,
+    message: 'The exclusive lease expired after the claim sat idle for its ttlMs. Call claim_tab again and use the new sessionTabId.'
+  };
+  return new Error(JSON.stringify(payload));
+}
+
+// An exclusive lease measures idle time: every call its owner makes with the claim's sessionTabId extends it
+// by the claim's TTL. callerOwnerId is stamped per MCP adapter process; the broker-wide current-claim fallback
+// and other processes' calls do not renew.
+function renewLeaseForCaller(sessionTabId, callerOwnerId, now = Date.now()) {
+  if (typeof sessionTabId !== 'string' || typeof callerOwnerId !== 'string' || !callerOwnerId) return;
+  const claim = claimedTabs.get(sessionTabId);
+  if (!claim?.exclusive || !claim.ownerId || claim.ownerId !== callerOwnerId) return;
+  const lease = tabLeases.get(claim.tabId);
+  if (!lease || lease.ownerId !== claim.ownerId || !lease.expiresAt || lease.expiresAt <= now) return;
+  const ttlMs = boundedExclusiveLeaseTtl(claim.ttlMs ?? lease.ttlMs ?? claim.expiresAt - claim.claimedAt);
+  const expiresAt = now + ttlMs;
+  if (expiresAt <= lease.expiresAt) return;
+  lease.expiresAt = expiresAt;
+  claim.expiresAt = expiresAt;
+  void persistClaimState();
 }
 
 function getLeaseForTab(tabId) {
@@ -956,7 +1008,11 @@ async function resolveExplicitTabId(tabId) {
 
 async function resolveSessionTabId(sessionTabId, allowedOrigins, { requireOperable = true } = {}) {
   const claim = claimedTabs.get(sessionTabId);
-  if (!claim) throw new Error(`No claimed tab for sessionTabId: ${sessionTabId}`);
+  if (!claim) {
+    const expired = expiredClaims.get(sessionTabId);
+    if (expired) throw claimExpiredError(sessionTabId, expired);
+    throw new Error(`No claimed tab for sessionTabId: ${sessionTabId}`);
+  }
   const tab = await getTabIfExists(claim.tabId);
   if (!tab) {
     claimedTabs.delete(sessionTabId);
@@ -1798,10 +1854,12 @@ async function listFrames(tabId, allowedOrigins) {
   });
 }
 
-async function handleBridgeRequest(action, params = {}) {
+async function handleBridgeRequest(action, rawParams = {}) {
+  const { callerOwnerId, ...params } = rawParams || {};
   await claimStateReady;
   await cdpStateReady;
   sweepExpiredLeases();
+  renewLeaseForCaller(params.sessionTabId, callerOwnerId);
   const settings = await getSettings();
   switch (action) {
     case 'ping': {
@@ -1904,6 +1962,7 @@ async function handleBridgeRequest(action, params = {}) {
         ownerId: exclusive ? String(params.ownerId) : undefined,
         ownerLabel: exclusive && params.owner ? String(params.owner).slice(0, 120) : undefined,
         expiresAt,
+        ttlMs: exclusive ? ttlMs : undefined,
         leaseRenewed: leaseRenewed || undefined
       };
       claimedTabs.set(sessionTabId, claim);
@@ -1912,7 +1971,8 @@ async function handleBridgeRequest(action, params = {}) {
           ownerId: claim.ownerId,
           ownerLabel: claim.ownerLabel,
           sessionName: sessionName || undefined,
-          expiresAt
+          expiresAt,
+          ttlMs
         });
       }
       currentSessionTabId = sessionTabId;

@@ -59,8 +59,9 @@ export async function main(options: McpMainOptions = {}): Promise<void> {
       return brokerClient.connected;
     },
     connect: connectBridge,
+    // callerOwnerId lets the extension renew this process's exclusive leases on use (and only this process's).
     call: (action: Parameters<typeof brokerClient.call>[0], params?: Record<string, unknown>) =>
-      brokerClient.call(action, params)
+      brokerClient.call(action, { ...params, callerOwnerId: ownerId })
   };
 
   // Register tools and set hello metadata before the first broker connect so the
